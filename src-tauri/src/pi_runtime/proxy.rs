@@ -292,7 +292,8 @@ pub struct PiProxyPlan {
 
 /// Build the proxy plan for the Pi runtime.
 ///
-/// `enabled` is the Pi-specific projection flag. The rewritten `baseUrl`
+/// `enabled` is whether Pi should follow the local proxy (default on;
+/// `flags.wsl_proxy` is only an advanced opt-out). The rewritten `baseUrl`
 /// host is the address *this runtime* can reach: loopback on the machine CC
 /// Switch runs on, or the probed WSL host inside a distribution.
 pub fn plan(

@@ -93,7 +93,7 @@ pub(crate) fn sync_pi_wsl_sessions() -> Result<SessionSyncOutcome, String> {
 #[tauri::command]
 pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiProxyPlan, String> {
     let target = crate::pi_runtime::target();
-    let flags = crate::pi_runtime::settings().flags;
+    let enabled = crate::services::pi_proxy::proxy_projection_enabled();
     let port = state
         .proxy_service
         .get_status()
@@ -101,8 +101,7 @@ pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiPr
         .map(|status| status.port)
         .unwrap_or_default();
 
-    crate::pi_runtime::proxy::plan(&target, flags.wsl_proxy, port, None)
-        .map_err(|error| error.to_string())
+    crate::pi_runtime::proxy::plan(&target, enabled, port, None).map_err(|error| error.to_string())
 }
 
 /// Verify that this runtime can reach the CC Switch local proxy (`/health`).

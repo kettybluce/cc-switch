@@ -62,11 +62,14 @@ pub struct PiFeatureFlags {
     /// `pi.wsl.enabled` — master switch for the WSL runtime.
     #[serde(default = "enabled")]
     pub wsl: bool,
-    /// `pi.wsl.proxy.enabled` / `pi.proxy.enabled` — project managed Pi
-    /// providers through the CC Switch local proxy by rewriting `baseUrl` in
-    /// live `models.json`. Off by default because it changes where Pi's
-    /// traffic goes. The database keeps the real upstream URL.
-    #[serde(default, alias = "proxy")]
+    /// `pi.wsl.proxy.enabled` / `pi.proxy.enabled` — allow projecting
+    /// managed Pi providers through the CC Switch local proxy.
+    ///
+    /// Defaults on so Pi follows the same local-proxy on/off as
+    /// Claude/Codex. Set to `false` only as an advanced opt-out; the
+    /// happy path has no separate Pi toggle. The database keeps the real
+    /// upstream URL.
+    #[serde(default = "enabled", alias = "proxy")]
     pub wsl_proxy: bool,
     /// `pi.session.enabled` — mirror WSL session files into the local cache.
     #[serde(default = "enabled")]
@@ -87,7 +90,7 @@ impl Default for PiFeatureFlags {
     fn default() -> Self {
         Self {
             wsl: true,
-            wsl_proxy: false,
+            wsl_proxy: true,
             session: true,
             session_incremental: true,
             usage: true,
@@ -464,7 +467,10 @@ mod tests {
         assert_eq!(settings.kind, PiRuntimeKind::Local);
         assert!(!settings.wants_wsl());
         assert!(settings.flags.session);
-        assert!(!settings.flags.wsl_proxy);
+        assert!(
+            settings.flags.wsl_proxy,
+            "Pi projection follows the local proxy unless the user opts out"
+        );
     }
 
     #[test]

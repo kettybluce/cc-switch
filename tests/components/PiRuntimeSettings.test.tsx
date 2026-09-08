@@ -56,7 +56,7 @@ const localStatus: PiRuntimeStatus = {
     kind: "local",
     flags: {
       wsl: true,
-      wslProxy: false,
+      wslProxy: true,
       session: true,
       sessionIncremental: true,
       usage: true,
@@ -123,6 +123,9 @@ describe("PiRuntimeSettings", () => {
     expect(
       screen.getByText("settings.piRuntime.sessionCount:137"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText("settings.piRuntime.natListenHint"),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a runtime error without hiding the rest of the panel", () => {
@@ -147,24 +150,19 @@ describe("PiRuntimeSettings", () => {
     await waitFor(() => expect(syncSessionsMock).toHaveBeenCalledTimes(1));
   });
 
-  it("keeps the distribution when only the proxy switch changes", async () => {
-    status = wslStatus;
-    render(<PiRuntimeSettings />);
-
-    fireEvent.click(screen.getByRole("switch"));
-
-    await waitFor(() => expect(setRuntimeMock).toHaveBeenCalledTimes(1));
-    expect(setRuntimeMock).toHaveBeenCalledWith({
-      kind: "wsl",
-      distro: "Ubuntu-22.04",
-      flags: { ...wslStatus.settings.flags, wslProxy: true },
-    });
-  });
-
-  it("offers the proxy switch for the local runtime", () => {
+  it("shows that Pi follows the local proxy without a separate switch", () => {
     render(<PiRuntimeSettings />);
     expect(screen.getByText("settings.piRuntime.useProxy")).toBeInTheDocument();
+    expect(
+      screen.getByText("settings.piRuntime.useProxyDescription"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch"),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("settings.piRuntime.testProxy")).toBeInTheDocument();
+    expect(
+      screen.getByText("settings.piRuntime.proxyStopped"),
+    ).toBeInTheDocument();
   });
 
   it("tests the proxy on demand", async () => {

@@ -16,7 +16,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type {
   PiFeatureFlags,
@@ -89,7 +88,7 @@ export function PiRuntimeSettings() {
   }
 
   // WSL only exists on Windows. Elsewhere the location picker is hidden, but
-  // the proxy toggle still applies to the local Pi install.
+  // the proxy status panel still applies to the local Pi install.
   const showLocationPicker = status.wslAvailable;
 
   const { settings, probe } = status;
@@ -210,19 +209,13 @@ export function PiRuntimeSettings() {
       )}
 
       <ProxyPanel
-        proxyEnabled={settings.flags.wslProxy}
+        isWsl={isWsl}
         proxyHealth={proxyPlan?.gateway}
         origin={proxyPlan?.origin}
-        projected={proxyPlan?.projected}
+        projected={Boolean(proxyPlan?.projected)}
+        proxyRunning={Boolean(proxyPlan?.origin)}
         testing={testProxy.isPending}
-        savingFlags={setRuntime.isPending}
         onTestProxy={() => testProxy.mutate()}
-        onToggleProxy={(wslProxy) =>
-          applyRuntime(settings.kind, settings.distro, {
-            ...settings.flags,
-            wslProxy,
-          })
-        }
       />
     </section>
   );
@@ -290,48 +283,46 @@ function WslRuntimeDetails({ probe, syncing, onSync }: WslRuntimeDetailsProps) {
 }
 
 interface ProxyPanelProps {
-  proxyEnabled: boolean;
+  isWsl: boolean;
   proxyHealth?: PiProxyHealth;
   origin?: string;
-  projected?: boolean;
+  projected: boolean;
+  proxyRunning: boolean;
   testing: boolean;
-  savingFlags: boolean;
   onTestProxy: () => void;
-  onToggleProxy: (enabled: boolean) => void;
 }
 
 function ProxyPanel({
-  proxyEnabled,
+  isWsl,
   proxyHealth,
   origin,
   projected,
+  proxyRunning,
   testing,
-  savingFlags,
   onTestProxy,
-  onToggleProxy,
 }: ProxyPanelProps) {
   const { t } = useTranslation();
   const endpoint = origin ?? proxyHealth?.endpoint;
 
   return (
     <div className="space-y-1.5 rounded-lg border border-border/60 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <Label
-          htmlFor="pi-wsl-proxy"
-          className="text-sm font-normal leading-snug"
-        >
-          {t("settings.piRuntime.useProxy")}
-        </Label>
-        <Switch
-          id="pi-wsl-proxy"
-          checked={proxyEnabled}
-          disabled={savingFlags}
-          onCheckedChange={onToggleProxy}
-        />
-      </div>
+      <p className="text-sm font-normal leading-snug">
+        {t("settings.piRuntime.useProxy")}
+      </p>
       <p className="text-xs text-muted-foreground">
         {t("settings.piRuntime.useProxyDescription")}
       </p>
+      {projected ? (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.piRuntime.projected")}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {proxyRunning
+            ? t("settings.piRuntime.proxyOff")
+            : t("settings.piRuntime.proxyStopped")}
+        </p>
+      )}
       {endpoint && (
         <p className="font-mono text-xs text-muted-foreground" title={endpoint}>
           {t("settings.piRuntime.resolvedEndpoint", { endpoint })}
@@ -349,9 +340,9 @@ function ProxyPanel({
             : (proxyHealth.error ?? t("settings.piRuntime.noRoute"))}
         </p>
       )}
-      {projected && (
+      {isWsl && (
         <p className="text-xs text-muted-foreground">
-          {t("settings.piRuntime.projected")}
+          {t("settings.piRuntime.natListenHint")}
         </p>
       )}
       <p className="text-xs text-muted-foreground">

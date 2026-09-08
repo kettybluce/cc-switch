@@ -1,9 +1,9 @@
 //! Option B: project Pi `models.json` `baseUrl`s through the local proxy.
 //!
-//! The CC Switch database keeps the real upstream URL. When proxy mode is on,
-//! the live `models.json` written for Pi points at
-//! `http://<reachable-host>:<port>/pi/<provider-id>[/v1|/v1beta]`. Disabling
-//! proxy, or stopping the local proxy, restores the stored upstream URLs.
+//! The CC Switch database keeps the real upstream URL. When the local proxy
+//! is running, the live `models.json` written for Pi points at
+//! `http://<reachable-host>:<port>/pi/<provider-id>[/v1|/v1beta]`. Stopping
+//! or disabling the local proxy restores the stored upstream URLs.
 //!
 //! Unknown JSON fields are left untouched; only `baseUrl` (provider-level and
 //! per-model) is rewritten.
@@ -514,6 +514,14 @@ mod tests {
         assert!(
             contract.contains("不修改 `/etc/environment`"),
             "contract must keep the no-global-WSL-env boundary"
+        );
+        assert!(
+            contract.contains("同一开关"),
+            "contract must tie Pi projection to the existing local-proxy control"
+        );
+        assert!(
+            contract.contains("没有单独的 Pi 代理开关"),
+            "contract must not treat a Pi-only toggle as the primary UX"
         );
     }
 }

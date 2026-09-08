@@ -25,6 +25,7 @@ export type PiRuntimeKind = "local" | "wsl";
 /** Gradual-rollout switches for the Pi runtime. */
 export interface PiFeatureFlags {
   wsl: boolean;
+  /** Advanced opt-out. Defaults on so Pi follows the local proxy. */
   wslProxy: boolean;
   session: boolean;
   sessionIncremental: boolean;

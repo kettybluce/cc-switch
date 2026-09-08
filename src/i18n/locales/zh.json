@@ -790,8 +790,11 @@
       "sessionCount": "{{count}} 个",
       "syncSessions": "刷新会话",
       "testProxy": "检测代理",
-      "useProxy": "让 Pi 经 CC Switch 本地代理访问供应商",
-      "useProxyDescription": "开启后，把 Pi 已管理供应商在 models.json 中的 baseUrl 改写为本地代理地址；真实上游地址只保存在 CC Switch。不会修改发行版的全局网络设置。",
+      "useProxy": "Pi 跟随 CC Switch 本地代理",
+      "useProxyDescription": "开启本地代理后，CC Switch 会把已管理供应商在 models.json 中的 baseUrl 改写为代理地址——与 Claude / Codex 用同一个开关。真实上游地址只保存在 CC Switch。不会修改发行版的全局网络设置。",
+      "proxyStopped": "本地代理未开启。到「设置 → 代理」打开后，Pi 会自动经代理访问。",
+      "proxyOff": "当前未改写 models.json（高级退出）。Pi 仍直连上游。",
+      "natListenHint": "WSL NAT 模式无法访问只监听 127.0.0.1 的代理。请把本地代理监听地址改成 0.0.0.0，发行版才能经网关连上。",
       "resolvedEndpoint": "端点：{{endpoint}}",
       "proxyHealthOk": "代理可达：{{host}}（{{strategy}}）",
       "localLoopback": "本机回环",
@@ -2869,7 +2872,7 @@
         "listenAddress": {
           "label": "监听地址",
           "placeholder": "127.0.0.1",
-          "description": "路由服务器监听的 IP 地址（推荐 127.0.0.1）"
+          "description": "路由服务器监听的 IP 地址（本机用 127.0.0.1；WSL NAT 需改为 0.0.0.0）"
         },
         "listenPort": {
           "label": "监听端口",

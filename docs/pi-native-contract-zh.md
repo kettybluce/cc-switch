@@ -46,13 +46,13 @@ Pi 在全局设置中保存的当前供应商和模型不进入供应商列表�
 
 ### 代理
 
-用户显式开启后，CC Switch 可以把已管理供应商的请求投影到 **本地代理**：
+开启 CC Switch **本地代理**后（与 Claude / Codex 同一开关），已管理供应商的请求会自动投影到本地代理：
 
 ```
 Pi → CC Switch 本地代理 → 供应商 API
 ```
 
-做法是改写运行中的 `models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI 风格再加 `/v1`，Google 若上游带 `/v1beta` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭投影或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。
+做法是改写运行中的 `models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI 风格再加 `/v1`，Google 若上游带 `/v1beta` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。没有单独的 Pi 代理开关；投影跟随本地代理的开启与停止。
 
 `api` 字段决定走哪条已有路由：`anthropic-messages` → `/v1/messages`，`openai-completions` → `/v1/chat/completions`，`openai-responses` → `/v1/responses`，`google-generative-ai` → `/v1beta/*`。`bedrock-converse-stream` 等本地代理没有对应处理器的协议不会改写，Pi 仍直连上游。
 

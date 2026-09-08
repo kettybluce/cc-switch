@@ -56,7 +56,13 @@ export type ProxyAppId = Extract<
   "claude" | "codex" | "gemini" | "grokbuild"
 >;
 
-/** Apps with a complete local gateway + failover data plane. */
+/**
+ * Apps with a complete local gateway + failover data plane.
+ *
+ * Pi is intentionally excluded: it has no takeover switch or failover
+ * queue. When the local proxy is running, Pi projection is applied
+ * automatically by rewriting `models.json` baseUrls (Option B).
+ */
 export const PROXY_APP_IDS: ProxyAppId[] = [
   "claude",
   "codex",

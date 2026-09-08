@@ -2,7 +2,8 @@
 //!
 //! The database remains the source of truth for upstream `baseUrl`s. This
 //! module rewrites only the live file Pi reads, and only for providers CC
-//! Switch already manages.
+//! Switch already manages. Projection follows the local proxy: start
+//! projects, stop restores. There is no separate default-off Pi toggle.
 
 use crate::database::Database;
 use crate::error::AppError;
@@ -16,8 +17,27 @@ use serde_json::Value;
 
 const PI_APP: &str = "pi";
 
-/// Whether the user asked Pi traffic to go through the local proxy.
+#[cfg(test)]
+use std::sync::Mutex;
+
+#[cfg(test)]
+static TEST_PROJECTION_ENABLED: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Whether Pi should follow the CC Switch local proxy.
+///
+/// This is the same control surface as Claude/Codex: when the local proxy
+/// is on, managed Pi providers are projected unless the user has explicitly
+/// opted out via `flags.wsl_proxy`.
 pub fn proxy_projection_enabled() -> bool {
+    #[cfg(test)]
+    {
+        if let Some(forced) = *TEST_PROJECTION_ENABLED
+            .lock()
+            .expect("lock Pi projection test override")
+        {
+            return forced;
+        }
+    }
     crate::pi_runtime::settings().flags.wsl_proxy
 }
 
@@ -96,10 +116,12 @@ pub fn sync_live_providers(db: &Database, origin: Option<&str>) -> Result<usize,
     Ok(changed)
 }
 
-/// Project or restore after a proxy start. Failures are logged, not fatal:
-/// Claude/Codex takeover must not be blocked by a Pi rewrite miss.
+/// Project (or restore, if opted out) after a proxy start. Failures are
+/// logged, not fatal: Claude/Codex takeover must not be blocked by a Pi
+/// rewrite miss.
 pub fn sync_after_proxy_start(db: &Database, local_proxy_port: u16) {
     if !proxy_projection_enabled() {
+        restore_after_proxy_stop(db);
         return;
     }
     let target = pi_runtime::target();
@@ -123,16 +145,13 @@ pub fn restore_after_proxy_stop(db: &Database) {
     }
 }
 
-/// Ensure the local proxy is running (without taking over Claude/Codex) and
-/// rewrite live `models.json` to match the current flag + runtime.
+/// Rewrite live `models.json` to match the current local-proxy state.
+///
+/// Projection follows the listener: when it is running (and the user has
+/// not opted out), managed providers point at `/pi/<id>…`. When it is
+/// stopped, upstream URLs are restored. This never starts the proxy —
+/// Claude/Codex takeover remains the only path that turns the listener on.
 pub async fn apply_for_state(state: &AppState) -> Result<Option<String>, AppError> {
-    if proxy_projection_enabled() && !state.proxy_service.is_running().await {
-        state
-            .proxy_service
-            .start()
-            .await
-            .map_err(AppError::Message)?;
-    }
     let origin = live_origin(state).await?;
     sync_live_providers(state.db.as_ref(), origin.as_deref())?;
     Ok(origin)
@@ -320,5 +339,137 @@ mod tests {
         });
         sanitize_native_for_db(&mut native, None);
         assert!(native.get("baseUrl").is_none());
+    }
+
+    struct ProjectionOverride {
+        previous: Option<bool>,
+    }
+
+    impl ProjectionOverride {
+        fn set(enabled: bool) -> Self {
+            let previous = TEST_PROJECTION_ENABLED
+                .lock()
+                .expect("lock Pi projection test override")
+                .replace(enabled);
+            Self { previous }
+        }
+    }
+
+    impl Drop for ProjectionOverride {
+        fn drop(&mut self) {
+            *TEST_PROJECTION_ENABLED
+                .lock()
+                .expect("lock Pi projection test override") = self.previous;
+        }
+    }
+
+    async fn use_ephemeral_listen_port(state: &AppState) {
+        let mut config = state
+            .db
+            .get_proxy_config()
+            .await
+            .expect("get test proxy config");
+        config.listen_port = 0;
+        state
+            .db
+            .update_proxy_config(config)
+            .await
+            .expect("use an ephemeral listen port");
+    }
+
+    fn seed_managed_openai_provider(state: &AppState) -> Provider {
+        let provider = card(
+            "cc-switch-test",
+            "openai-completions",
+            "https://api.example.com/v1",
+        );
+        crate::pi_config::insert_pi_provider(&provider.id, &provider.settings_config)
+            .expect("insert");
+        state.db.save_provider(PI_APP, &provider).expect("save");
+        provider
+    }
+
+    fn live_base_url() -> String {
+        crate::pi_config::read_pi_native_provider("cc-switch-test")
+            .expect("read live")
+            .expect("present")["baseUrl"]
+            .as_str()
+            .expect("baseUrl string")
+            .to_string()
+    }
+
+    #[test]
+    fn projection_follows_the_local_proxy_by_default() {
+        assert!(
+            crate::pi_runtime::PiFeatureFlags::default().wsl_proxy,
+            "absent settings must project when the local proxy is on"
+        );
+        let settings = serde_json::from_str::<crate::pi_runtime::PiRuntimeSettings>("{}")
+            .expect("deserialize empty Pi runtime settings");
+        assert!(settings.flags.wsl_proxy);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn starting_the_local_proxy_projects_pi_without_a_separate_flag() {
+        let _agent = TestAgentDir::new();
+        let _projection = ProjectionOverride::set(true);
+        let state = state();
+        seed_managed_openai_provider(&state);
+        use_ephemeral_listen_port(&state).await;
+
+        assert_eq!(live_base_url(), "https://api.example.com/v1");
+        assert!(!state.proxy_service.is_running().await);
+
+        let info = state
+            .proxy_service
+            .start()
+            .await
+            .expect("start local proxy");
+        assert_eq!(
+            live_base_url(),
+            format!("http://127.0.0.1:{}/pi/cc-switch-test/v1", info.port)
+        );
+
+        state.proxy_service.stop().await.expect("stop local proxy");
+        assert_eq!(live_base_url(), "https://api.example.com/v1");
+        assert!(!state.proxy_service.is_running().await);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn apply_for_state_follows_proxy_without_starting_it() {
+        let _agent = TestAgentDir::new();
+        let _projection = ProjectionOverride::set(true);
+        let state = state();
+        seed_managed_openai_provider(&state);
+
+        let origin = apply_for_state(&state)
+            .await
+            .expect("apply while proxy is stopped");
+        assert!(origin.is_none());
+        assert!(!state.proxy_service.is_running().await);
+        assert_eq!(live_base_url(), "https://api.example.com/v1");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn explicit_opt_out_restores_upstream_when_the_proxy_starts() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        seed_managed_openai_provider(&state);
+        use_ephemeral_listen_port(&state).await;
+
+        sync_live_providers(state.db.as_ref(), Some("http://127.0.0.1:15721")).expect("project");
+        assert!(is_pi_proxy_base_url(&live_base_url()));
+
+        let _opt_out = ProjectionOverride::set(false);
+        state
+            .proxy_service
+            .start()
+            .await
+            .expect("start local proxy");
+        assert_eq!(live_base_url(), "https://api.example.com/v1");
+        state.proxy_service.stop().await.expect("stop local proxy");
     }
 }

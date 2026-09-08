@@ -790,8 +790,11 @@
       "sessionCount": "{{count}} found",
       "syncSessions": "Refresh sessions",
       "testProxy": "Test proxy",
-      "useProxy": "Route Pi through the CC Switch local proxy",
-      "useProxyDescription": "Rewrites each managed provider's baseUrl in models.json so Pi talks to the local proxy. Real upstream URLs stay in CC Switch. Distribution-wide network settings are never changed.",
+      "useProxy": "Pi follows the CC Switch local proxy",
+      "useProxyDescription": "When the local proxy is on, CC Switch rewrites each managed provider's baseUrl in models.json so Pi talks to the proxy — the same on/off as Claude and Codex. Real upstream URLs stay in CC Switch. Distribution-wide network settings are never changed.",
+      "proxyStopped": "The local proxy is off. Turn it on in Settings → Proxy; Pi will route through it automatically.",
+      "proxyOff": "Pi is not rewriting models.json (advanced opt-out). Real upstream URLs are in use.",
+      "natListenHint": "WSL NAT cannot reach a proxy bound only to 127.0.0.1. Set the local proxy listen address to 0.0.0.0 so the distribution can connect through the gateway.",
       "resolvedEndpoint": "Endpoint: {{endpoint}}",
       "proxyHealthOk": "Proxy reachable at {{host}} ({{strategy}})",
       "localLoopback": "this machine",
@@ -2869,7 +2872,7 @@
         "listenAddress": {
           "label": "Listen Address",
           "placeholder": "127.0.0.1",
-          "description": "IP address the routing server listens on (recommended: 127.0.0.1)"
+          "description": "IP address the routing server listens on (127.0.0.1 locally; use 0.0.0.0 so WSL NAT can reach it)"
         },
         "listenPort": {
           "label": "Listen Port",
