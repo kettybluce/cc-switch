@@ -2,7 +2,7 @@
 
 > 验证原则：开发和验收使用当时最新发布的 Pi；CC Switch 不绑定某个 Pi 版本。
 
-这份文档记录 CC Switch 当前实际消费的 Pi 原生契约。它不是 Pi 配置格式的完整镜像，也不承诺代理、OAuth 或所有兼容字段。实现和测试只覆盖前端已经提供的能力。
+这份文档记录 CC Switch 当前实际消费的 Pi 原生契约。它不是 Pi 配置格式的完整镜像，也不承诺 OAuth、故障转移或所有兼容字段。实现和测试只覆盖前端已经提供的能力。
 
 ## 验证方式
 
@@ -46,9 +46,21 @@ Pi 在全局设置中保存的当前供应商和模型不进入供应商列表�
 
 ### 代理
 
-CC Switch 不为 Pi 建立路由投影、网关状态或故障转移配置，也不代表 Pi 发请求。WSL 运行时下唯一的例外是：用户显式开启后，把已配置的出站代理以环境变量注入 **Pi 进程本身**（`env` 前缀，默认关闭）。作用域仅限该进程，发行版里的 `git`、`npm` 等工具不受影响。
+用户显式开启后，CC Switch 可以把已管理供应商的请求投影到 **本地代理**：
 
-回环地址在 WSL 边界两侧含义不同：镜像网络模式下 `127.0.0.1` 与 Windows 共享，默认 NAT 模式下则不是，此时 Windows 主机表现为发行版的默认网关。因此候选地址按优先级探测而非猜测，并把命中的方式回报给界面。协议不做改写：SOCKS 代理在所有变量中保持 `socks5h://`，把它降级成 `http://` 只会把失败推迟到请求时刻。
+```
+Pi → CC Switch 本地代理 → 供应商 API
+```
+
+做法是改写运行中的 `models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI 风格再加 `/v1`，Google 若上游带 `/v1beta` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭投影或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。
+
+`api` 字段决定走哪条已有路由：`anthropic-messages` → `/v1/messages`，`openai-completions` → `/v1/chat/completions`，`openai-responses` → `/v1/responses`，`google-generative-ai` → `/v1beta/*`。`bedrock-converse-stream` 等本地代理没有对应处理器的协议不会改写，Pi 仍直连上游。
+
+这不是进程级 `HTTP_PROXY` / `HTTPS_PROXY` 注入，也不是发行版全局代理。CC Switch 不修改 `/etc/environment`、`/etc/profile`、`~/.bashrc`。密钥仍通过 `models.json` 的既有字段写入，从不出现在 `wsl.exe` 命令行或日志里。
+
+回环地址在 WSL 边界两侧含义不同：镜像网络模式下 `127.0.0.1` 与 Windows 共享，默认 NAT 模式下则不是，此时 Windows 主机表现为发行版的默认网关。因此候选地址按优先级探测（镜像回环 → 默认网关 → `resolv.conf`），并把命中的方式与解析出的端点回报给界面。NAT 模式下若本地代理只监听 `127.0.0.1`，发行版无法经网关连上，需要把监听地址改成 `0.0.0.0`。「检测代理」只确认本地代理 `/health` 可连；供应商 401 是密钥问题，与代理可达性分开显示。
+
+CC Switch 仍不为 Pi 做故障转移队列或网关状态机；请求由 Pi 自己发给本地代理，本地代理按路径中的 provider id 选用对应卡片再转发。不管理 `auth.json`。
 
 ### 并发与外部修改
 
@@ -66,8 +78,9 @@ CC Switch 不为 Pi 建立路由投影、网关状态或故障转移配置，也
 
 - Pi `/login`、`auth.json` 中的 OAuth/API Key 登录、令牌保存和刷新
 - 默认供应商或默认模型写入
-- 路由、网关、故障转移和请求头合成；请求仍由 Pi 自己发出，CC Switch 不做投影、不改写请求
+- 故障转移队列和网关状态机；本地代理按 `models.json` 的 `baseUrl` 投影转发，不改写 Pi 发出的请求体协议（除已有 Claude/Codex/Gemini 转换路径外）
 - 修改发行版的 `/etc/environment`、`/etc/profile`、`~/.bashrc` 等共享环境
+- 以 `HTTP_PROXY` / `HTTPS_PROXY` 作为 Pi 的主路径（默认关闭，不注入进程环境）
 - Pi 运行时内置供应商与内置模型目录的复制
 - 完整 `compat`、`modelOverrides` 和费用编辑器；思考档位只提供 Pi 原生 `thinkingLevelMap` 的轻量入口
 - 相对会话目录的全局猜测

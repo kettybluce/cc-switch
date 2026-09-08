@@ -48,7 +48,12 @@ use super::{
 };
 use crate::app_config::AppType;
 use crate::database::PRICING_SOURCE_REQUEST;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use bytes::Bytes;
 use futures::StreamExt;
 use http_body_util::BodyExt;
@@ -128,7 +133,16 @@ pub async fn handle_messages(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
-    handle_messages_for_app(state, request, AppType::Claude, "Claude", "claude", None).await
+    handle_messages_for_app(
+        state,
+        request,
+        AppType::Claude,
+        "Claude",
+        "claude",
+        None,
+        None,
+    )
+    .await
 }
 
 pub async fn handle_claude_desktop_messages(
@@ -142,7 +156,27 @@ pub async fn handle_claude_desktop_messages(
         AppType::ClaudeDesktop,
         "Claude Desktop",
         "claude-desktop",
-        Some("/claude-desktop"),
+        Some("/claude-desktop".to_string()),
+        None,
+    )
+    .await
+}
+
+pub async fn handle_pi_messages(
+    State(state): State<ProxyState>,
+    Path(provider_id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    let provider_id = validate_pi_provider_id(provider_id)?;
+    let strip = format!("/pi/{provider_id}");
+    handle_messages_for_app(
+        state,
+        request,
+        AppType::Pi,
+        "Pi",
+        "pi",
+        Some(strip),
+        Some(provider_id),
     )
     .await
 }
@@ -163,13 +197,31 @@ pub async fn handle_claude_desktop_models(
     Ok(Json(response))
 }
 
+fn validate_pi_provider_id(provider_id: String) -> Result<String, ProxyError> {
+    if !crate::pi_runtime::rewrite::is_safe_provider_id(&provider_id) {
+        return Err(ProxyError::InvalidRequest(format!(
+            "invalid Pi provider id in proxy path: {provider_id}"
+        )));
+    }
+    Ok(provider_id)
+}
+
+fn pi_provider_id_from_path(path: &str) -> Result<String, ProxyError> {
+    let rest = path.strip_prefix("/pi/").ok_or_else(|| {
+        ProxyError::InvalidRequest(format!("Pi proxy path is missing a provider id: {path}"))
+    })?;
+    let id = rest.split('/').next().unwrap_or_default();
+    validate_pi_provider_id(id.to_string())
+}
+
 async fn handle_messages_for_app(
     state: ProxyState,
     request: axum::extract::Request,
     app_type: AppType,
     tag: &'static str,
     app_type_str: &'static str,
-    strip_prefix: Option<&'static str>,
+    strip_prefix: Option<String>,
+    pinned_provider_id: Option<String>,
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, body) = request.into_parts();
     let method = parts.method.clone();
@@ -184,14 +236,27 @@ async fn handle_messages_for_app(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
+    let mut ctx = if let Some(provider_id) = pinned_provider_id.as_deref() {
+        RequestContext::new_pinned(
+            &state,
+            &body,
+            &headers,
+            app_type.clone(),
+            tag,
+            app_type_str,
+            provider_id,
+        )
+        .await?
+    } else {
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?
+    };
 
     let raw_endpoint = uri
         .path_and_query()
         .map(|path_and_query| path_and_query.as_str())
         .unwrap_or(uri.path());
     let endpoint = strip_prefix
+        .as_deref()
         .and_then(|prefix| raw_endpoint.strip_prefix(prefix))
         .unwrap_or(raw_endpoint);
 
@@ -763,6 +828,27 @@ pub async fn handle_chat_completions(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Codex, "Codex", "codex", None).await
+}
+
+pub async fn handle_pi_chat_completions(
+    State(state): State<ProxyState>,
+    Path(provider_id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    let provider_id = validate_pi_provider_id(provider_id)?;
+    handle_chat_completions_for_app(state, request, AppType::Pi, "Pi", "pi", Some(provider_id))
+        .await
+}
+
+async fn handle_chat_completions_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+    pinned_provider_id: Option<String>,
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
     let uri = parts.uri;
@@ -777,8 +863,20 @@ pub async fn handle_chat_completions(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
+    let mut ctx = if let Some(provider_id) = pinned_provider_id.as_deref() {
+        RequestContext::new_pinned(
+            &state,
+            &body,
+            &headers,
+            app_type.clone(),
+            tag,
+            app_type_str,
+            provider_id,
+        )
+        .await?
+    } else {
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?
+    };
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
 
     let is_stream = body
@@ -789,7 +887,7 @@ pub async fn handle_chat_completions(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
@@ -829,7 +927,16 @@ pub async fn handle_responses(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
-    handle_responses_for_app(state, request, AppType::Codex, "Codex", "codex").await
+    handle_responses_for_app(state, request, AppType::Codex, "Codex", "codex", None).await
+}
+
+pub async fn handle_pi_responses(
+    State(state): State<ProxyState>,
+    Path(provider_id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    let provider_id = validate_pi_provider_id(provider_id)?;
+    handle_responses_for_app(state, request, AppType::Pi, "Pi", "pi", Some(provider_id)).await
 }
 
 pub async fn handle_grokbuild_responses(
@@ -842,6 +949,7 @@ pub async fn handle_grokbuild_responses(
         AppType::GrokBuild,
         "Grok Build",
         "grokbuild",
+        None,
     )
     .await
 }
@@ -852,6 +960,7 @@ async fn handle_responses_for_app(
     app_type: AppType,
     tag: &'static str,
     app_type_str: &'static str,
+    pinned_provider_id: Option<String>,
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
@@ -867,8 +976,20 @@ async fn handle_responses_for_app(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
+    let mut ctx = if let Some(provider_id) = pinned_provider_id.as_deref() {
+        RequestContext::new_pinned(
+            &state,
+            &body,
+            &headers,
+            app_type.clone(),
+            tag,
+            app_type_str,
+            provider_id,
+        )
+        .await?
+    } else {
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?
+    };
     let endpoint = endpoint_with_query(&uri, "/responses");
 
     let is_stream = body
@@ -2118,6 +2239,90 @@ pub async fn handle_gemini(
     let mut result = match forwarder
         .forward_with_retry(
             &AppType::Gemini,
+            method,
+            endpoint,
+            body,
+            headers,
+            extensions,
+            ctx.get_providers(),
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(mut err) => {
+            if let Some(provider) = err.provider.take() {
+                ctx.provider = provider;
+            }
+            log_forward_error(&state, &ctx, is_stream, &err.error);
+            return Err(err.error);
+        }
+    };
+
+    let connection_guard = result.connection_guard.take();
+    ctx.outbound_model = result.outbound_model.take();
+    ctx.provider = result.provider;
+    let response = result.response;
+
+    process_response(
+        response,
+        &ctx,
+        &state,
+        &GEMINI_PARSER_CONFIG,
+        connection_guard,
+    )
+    .await
+}
+
+pub async fn handle_pi_gemini(
+    State(state): State<ProxyState>,
+    uri: axum::http::Uri,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    let provider_id = pi_provider_id_from_path(uri.path())?;
+    let (parts, req_body) = request.into_parts();
+    let method = parts.method.clone();
+    let headers = parts.headers;
+    let extensions = parts.extensions;
+    let body_bytes = req_body
+        .collect()
+        .await
+        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
+        .to_bytes();
+    let body: Value = if body_bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body_bytes)
+            .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?
+    };
+
+    let mut ctx = RequestContext::new_pinned(
+        &state,
+        &body,
+        &headers,
+        AppType::Pi,
+        "Pi",
+        "pi",
+        &provider_id,
+    )
+    .await?
+    .with_model_from_uri(&uri);
+
+    let raw_endpoint = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or(uri.path());
+    let prefix = format!("/pi/{provider_id}");
+    let endpoint = raw_endpoint.strip_prefix(&prefix).unwrap_or(raw_endpoint);
+
+    let is_stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let forwarder = ctx.create_forwarder(&state);
+    let mut result = match forwarder
+        .forward_with_retry(
+            &AppType::Pi,
             method,
             endpoint,
             body,

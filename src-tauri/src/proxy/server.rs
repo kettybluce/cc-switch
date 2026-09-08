@@ -319,6 +319,26 @@ impl ProxyServer {
                 "/codex/v1/chat/completions",
                 post(handlers::handle_chat_completions),
             )
+            // Pi (additive): each managed provider is addressed by id so several
+            // cards can coexist in models.json. Anthropic-style providers post
+            // `/v1/messages`; OpenAI-style providers use `/v1` as the base.
+            .route(
+                "/pi/:provider_id/v1/messages",
+                post(handlers::handle_pi_messages),
+            )
+            .route(
+                "/pi/:provider_id/v1/chat/completions",
+                post(handlers::handle_pi_chat_completions),
+            )
+            .route(
+                "/pi/:provider_id/v1/responses",
+                post(handlers::handle_pi_responses),
+            )
+            .route(
+                "/pi/:provider_id/v1beta/*path",
+                any(handlers::handle_pi_gemini),
+            )
+            .route("/pi/:provider_id/*path", any(handlers::handle_pi_gemini))
             // OpenAI Models API (Codex CLI reachability check)
             .route("/models", get(handlers::handle_models))
             .route("/v1/models", get(handlers::handle_models))

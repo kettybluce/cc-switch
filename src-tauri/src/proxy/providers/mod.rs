@@ -25,6 +25,7 @@ mod gemini;
 pub(crate) mod gemini_schema;
 pub mod gemini_shadow;
 pub mod models;
+mod pi;
 pub(crate) mod reasoning_bridge;
 pub mod streaming;
 pub mod streaming_codex_anthropic;
@@ -65,6 +66,7 @@ pub use codex::{
     should_convert_codex_responses_to_chat,
 };
 pub use gemini::GeminiAdapter;
+pub use pi::PiAdapter;
 
 /// 供应商类型枚举
 ///
@@ -209,7 +211,21 @@ impl ProviderType {
             }
             AppType::GrokBuild => ProviderType::Codex,
             AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => ProviderType::Codex,
-            AppType::Pi => return None,
+            AppType::Pi => {
+                return Some(
+                    match crate::pi_runtime::rewrite::provider_api_kind(&provider.settings_config) {
+                        crate::pi_runtime::rewrite::PiApiKind::AnthropicMessages => {
+                            ProviderType::Claude
+                        }
+                        crate::pi_runtime::rewrite::PiApiKind::GoogleGenerativeAi => {
+                            ProviderType::Gemini
+                        }
+                        crate::pi_runtime::rewrite::PiApiKind::OpenaiCompletions
+                        | crate::pi_runtime::rewrite::PiApiKind::OpenaiResponses
+                        | crate::pi_runtime::rewrite::PiApiKind::Unsupported => ProviderType::Codex,
+                    },
+                );
+            }
         };
         Some(provider_type)
     }
@@ -265,7 +281,7 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
         AppType::Gemini => Box::new(GeminiAdapter::new()),
         AppType::GrokBuild => Box::new(CodexAdapter::new()),
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Box::new(CodexAdapter::new()),
-        AppType::Pi => return None,
+        AppType::Pi => Box::new(PiAdapter::new()),
     })
 }
 

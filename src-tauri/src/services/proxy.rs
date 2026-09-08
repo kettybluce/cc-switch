@@ -960,6 +960,7 @@ impl ProxyService {
         // 3. 若已在运行：确保持久化状态（如需要）并返回当前信息
         if let Some(server) = self.server.read().await.as_ref() {
             let status = server.get_status().await;
+            crate::services::pi_proxy::sync_after_proxy_start(&self.db, status.port);
             return Ok(ProxyServerInfo {
                 address: status.address,
                 port: status.port,
@@ -987,6 +988,7 @@ impl ProxyService {
         *self.server.write().await = Some(server);
 
         log::info!("代理服务器已启动: {}:{}", info.address, info.port);
+        crate::services::pi_proxy::sync_after_proxy_start(&self.db, info.port);
         Ok(info)
     }
 
@@ -1717,6 +1719,7 @@ impl ProxyService {
 
     /// 停止代理服务器
     pub async fn stop(&self) -> Result<(), String> {
+        crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
         if let Some(server) = self.server.write().await.take() {
             server
                 .stop()

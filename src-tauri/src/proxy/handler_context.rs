@@ -176,6 +176,75 @@ impl RequestContext {
         })
     }
 
+    /// Pin the request to one provider (Pi additive routing).
+    ///
+    /// Pi keeps several providers in `models.json` at once; the rewritten
+    /// `baseUrl` encodes which card this request belongs to, so failover is
+    /// not applied.
+    pub async fn new_pinned(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        app_type: AppType,
+        tag: &'static str,
+        app_type_str: &'static str,
+        provider_id: &str,
+    ) -> Result<Self, ProxyError> {
+        let start_time = Instant::now();
+        let app_config = state
+            .db
+            .get_proxy_config_for_app(app_type_str)
+            .await
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+        let rectifier_config = state.db.get_rectifier_config().unwrap_or_default();
+        let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
+        let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
+
+        let request_model = body
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let session_result = extract_session_id(headers, body, app_type_str);
+        let session_id = session_result.session_id.clone();
+
+        let provider = state
+            .db
+            .get_provider_by_id(provider_id, app_type_str)
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| {
+                ProxyError::ConfigError(format!(
+                    "Pi provider '{provider_id}' is not in the CC Switch catalog"
+                ))
+            })?;
+
+        log::debug!(
+            "[{}] Pinned provider: {}, model: {}, session: {}",
+            tag,
+            provider.name,
+            request_model,
+            session_id
+        );
+
+        Ok(Self {
+            start_time,
+            app_config,
+            current_provider_id: provider_id.to_string(),
+            providers: vec![provider.clone()],
+            provider,
+            request_model,
+            outbound_model: None,
+            tag,
+            app_type_str,
+            app_type,
+            session_id,
+            session_client_provided: session_result.client_provided,
+            rectifier_config,
+            optimizer_config,
+            copilot_optimizer_config,
+        })
+    }
+
     /// 从 URI 提取模型名称（Gemini 专用）
     ///
     /// Gemini API 的模型名称在 URI 中，格式如：
@@ -332,6 +401,17 @@ mod tests {
         assert_eq!(
             extract_gemini_model_from_path("/gemini/v1beta/models/gemini-2.0-flash:countTokens")
                 .as_deref(),
+            Some("gemini-2.0-flash"),
+        );
+    }
+
+    #[test]
+    fn extract_model_with_pi_provider_prefix() {
+        assert_eq!(
+            extract_gemini_model_from_path(
+                "/pi/gemini/v1beta/models/gemini-2.0-flash:generateContent"
+            )
+            .as_deref(),
             Some("gemini-2.0-flash"),
         );
     }

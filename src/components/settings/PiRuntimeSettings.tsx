@@ -56,7 +56,7 @@ export function PiRuntimeSettings() {
   const { data: distros, isFetching: isProbing } = usePiWslDistros(
     Boolean(status?.wslAvailable) && (pickerOpen || isWsl),
   );
-  const { data: proxyPlan } = usePiProxyPlan(isWsl);
+  const { data: proxyPlan } = usePiProxyPlan(true);
 
   const selectedDistro = status?.settings.distro ?? "";
   const options = useMemo(() => {
@@ -88,11 +88,9 @@ export function PiRuntimeSettings() {
     );
   }
 
-  // WSL only exists on Windows, so elsewhere there is no choice to present.
-  // The backend is the authority here rather than the user agent string.
-  if (!status.wslAvailable) {
-    return null;
-  }
+  // WSL only exists on Windows. Elsewhere the location picker is hidden, but
+  // the proxy toggle still applies to the local Pi install.
+  const showLocationPicker = status.wslAvailable;
 
   const { settings, probe } = status;
 
@@ -114,82 +112,84 @@ export function PiRuntimeSettings() {
         </Button>
       </div>
 
-      <div className="space-y-3">
-        <div className="space-y-1.5">
-          <Label className="text-sm font-normal">
-            {t("settings.piRuntime.location")}
-          </Label>
-          <Select
-            value={settings.kind}
-            onValueChange={(value) =>
-              applyRuntime(
-                value as PiRuntimeKind,
-                value === "wsl" ? settings.distro : undefined,
-                settings.flags,
-              )
-            }
-            disabled={setRuntime.isPending}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="local">
-                <span className="flex items-center gap-2">
-                  <Monitor className="size-3.5" />
-                  {t("settings.piRuntime.local")}
-                </span>
-              </SelectItem>
-              <SelectItem value="wsl">
-                <span className="flex items-center gap-2">
-                  <Terminal className="size-3.5" />
-                  {t("settings.piRuntime.wsl")}
-                </span>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {settings.kind === "wsl" && (
+      {showLocationPicker && (
+        <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-normal">
-              {t("settings.piRuntime.distro")}
+              {t("settings.piRuntime.location")}
             </Label>
             <Select
-              value={selectedDistro}
-              onValueChange={(distro) =>
-                applyRuntime("wsl", distro, settings.flags)
+              value={settings.kind}
+              onValueChange={(value) =>
+                applyRuntime(
+                  value as PiRuntimeKind,
+                  value === "wsl" ? settings.distro : undefined,
+                  settings.flags,
+                )
               }
-              onOpenChange={(open) => open && setPickerOpen(true)}
               disabled={setRuntime.isPending}
             >
               <SelectTrigger>
-                <SelectValue
-                  placeholder={t("settings.piRuntime.distroPlaceholder")}
-                />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {isProbing && options.length === 0 ? (
-                  <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
-                    <Loader2 className="size-3 animate-spin" />
-                    {t("settings.piRuntime.probing")}
-                  </div>
-                ) : options.length === 0 ? (
-                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                    {t("settings.piRuntime.noDistros")}
-                  </div>
-                ) : (
-                  options.map((distro) => (
-                    <SelectItem key={distro} value={distro}>
-                      {distro}
-                    </SelectItem>
-                  ))
-                )}
+                <SelectItem value="local">
+                  <span className="flex items-center gap-2">
+                    <Monitor className="size-3.5" />
+                    {t("settings.piRuntime.local")}
+                  </span>
+                </SelectItem>
+                <SelectItem value="wsl">
+                  <span className="flex items-center gap-2">
+                    <Terminal className="size-3.5" />
+                    {t("settings.piRuntime.wsl")}
+                  </span>
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
-        )}
-      </div>
+
+          {settings.kind === "wsl" && (
+            <div className="space-y-1.5">
+              <Label className="text-sm font-normal">
+                {t("settings.piRuntime.distro")}
+              </Label>
+              <Select
+                value={selectedDistro}
+                onValueChange={(distro) =>
+                  applyRuntime("wsl", distro, settings.flags)
+                }
+                onOpenChange={(open) => open && setPickerOpen(true)}
+                disabled={setRuntime.isPending}
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={t("settings.piRuntime.distroPlaceholder")}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {isProbing && options.length === 0 ? (
+                    <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" />
+                      {t("settings.piRuntime.probing")}
+                    </div>
+                  ) : options.length === 0 ? (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {t("settings.piRuntime.noDistros")}
+                    </div>
+                  ) : (
+                    options.map((distro) => (
+                      <SelectItem key={distro} value={distro}>
+                        {distro}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+      )}
 
       {status.error && (
         <p
@@ -204,22 +204,26 @@ export function PiRuntimeSettings() {
       {isWsl && probe && (
         <WslRuntimeDetails
           probe={probe}
-          proxyEnabled={settings.flags.wslProxy}
-          proxyHealth={proxyPlan?.gateway}
-          forwardProxy={proxyPlan?.forwardProxy}
           syncing={syncSessions.isPending}
-          testing={testProxy.isPending}
-          savingFlags={setRuntime.isPending}
           onSync={() => syncSessions.mutate()}
-          onTestProxy={() => testProxy.mutate()}
-          onToggleProxy={(wslProxy) =>
-            applyRuntime("wsl", settings.distro, {
-              ...settings.flags,
-              wslProxy,
-            })
-          }
         />
       )}
+
+      <ProxyPanel
+        proxyEnabled={settings.flags.wslProxy}
+        proxyHealth={proxyPlan?.gateway}
+        origin={proxyPlan?.origin}
+        projected={proxyPlan?.projected}
+        testing={testProxy.isPending}
+        savingFlags={setRuntime.isPending}
+        onTestProxy={() => testProxy.mutate()}
+        onToggleProxy={(wslProxy) =>
+          applyRuntime(settings.kind, settings.distro, {
+            ...settings.flags,
+            wslProxy,
+          })
+        }
+      />
     </section>
   );
 }
@@ -238,28 +242,14 @@ function RuntimeHeader() {
 
 interface WslRuntimeDetailsProps {
   probe: WslPiProbe;
-  proxyEnabled: boolean;
-  proxyHealth?: PiProxyHealth;
-  forwardProxy?: string;
   syncing: boolean;
-  testing: boolean;
-  savingFlags: boolean;
   onSync: () => void;
-  onTestProxy: () => void;
-  onToggleProxy: (enabled: boolean) => void;
 }
 
 function WslRuntimeDetails({
   probe,
-  proxyEnabled,
-  proxyHealth,
-  forwardProxy,
   syncing,
-  testing,
-  savingFlags,
   onSync,
-  onTestProxy,
-  onToggleProxy,
 }: WslRuntimeDetailsProps) {
   const { t } = useTranslation();
 
@@ -285,69 +275,104 @@ function WslRuntimeDetails({
         />
       </dl>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          className="h-7 text-xs"
-          disabled={syncing}
-          onClick={onSync}
-        >
-          {syncing ? (
-            <Loader2 className="mr-1.5 size-3 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-1.5 size-3" />
-          )}
-          {t("settings.piRuntime.syncSessions")}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="h-7 text-xs"
-          disabled={testing}
-          onClick={onTestProxy}
-        >
-          {testing && <Loader2 className="mr-1.5 size-3 animate-spin" />}
-          {t("settings.piRuntime.testProxy")}
-        </Button>
-      </div>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="h-7 text-xs"
+        disabled={syncing}
+        onClick={onSync}
+      >
+        {syncing ? (
+          <Loader2 className="mr-1.5 size-3 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-1.5 size-3" />
+        )}
+        {t("settings.piRuntime.syncSessions")}
+      </Button>
+    </div>
+  );
+}
 
-      <div className="space-y-1.5 border-t border-border/60 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <Label
-            htmlFor="pi-wsl-proxy"
-            className="text-sm font-normal leading-snug"
-          >
-            {t("settings.piRuntime.useProxy")}
-          </Label>
-          <Switch
-            id="pi-wsl-proxy"
-            checked={proxyEnabled}
-            disabled={savingFlags}
-            onCheckedChange={onToggleProxy}
-          />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.piRuntime.useProxyDescription")}
-        </p>
-        {proxyHealth && (
-          <p className="text-xs text-muted-foreground">
-            {proxyHealth.reachable
-              ? t("settings.piRuntime.routeVia", {
-                  host: proxyHealth.host ?? "",
-                  strategy: t(
-                    `settings.piRuntime.strategy.${proxyHealth.strategy ?? "mirroredLoopback"}`,
-                  ),
-                })
-              : (proxyHealth.error ?? t("settings.piRuntime.noRoute"))}
-          </p>
-        )}
-        {forwardProxy && (
-          <p className="text-xs text-muted-foreground">
-            {t("settings.piRuntime.forwardProxy", { url: forwardProxy })}
-          </p>
-        )}
+interface ProxyPanelProps {
+  proxyEnabled: boolean;
+  proxyHealth?: PiProxyHealth;
+  origin?: string;
+  projected?: boolean;
+  testing: boolean;
+  savingFlags: boolean;
+  onTestProxy: () => void;
+  onToggleProxy: (enabled: boolean) => void;
+}
+
+function ProxyPanel({
+  proxyEnabled,
+  proxyHealth,
+  origin,
+  projected,
+  testing,
+  savingFlags,
+  onTestProxy,
+  onToggleProxy,
+}: ProxyPanelProps) {
+  const { t } = useTranslation();
+  const endpoint = origin ?? proxyHealth?.endpoint;
+
+  return (
+    <div className="space-y-1.5 rounded-lg border border-border/60 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <Label
+          htmlFor="pi-wsl-proxy"
+          className="text-sm font-normal leading-snug"
+        >
+          {t("settings.piRuntime.useProxy")}
+        </Label>
+        <Switch
+          id="pi-wsl-proxy"
+          checked={proxyEnabled}
+          disabled={savingFlags}
+          onCheckedChange={onToggleProxy}
+        />
       </div>
+      <p className="text-xs text-muted-foreground">
+        {t("settings.piRuntime.useProxyDescription")}
+      </p>
+      {endpoint && (
+        <p className="font-mono text-xs text-muted-foreground" title={endpoint}>
+          {t("settings.piRuntime.resolvedEndpoint", { endpoint })}
+        </p>
+      )}
+      {proxyHealth && (
+        <p className="text-xs text-muted-foreground">
+          {proxyHealth.reachable
+            ? t("settings.piRuntime.proxyHealthOk", {
+                host: proxyHealth.host ?? "",
+                strategy: proxyHealth.strategy
+                  ? t(
+                      `settings.piRuntime.strategy.${proxyHealth.strategy}`,
+                    )
+                  : t("settings.piRuntime.localLoopback"),
+              })
+            : (proxyHealth.error ?? t("settings.piRuntime.noRoute"))}
+        </p>
+      )}
+      {projected && (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.piRuntime.projected")}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {t("settings.piRuntime.healthHint")}
+      </p>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="h-7 text-xs"
+        disabled={testing}
+        onClick={onTestProxy}
+      >
+        {testing && <Loader2 className="mr-1.5 size-3 animate-spin" />}
+        {t("settings.piRuntime.testProxy")}
+      </Button>
     </div>
   );
 }

@@ -19,6 +19,7 @@ pub mod detect;
 pub mod error;
 pub mod files;
 pub mod proxy;
+pub mod rewrite;
 pub mod sessions;
 pub mod wsl;
 
@@ -61,9 +62,11 @@ pub struct PiFeatureFlags {
     /// `pi.wsl.enabled` — master switch for the WSL runtime.
     #[serde(default = "enabled")]
     pub wsl: bool,
-    /// `pi.wsl.proxy.enabled` — inject CC Switch's upstream proxy into the Pi
-    /// process. Off by default because it changes where Pi's traffic goes.
-    #[serde(default)]
+    /// `pi.wsl.proxy.enabled` / `pi.proxy.enabled` — project managed Pi
+    /// providers through the CC Switch local proxy by rewriting `baseUrl` in
+    /// live `models.json`. Off by default because it changes where Pi's
+    /// traffic goes. The database keeps the real upstream URL.
+    #[serde(default, alias = "proxy")]
     pub wsl_proxy: bool,
     /// `pi.session.enabled` — mirror WSL session files into the local cache.
     #[serde(default = "enabled")]

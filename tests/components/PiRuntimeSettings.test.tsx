@@ -88,10 +88,14 @@ describe("PiRuntimeSettings", () => {
     distros = [probe];
   });
 
-  it("renders nothing on a platform that cannot host WSL", () => {
+  it("renders the proxy panel even on a platform that cannot host WSL", () => {
     status = { ...localStatus, wslAvailable: false };
-    const { container } = render(<PiRuntimeSettings />);
-    expect(container).toBeEmptyDOMElement();
+    render(<PiRuntimeSettings />);
+    expect(screen.getByText("settings.piRuntime.title")).toBeInTheDocument();
+    expect(screen.getByText("settings.piRuntime.useProxy")).toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.piRuntime.location"),
+    ).not.toBeInTheDocument();
   });
 
   it("offers the runtime choice when WSL is available", () => {
@@ -155,6 +159,12 @@ describe("PiRuntimeSettings", () => {
       distro: "Ubuntu-22.04",
       flags: { ...wslStatus.settings.flags, wslProxy: true },
     });
+  });
+
+  it("offers the proxy switch for the local runtime", () => {
+    render(<PiRuntimeSettings />);
+    expect(screen.getByText("settings.piRuntime.useProxy")).toBeInTheDocument();
+    expect(screen.getByText("settings.piRuntime.testProxy")).toBeInTheDocument();
   });
 
   it("tests the proxy on demand", async () => {

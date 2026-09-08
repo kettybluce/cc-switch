@@ -1,4 +1,7 @@
-//! Reaching a Windows-side proxy from inside WSL.
+//! Reaching the CC Switch local proxy from Pi.
+//!
+//! Option B points Pi at the local proxy by rewriting `baseUrl` in
+//! `models.json`. Process-level `HTTP_PROXY` injection is not used.
 //!
 //! `127.0.0.1` does not mean the same thing on both sides of the WSL boundary.
 //! Under mirrored networking (Windows 11 22H2+, `networkingMode=mirrored`) the
@@ -7,14 +10,10 @@
 //! appears as the default gateway of the distribution's virtual switch instead.
 //!
 //! Rather than guess, the resolver probes the candidates in priority order and
-//! reports which one answered (design document §14–§16).
+//! reports which one answered. The rewritten `baseUrl` uses that host so Pi
+//! inside WSL can reach CC Switch.
 //!
-//! # Scope
-//!
-//! Proxy settings are applied to the Pi process only, by prefixing its launch
-//! with `env`. CC Switch never edits `/etc/environment`, `/etc/profile` or
-//! `~/.bashrc`, so `git`, `npm`, `maven` and everything else in the
-//! distribution keep their own network configuration (design document §44–§45).
+//! CC Switch never edits `/etc/environment`, `/etc/profile` or `~/.bashrc`.
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
@@ -262,92 +261,133 @@ impl ProxyEndpoint {
     }
 }
 
-/// Everything the Pi Proxy panel needs, and everything a Pi launch needs.
+/// Everything the Pi Proxy panel needs.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProxyPlan {
     pub enabled: bool,
-    /// CC Switch's own local endpoint as seen from WSL.
+    /// Whether live `models.json` currently points at the local proxy.
+    pub projected: bool,
+    /// CC Switch's own local endpoint as seen from this runtime.
     pub gateway: ProxyHealth,
-    /// The upstream forward proxy Pi should use, if one is configured.
+    /// `http://host:port` used as the origin of rewritten `baseUrl`s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Unused: Option B does not inject process-level proxy env vars.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_proxy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_proxy_health: Option<ProxyHealth>,
-    /// Environment applied to the Pi process only.
+    /// Kept empty. Env injection is not the default path.
     pub environment: BTreeMap<String, String>,
 }
 
-/// Build the proxy plan for the Pi process.
+/// Build the proxy plan for the Pi runtime.
 ///
-/// `configured` is CC Switch's global outbound proxy URL. A loopback proxy is
-/// rehosted onto whichever address WSL can actually reach, because
-/// `127.0.0.1` inside the distribution is the distribution itself.
+/// `enabled` is the Pi-specific projection flag. The rewritten `baseUrl`
+/// host is the address *this runtime* can reach: loopback on the machine CC
+/// Switch runs on, or the probed WSL host inside a distribution.
 pub fn plan(
     target: &super::PiRuntimeTarget,
     enabled: bool,
     local_proxy_port: u16,
-    configured: Option<&str>,
+    _configured: Option<&str>,
 ) -> PiResult<PiProxyPlan> {
-    let Some(distro) = target.distro() else {
-        return Ok(PiProxyPlan {
-            enabled: false,
-            gateway: ProxyHealth::unreachable("the proxy plan only applies to the WSL runtime"),
-            forward_proxy: None,
-            forward_proxy_health: None,
-            environment: BTreeMap::new(),
-        });
-    };
-
-    let gateway = if local_proxy_port == 0 {
-        ProxyHealth::unreachable("the CC Switch local proxy is not running")
-    } else {
-        resolve_gateway(distro, local_proxy_port)?
-    };
-
-    let endpoint = match configured.filter(|url| !url.trim().is_empty()) {
-        Some(url) => Some(rehost_for_wsl(ProxyEndpoint::parse(url)?, &gateway)?),
-        None => None,
-    };
-
-    let environment = match (&endpoint, enabled) {
-        (Some(endpoint), true) => pi_process_env(endpoint),
-        _ => BTreeMap::new(),
-    };
+    let gateway = local_gateway(target, local_proxy_port)?;
+    let origin = gateway.endpoint.clone();
+    let projected = enabled && origin.is_some();
 
     Ok(PiProxyPlan {
-        enabled: enabled && endpoint.is_some(),
+        enabled: enabled && local_proxy_port != 0,
+        projected,
         gateway,
-        forward_proxy: endpoint.as_ref().map(ProxyEndpoint::display_url),
+        origin,
+        forward_proxy: None,
         forward_proxy_health: None,
-        environment,
+        environment: BTreeMap::new(),
     })
 }
 
-/// Verify the configured proxy from inside the distribution.
-pub fn verify(target: &super::PiRuntimeTarget, configured: Option<&str>) -> PiResult<ProxyHealth> {
-    let Some(distro) = target.distro() else {
+fn local_gateway(target: &super::PiRuntimeTarget, local_proxy_port: u16) -> PiResult<ProxyHealth> {
+    if local_proxy_port == 0 {
         return Ok(ProxyHealth::unreachable(
-            "proxy verification only applies to the WSL runtime",
+            "the CC Switch local proxy is not running",
         ));
-    };
-    let Some(url) = configured.filter(|url| !url.trim().is_empty()) else {
-        return Ok(ProxyHealth::unreachable(
-            "no outbound proxy is configured in CC Switch",
-        ));
-    };
+    }
+    match target.distro() {
+        Some(distro) => resolve_gateway(distro, local_proxy_port),
+        None => Ok(ProxyHealth {
+            reachable: true,
+            endpoint: Some(format!("http://127.0.0.1:{local_proxy_port}")),
+            host: Some("127.0.0.1".to_string()),
+            strategy: None,
+            latency_ms: None,
+            protocol: Some(ProxyProtocol::Http),
+            error: None,
+        }),
+    }
+}
 
-    let endpoint = ProxyEndpoint::parse(url)?;
-    let endpoint = if endpoint.is_loopback() {
-        let gateway = resolve_gateway(distro, endpoint.port)?;
-        rehost_for_wsl(endpoint, &gateway)?
-    } else {
-        endpoint
-    };
-    validate_forward_proxy(distro, &endpoint)
+/// Verify that this runtime can reach the CC Switch local proxy `/health`.
+///
+/// This is proxy reachability, not provider health: a 200 here does not
+/// mean the upstream API accepted a key.
+pub async fn verify(
+    target: &super::PiRuntimeTarget,
+    local_proxy_port: u16,
+) -> PiResult<ProxyHealth> {
+    if local_proxy_port == 0 {
+        return Ok(ProxyHealth::unreachable(
+            "the CC Switch local proxy is not running",
+        ));
+    }
+    match target.distro() {
+        Some(distro) => resolve_gateway(distro, local_proxy_port),
+        None => probe_local_health(local_proxy_port).await,
+    }
+}
+
+async fn probe_local_health(port: u16) -> PiResult<ProxyHealth> {
+    let url = format!("http://127.0.0.1:{port}/health");
+    let start = std::time::Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
+        .build()
+        .map_err(|error| {
+            PiRuntimeError::proxy_unreachable(format!("cannot build health client: {error}"))
+        })?;
+    match client.get(&url).send().await {
+        Ok(response) => {
+            let latency = start.elapsed().as_millis() as u32;
+            if response.status().is_success() || response.status().as_u16() < 500 {
+                Ok(ProxyHealth {
+                    reachable: true,
+                    endpoint: Some(format!("http://127.0.0.1:{port}")),
+                    host: Some("127.0.0.1".to_string()),
+                    strategy: None,
+                    latency_ms: Some(latency),
+                    protocol: Some(ProxyProtocol::Http),
+                    error: None,
+                })
+            } else {
+                Ok(ProxyHealth::unreachable(format!(
+                    "local proxy health check returned {}",
+                    response.status()
+                )))
+            }
+        }
+        Err(error) => Ok(ProxyHealth::unreachable(format!(
+            "local proxy health check failed: {error}"
+        ))),
+    }
 }
 
 /// A loopback proxy has to be rewritten to the address WSL can route to.
+///
+/// Kept for the optional env-injection fallback (`pi_process_env`); Option B
+/// does not use it on the default path.
+#[allow(dead_code)]
 fn rehost_for_wsl(endpoint: ProxyEndpoint, gateway: &ProxyHealth) -> PiResult<ProxyEndpoint> {
     if !endpoint.is_loopback() {
         return Ok(endpoint);
@@ -517,6 +557,9 @@ pub fn resolve_gateway(distro: &str, port: u16) -> PiResult<ProxyHealth> {
 }
 
 /// Verify that Pi can actually reach the internet through `endpoint` (§50–51).
+///
+/// Optional env-injection fallback only; Option B tests `/health` instead.
+#[allow(dead_code)]
 pub fn validate_forward_proxy(distro: &str, endpoint: &ProxyEndpoint) -> PiResult<ProxyHealth> {
     let output = wsl::run(
         &WslRequest::guarded(distro, FORWARD_PROBE_SCRIPT)
@@ -568,9 +611,9 @@ pub fn validate_forward_proxy(distro: &str, endpoint: &ProxyEndpoint) -> PiResul
 
 /// Environment for the Pi process, honouring the endpoint's real protocol.
 ///
-/// The scheme is never rewritten: a SOCKS proxy stays `socks5h://` in every
-/// variable, because silently downgrading it to `http://` is what produces
-/// unsupported-protocol errors at request time.
+/// Not used on the Option B default path. Kept so an explicit env-injection
+/// fallback can reuse the same protocol-preserving mapping.
+#[allow(dead_code)]
 pub fn pi_process_env(endpoint: &ProxyEndpoint) -> BTreeMap<String, String> {
     let url = endpoint.url();
     let mut environment = BTreeMap::new();
@@ -765,5 +808,29 @@ mod tests {
         // fail.
         let candidates = host_candidates("Ubuntu-22.04").expect("resolve candidates");
         assert_eq!(candidates[0].strategy, HostStrategy::MirroredLoopback);
+    }
+
+    #[test]
+    fn the_local_runtime_plan_uses_loopback_and_does_not_inject_env() {
+        let plan = plan(
+            &crate::pi_runtime::PiRuntimeTarget::Local,
+            true,
+            15721,
+            None,
+        )
+        .expect("plan");
+        assert!(plan.enabled);
+        assert!(plan.projected);
+        assert_eq!(plan.origin.as_deref(), Some("http://127.0.0.1:15721"));
+        assert!(plan.environment.is_empty());
+        assert!(plan.forward_proxy.is_none());
+    }
+
+    #[test]
+    fn a_stopped_proxy_is_not_projected() {
+        let plan = plan(&crate::pi_runtime::PiRuntimeTarget::Local, true, 0, None).expect("plan");
+        assert!(!plan.enabled);
+        assert!(!plan.projected);
+        assert!(plan.origin.is_none());
     }
 }

@@ -79,13 +79,19 @@ pub fn extract_session_id(
         }
     }
 
+    if client_format == "pi" {
+        if let Some(result) = extract_claude_session(headers, body) {
+            return result;
+        }
+    }
+
     // Responses 请求特殊处理。Grok Build 使用与 Codex 相同的客户端协议，
     // 但保留独立前缀，避免统计和缓存键跨应用碰撞。
-    if matches!(client_format, "codex" | "openai" | "grokbuild") {
-        let prefix = if client_format == "grokbuild" {
-            "grokbuild"
-        } else {
-            "codex"
+    if matches!(client_format, "codex" | "openai" | "grokbuild" | "pi") {
+        let prefix = match client_format {
+            "grokbuild" => "grokbuild",
+            "pi" => "pi",
+            _ => "codex",
         };
         if let Some(result) = extract_responses_session(headers, body, prefix) {
             return result;

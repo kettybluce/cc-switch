@@ -103,8 +103,12 @@ export interface PiProxyHealth {
 
 export interface PiProxyPlan {
   enabled: boolean;
+  /** Live models.json currently points at the local proxy. */
+  projected: boolean;
   gateway: PiProxyHealth;
-  /** Credentials are already masked by the backend. */
+  /** `http://host:port` used as the origin of rewritten baseUrls. */
+  origin?: string;
+  /** Unused: Option B does not inject process-level proxy env vars. */
   forwardProxy?: string;
   forwardProxyHealth?: PiProxyHealth;
   environment: Record<string, string>;

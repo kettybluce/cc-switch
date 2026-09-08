@@ -47,7 +47,10 @@ pub(crate) fn list_pi_wsl_distros() -> Result<Vec<WslPiProbe>, String> {
 
 /// Switch the runtime Pi's providers and sessions are read from.
 #[tauri::command]
-pub(crate) fn set_pi_runtime(mut runtime: PiRuntimeSettings) -> Result<PiRuntimeStatus, String> {
+pub(crate) async fn set_pi_runtime(
+    state: State<'_, AppState>,
+    mut runtime: PiRuntimeSettings,
+) -> Result<PiRuntimeStatus, String> {
     if runtime.kind == PiRuntimeKind::Wsl {
         // Switching to WSL without naming a distribution picks the one that
         // already has Pi configured, so the common single-distro setup needs
@@ -71,6 +74,9 @@ pub(crate) fn set_pi_runtime(mut runtime: PiRuntimeSettings) -> Result<PiRuntime
 
     crate::settings::set_pi_runtime_settings(runtime).map_err(|error| error.to_string())?;
     crate::pi_runtime::sessions::invalidate_sync_throttle();
+    crate::services::pi_proxy::apply_for_state(state.inner())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(crate::pi_runtime::status())
 }
 
@@ -82,8 +88,8 @@ pub(crate) fn sync_pi_wsl_sessions() -> Result<SessionSyncOutcome, String> {
     crate::pi_runtime::sessions::sync(&target).map_err(|error| error.to_string())
 }
 
-/// Proxy plan for the Pi process: how WSL reaches CC Switch, which upstream
-/// proxy Pi should use, and the environment that would be applied.
+/// Proxy plan for Pi: resolved local-proxy origin and whether models.json
+/// is currently projected through it.
 #[tauri::command]
 pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiProxyPlan, String> {
     let target = crate::pi_runtime::target();
@@ -94,24 +100,26 @@ pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiPr
         .await
         .map(|status| status.port)
         .unwrap_or_default();
-    let configured = state
-        .db
-        .get_global_proxy_url()
-        .map_err(|error| error.to_string())?;
 
-    crate::pi_runtime::proxy::plan(&target, flags.wsl_proxy, port, configured.as_deref())
+    crate::pi_runtime::proxy::plan(&target, flags.wsl_proxy, port, None)
         .map_err(|error| error.to_string())
 }
 
-/// Verify that Pi can actually reach the internet through the planned proxy.
+/// Verify that this runtime can reach the CC Switch local proxy (`/health`).
+///
+/// A reachable proxy is not a successful provider call — 401s belong to the
+/// upstream, not to this check.
 #[tauri::command]
 pub(crate) async fn test_pi_proxy(state: State<'_, AppState>) -> Result<ProxyHealth, String> {
     let target = crate::pi_runtime::target();
-    let configured = state
-        .db
-        .get_global_proxy_url()
-        .map_err(|error| error.to_string())?;
+    let port = state
+        .proxy_service
+        .get_status()
+        .await
+        .map(|status| status.port)
+        .unwrap_or_default();
 
-    crate::pi_runtime::proxy::verify(&target, configured.as_deref())
+    crate::pi_runtime::proxy::verify(&target, port)
+        .await
         .map_err(|error| error.to_string())
 }
