@@ -1143,6 +1143,7 @@
     "minutesAgo": "{{count}} 分钟前",
     "hoursAgo": "{{count}} 小时前",
     "daysAgo": "{{count}} 天前",
+    "runningFor": "运行中 {{duration}}",
     "roleUser": "用户",
     "roleSystem": "系统",
     "roleTool": "工具",

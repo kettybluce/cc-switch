@@ -1143,6 +1143,7 @@
     "minutesAgo": "{{count}} min ago",
     "hoursAgo": "{{count}} hr ago",
     "daysAgo": "{{count}} days ago",
+    "runningFor": "Running {{duration}}",
     "roleUser": "User",
     "roleSystem": "System",
     "roleTool": "Tool",

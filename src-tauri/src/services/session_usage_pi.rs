@@ -90,6 +90,33 @@ struct PiUsageRecord {
     error_message: Option<String>,
     created_at: i64,
     session_id: String,
+    /// Turn latency in milliseconds, or 0 when it cannot be derived.
+    ///
+    /// `latency_ms` is `NOT NULL`, so 0 is the column's existing "unknown"
+    /// value and is what every earlier Pi import stored.
+    latency_ms: i64,
+    /// Timestamp of this entry, so the next record can measure against it.
+    event_millis: Option<i64>,
+}
+
+/// Turn gaps longer than this are treated as unknown rather than as latency.
+///
+/// Pi does not record request timings, so the elapsed time between an entry
+/// and the one before it is the only available signal. That reads as real
+/// latency for a normal turn, but a session left open overnight would
+/// otherwise report a nine-hour "request".
+const MAX_DERIVED_LATENCY_MS: i64 = 30 * 60 * 1000;
+
+/// Derive the latency of a turn from the gap to the preceding entry.
+fn derive_latency_ms(previous_millis: Option<i64>, event_millis: Option<i64>) -> i64 {
+    let (Some(previous), Some(event)) = (previous_millis, event_millis) else {
+        return 0;
+    };
+    let elapsed = event - previous;
+    if elapsed <= 0 || elapsed > MAX_DERIVED_LATENCY_MS {
+        return 0;
+    }
+    elapsed
 }
 
 #[derive(Debug)]
@@ -354,6 +381,7 @@ fn parse_pi_file(
     let mut session_timestamp = None;
     let mut records = Vec::new();
     let mut incomplete_tail = false;
+    let mut previous_event_millis = None;
 
     loop {
         buffer.clear();
@@ -422,6 +450,7 @@ fn parse_pi_file(
             }
             let header_timestamp_millis = value.get("timestamp").and_then(parse_timestamp_millis);
             session_timestamp = header_timestamp_millis.map(|timestamp| timestamp / 1000);
+            previous_event_millis = header_timestamp_millis;
             if let Some(byte_offset) = start_at_byte.filter(|offset| *offset >= bytes_read) {
                 reader.seek(SeekFrom::Start(byte_offset)).map_err(|error| {
                     AppError::Config(format!("无法定位 Pi 会话增量边界: {error}"))
@@ -436,8 +465,17 @@ fn parse_pi_file(
             session_id.as_deref().unwrap_or_default(),
             session_timestamp,
             file_modified_nanos / 1_000_000_000,
+            previous_event_millis,
         ) {
+            previous_event_millis = record.event_millis.or(previous_event_millis);
             records.push(record);
+            continue;
+        }
+
+        // Entries without usage still move the clock: the user message that
+        // triggered a request is what the next record measures against.
+        if let Some(millis) = entry_event_millis(&value) {
+            previous_event_millis = Some(millis);
         }
     }
 
@@ -456,6 +494,7 @@ fn parse_usage_record(
     session_id: &str,
     session_timestamp: Option<i64>,
     file_timestamp: i64,
+    previous_event_millis: Option<i64>,
 ) -> Option<PiUsageRecord> {
     let entry_type = entry.get("type").and_then(Value::as_str)?;
     let (kind, usage_value, message) = match entry_type {
@@ -569,7 +608,22 @@ fn parse_usage_record(
         error_message,
         created_at,
         session_id: session_id.to_string(),
+        latency_ms: derive_latency_ms(previous_event_millis, event_timestamp_millis),
+        event_millis: event_timestamp_millis,
     })
+}
+
+/// Timestamp of any session entry, whether or not it carries usage.
+fn entry_event_millis(entry: &Value) -> Option<i64> {
+    entry
+        .get("timestamp")
+        .and_then(parse_timestamp_millis)
+        .or_else(|| {
+            entry
+                .get("message")
+                .and_then(|message| message.get("timestamp"))
+                .and_then(parse_timestamp_millis)
+        })
 }
 
 fn nonempty_string(value: Option<&Value>) -> Option<&str> {
@@ -854,7 +908,7 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
             cache_read_cost.to_string(),
             cache_write_cost.to_string(),
             total_cost.to_string(),
-            0i64,
+            record.latency_ms,
             Option::<i64>::None,
             record.status_code,
             record.error_message,
@@ -1092,7 +1146,7 @@ mod tests {
         message.insert("model".to_string(), Value::String(oversized.clone()));
         message.insert("responseModel".to_string(), Value::String(oversized));
 
-        let record = parse_usage_record(&entry, "session", None, 0).expect("usage record");
+        let record = parse_usage_record(&entry, "session", None, 0, None).expect("usage record");
         for label in [record.provider_id, record.model, record.request_model] {
             assert!(label.len() <= MAX_USAGE_LABEL_BYTES);
             assert!(std::str::from_utf8(label.as_bytes()).is_ok());
@@ -1108,7 +1162,7 @@ mod tests {
         entry["message"]["timestamp"] = Value::from(i64::MAX);
 
         let record =
-            parse_usage_record(&entry, "session", Some(1_700_000_000), 0).expect("usage record");
+            parse_usage_record(&entry, "session", Some(1_700_000_000), 0, None).expect("usage record");
         assert_eq!(record.created_at, 1_700_000_000);
     }
 
@@ -1243,6 +1297,56 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         assert_eq!(totals, (2, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn turn_latency_is_derived_from_the_gap_to_the_previous_entry() {
+        // 18.5s between the request and the response.
+        assert_eq!(derive_latency_ms(Some(1_000_000), Some(1_018_500)), 18_500);
+    }
+
+    #[test]
+    fn latency_is_unknown_rather_than_wrong_when_it_cannot_be_derived() {
+        assert_eq!(derive_latency_ms(None, Some(1_000_000)), 0);
+        assert_eq!(derive_latency_ms(Some(1_000_000), None), 0);
+        // Out-of-order entries would otherwise produce a negative latency.
+        assert_eq!(derive_latency_ms(Some(1_018_500), Some(1_000_000)), 0);
+        assert_eq!(derive_latency_ms(Some(1_000_000), Some(1_000_000)), 0);
+    }
+
+    #[test]
+    fn an_idle_session_does_not_report_an_hours_long_request() {
+        assert_eq!(
+            derive_latency_ms(Some(0), Some(MAX_DERIVED_LATENCY_MS)),
+            MAX_DERIVED_LATENCY_MS
+        );
+        assert_eq!(derive_latency_ms(Some(0), Some(MAX_DERIVED_LATENCY_MS + 1)), 0);
+    }
+
+    #[test]
+    fn imported_usage_records_carry_a_latency_instead_of_zero() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "latency");
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-latency","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                r#"{"type":"message","id":"ask","parentId":null,"timestamp":"2023-11-14T22:13:30Z","message":{"role":"user","content":"question"}}"#,
+                &assistant_line("answer", "2023-11-14T22:13:42Z", 1),
+            ],
+        );
+
+        let db = Database::memory()?;
+        assert_eq!(sync_pi_files(&db, std::slice::from_ref(&path)).imported, 1);
+
+        let conn = lock_conn!(db.conn);
+        let latency: i64 = conn.query_row(
+            "SELECT latency_ms FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(latency, 12_000);
         Ok(())
     }
 

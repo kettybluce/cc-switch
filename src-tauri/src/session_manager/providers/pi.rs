@@ -396,6 +396,9 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         last_active_at: summary.last_active_at.or(header.timestamp),
         source_path: Some(source_path.clone()),
         resume_command: Some(resume_command(&source)),
+        // Derived centrally by scan_sessions from the timestamps above.
+        duration_ms: None,
+        active: None,
     })
 }
 

@@ -479,6 +479,10 @@ export interface SessionMeta {
   lastActiveAt?: number;
   sourcePath?: string;
   resumeCommand?: string;
+  /** Session length in milliseconds, derived from the session's timestamps. */
+  durationMs?: number;
+  /** Whether the session still looks like it is running. */
+  active?: boolean;
 }
 
 export interface SessionMessage {

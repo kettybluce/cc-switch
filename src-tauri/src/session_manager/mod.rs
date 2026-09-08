@@ -25,6 +25,50 @@ pub struct SessionMeta {
     pub source_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
+    /// How long the session lasted, in milliseconds.
+    ///
+    /// Derived from the session's own timestamps rather than stored by any
+    /// agent, so it is available for every provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    /// Whether the session still looks like it is running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+}
+
+/// A session whose last event is this recent is treated as still running.
+///
+/// Agents do not write an explicit "session ended" marker, so recency is the
+/// only signal available. Five minutes is long enough to cover a model call
+/// plus a user's thinking time without labelling yesterday's work as active.
+const ACTIVE_WINDOW_MS: i64 = 5 * 60 * 1000;
+
+impl SessionMeta {
+    /// Fill in [`SessionMeta::duration_ms`] and [`SessionMeta::active`].
+    ///
+    /// End time follows the documented priority: the last valid event, falling
+    /// back to the start. A session that still looks active is measured
+    /// against now, so a running session's duration keeps growing instead of
+    /// freezing at its last recorded event.
+    fn derive_stats(&mut self, now_ms: i64) {
+        let Some(start) = self.created_at else {
+            return;
+        };
+        let last_event = self.last_active_at.unwrap_or(start);
+        let active = last_event <= now_ms && now_ms - last_event <= ACTIVE_WINDOW_MS;
+        let end = if active { now_ms.max(last_event) } else { last_event };
+        // Clock skew or a rewritten log can put the end before the start; a
+        // negative duration is never meaningful, so clamp instead.
+        self.duration_ms = Some((end - start).max(0));
+        self.active = Some(active);
+    }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +136,11 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
         let b_ts = b.last_active_at.or(b.created_at).unwrap_or(0);
         b_ts.cmp(&a_ts)
     });
+
+    let now = now_millis();
+    for session in &mut sessions {
+        session.derive_stats(now);
+    }
 
     sessions
 }
@@ -257,6 +306,94 @@ where
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    const NOW: i64 = 1_757_320_000_000;
+
+    fn session(created_at: Option<i64>, last_active_at: Option<i64>) -> SessionMeta {
+        SessionMeta {
+            provider_id: "pi".to_string(),
+            session_id: "session-1".to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at,
+            last_active_at,
+            source_path: None,
+            resume_command: None,
+            duration_ms: None,
+            active: None,
+        }
+    }
+
+    #[test]
+    fn a_finished_session_lasts_from_its_first_to_its_last_event() {
+        let mut finished = session(Some(NOW - 3_600_000), Some(NOW - 2_487_000));
+        finished.derive_stats(NOW);
+
+        // 18m 33s, and specifically not 0.
+        assert_eq!(finished.duration_ms, Some(1_113_000));
+        assert_eq!(finished.active, Some(false));
+    }
+
+    #[test]
+    fn a_running_session_is_measured_against_now() {
+        let mut running = session(Some(NOW - 763_000), Some(NOW - 30_000));
+        running.derive_stats(NOW);
+
+        assert_eq!(running.duration_ms, Some(763_000));
+        assert_eq!(running.active, Some(true));
+    }
+
+    #[test]
+    fn a_session_with_no_recorded_events_has_zero_duration_not_a_missing_one() {
+        let mut bare = session(Some(NOW - 86_400_000), None);
+        bare.derive_stats(NOW);
+
+        assert_eq!(bare.duration_ms, Some(0));
+        assert_eq!(bare.active, Some(false));
+    }
+
+    #[test]
+    fn a_session_without_a_start_reports_nothing_rather_than_guessing() {
+        let mut unknown = session(None, Some(NOW));
+        unknown.derive_stats(NOW);
+
+        assert_eq!(unknown.duration_ms, None);
+        assert_eq!(unknown.active, None);
+    }
+
+    #[test]
+    fn clock_skew_cannot_produce_a_negative_duration() {
+        let mut skewed = session(Some(NOW), Some(NOW - 60_000));
+        skewed.derive_stats(NOW);
+
+        assert_eq!(skewed.duration_ms, Some(0));
+    }
+
+    #[test]
+    fn a_timestamp_in_the_future_is_not_treated_as_active() {
+        let mut future = session(Some(NOW - 60_000), Some(NOW + 60_000));
+        future.derive_stats(NOW);
+
+        assert_eq!(future.active, Some(false));
+        assert_eq!(future.duration_ms, Some(120_000));
+    }
+
+    #[test]
+    fn the_active_window_boundary_is_inclusive() {
+        let mut boundary = session(Some(NOW - 600_000), Some(NOW - ACTIVE_WINDOW_MS));
+        boundary.derive_stats(NOW);
+        assert_eq!(boundary.active, Some(true));
+
+        let mut past = session(Some(NOW - 600_000), Some(NOW - ACTIVE_WINDOW_MS - 1));
+        past.derive_stats(NOW);
+        assert_eq!(past.active, Some(false));
+    }
 }
 
 #[cfg(test)]

@@ -170,6 +170,9 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         last_active_at: last_active_at.or(created_at),
         source_path: Some(source_path),
         resume_command: Some(format!("gemini --resume {session_id}")),
+        // Derived centrally by scan_sessions from the timestamps above.
+        duration_ms: None,
+        active: None,
     })
 }
 

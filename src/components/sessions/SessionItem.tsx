@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import type { SessionMeta } from "@/types";
 import {
+  formatDuration,
   formatRelativeTime,
   formatSessionTitle,
   getProviderIconName,
@@ -43,6 +44,7 @@ export function SessionItem({
   const title = formatSessionTitle(session);
   const lastActive = session.lastActiveAt || session.createdAt || undefined;
   const sessionKey = getSessionKey(session);
+  const duration = formatDuration(session.durationMs);
 
   return (
     <div
@@ -103,6 +105,19 @@ export function SessionItem({
               ? formatRelativeTime(lastActive, t)
               : t("common.unknown")}
           </span>
+          {duration && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>
+                {session.active
+                  ? t("sessionManager.runningFor", {
+                      duration,
+                      defaultValue: "运行中 {{duration}}",
+                    })
+                  : duration}
+              </span>
+            </>
+          )}
         </div>
       </button>
     </div>

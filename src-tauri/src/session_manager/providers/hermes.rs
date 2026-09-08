@@ -144,6 +144,9 @@ fn sqlite_row_to_session_meta(row: &Value, db_source: &str) -> Option<SessionMet
         last_active_at: ended_at.or(started_at),
         source_path: Some(source_path),
         resume_command: None,
+        // Derived centrally by scan_sessions from the timestamps above.
+        duration_ms: None,
+        active: None,
     })
 }
 
@@ -425,6 +428,9 @@ fn parse_jsonl_session(path: &Path) -> Option<SessionMeta> {
         last_active_at: last_ts.or(first_ts),
         source_path: Some(source_path),
         resume_command: None,
+        // Derived centrally by scan_sessions from the timestamps above.
+        duration_ms: None,
+        active: None,
     })
 }
 

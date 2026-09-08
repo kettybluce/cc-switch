@@ -1,11 +1,37 @@
 import { describe, expect, it } from "vitest";
 import {
   extractCodexPromptPreview,
+  formatDuration,
   formatSessionMessagePreview,
   groupSessionsByProviderAndDirectory,
   shouldHideCodexMessageFromToc,
 } from "@/components/sessions/utils";
 import type { SessionMeta } from "@/types";
+
+describe("session duration formatting", () => {
+  it("formats a session length as minutes and seconds", () => {
+    expect(formatDuration(1_112_000)).toBe("18m 32s");
+  });
+
+  it("switches to hours for long sessions", () => {
+    expect(formatDuration(7_530_000)).toBe("2h 5m");
+  });
+
+  it("keeps short sessions in seconds", () => {
+    expect(formatDuration(9_400)).toBe("9s");
+    expect(formatDuration(0)).toBe("0s");
+  });
+
+  it("renders nothing when the backend did not report a duration", () => {
+    expect(formatDuration(undefined)).toBe("");
+    expect(formatDuration(null)).toBe("");
+    expect(formatDuration(Number.NaN)).toBe("");
+  });
+
+  it("never renders a negative duration", () => {
+    expect(formatDuration(-5_000)).toBe("0s");
+  });
+});
 
 describe("session utils", () => {
   it("extracts Codex VS Code prompts after the request marker", () => {

@@ -412,6 +412,9 @@ fn parse_session_with_titles(
         last_active_at,
         source_path: Some(path.to_string_lossy().to_string()),
         resume_command: Some(format!("codex resume {session_id}")),
+        // Derived centrally by scan_sessions from the timestamps above.
+        duration_ms: None,
+        active: None,
     })
 }
 

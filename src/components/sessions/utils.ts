@@ -109,6 +109,27 @@ export const formatRelativeTime = (
   return new Date(value).toLocaleDateString();
 };
 
+/**
+ * Format a session length as `18m 32s`.
+ *
+ * Sub-second sessions still render as `0s` rather than an empty string, so a
+ * session that was opened and closed immediately reads as a real measurement
+ * instead of missing data.
+ */
+export const formatDuration = (value: number | undefined | null) => {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return "";
+  }
+  const totalSeconds = Math.max(0, Math.floor(value / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+};
+
 export const getProviderLabel = (
   providerId: string,
   t: (key: string) => string,

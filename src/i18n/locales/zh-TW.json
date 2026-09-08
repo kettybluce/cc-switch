@@ -1144,6 +1144,7 @@
     "minutesAgo": "{{count}} 分鐘前",
     "hoursAgo": "{{count}} 小時前",
     "daysAgo": "{{count}} 天前",
+    "runningFor": "執行中 {{duration}}",
     "roleUser": "使用者",
     "roleSystem": "系統",
     "roleTool": "工具",
