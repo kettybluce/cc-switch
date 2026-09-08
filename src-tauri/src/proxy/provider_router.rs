@@ -61,7 +61,7 @@ impl ProviderRouter {
             .flatten();
 
         let auto_failover_enabled =
-            if AppType::from_str(app_type).is_ok_and(|app| app.supports_local_proxy()) {
+            if AppType::from_str(app_type).is_ok_and(|app| app.supports_auto_failover()) {
                 match self.db.get_proxy_config_for_app(app_type).await {
                     Ok(config) => config.auto_failover_enabled,
                     Err(e) => {

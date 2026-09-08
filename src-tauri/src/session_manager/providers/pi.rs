@@ -203,7 +203,7 @@ fn classify_configured_session_dir(
             Ok(_) => match fs::read_dir(&root) {
                 Ok(_) => SessionRootResolution::Available {
                     root,
-                    layout: SessionLayout::Flat,
+                    layout: SessionLayout::ProjectDirectories,
                 },
                 Err(error) => SessionRootResolution::Unavailable {
                     reason: format!(
@@ -521,7 +521,13 @@ fn update_session_summary(summary: &mut SessionSummary, value: &Value) {
         );
     }
     if role == "user" && summary.first_user_message.is_none() {
-        summary.first_user_message = Some(content.clone());
+        if let Some(title) =
+            first_user_title_text(value.get("message").and_then(|m| m.get("content")))
+        {
+            summary.first_user_message = Some(title);
+        } else {
+            summary.first_user_message = Some(content.clone());
+        }
     }
     summary.last_message = Some(content);
 }
@@ -671,6 +677,44 @@ fn entry_identity(
     Some((id, parent_id))
 }
 
+fn first_user_title_text(content: Option<&Value>) -> Option<String> {
+    let content = content?;
+    match content {
+        Value::Array(items) => items.iter().find_map(|item| {
+            if item.get("type").and_then(Value::as_str) != Some("text") {
+                return None;
+            }
+            item.get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        }),
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Pi encodes a session's launch cwd as a directory name under `sessions/`:
+/// `/home/tfdx8045/code/agent` → `--home-tfdx8045-code-agent--`.
+pub(crate) fn encode_session_cwd(cwd: &str) -> String {
+    let trimmed = cwd.trim();
+    let without_root = trimmed.trim_start_matches('/');
+    format!("--{}--", without_root.replace('/', "-"))
+}
+
+#[allow(dead_code)]
+pub(crate) fn decode_session_cwd(encoded: &str) -> String {
+    let inner = encoded
+        .strip_prefix("--")
+        .and_then(|value| value.strip_suffix("--"))
+        .unwrap_or(encoded);
+    format!("/{}", inner.replace('-', "/"))
+}
+
 fn parse_message(message: &Value) -> Option<(String, String)> {
     let role = message.get("role").and_then(Value::as_str)?;
     let (display_role, content) = match role {
@@ -753,8 +797,15 @@ fn matches_session_layout(root: &Path, source: &Path, layout: SessionLayout) -> 
     let depth = relative.components().count();
     match layout {
         SessionLayout::Flat => depth == 1,
-        SessionLayout::ProjectDirectories => depth == 2,
+        SessionLayout::ProjectDirectories => depth == 2 || is_pi_task_session(relative),
     }
+}
+
+fn is_pi_task_session(relative: &Path) -> bool {
+    let components: Vec<_> = relative.components().collect();
+    components.len() == 4
+        && components[2].as_os_str() == "tasks"
+        && relative.extension().and_then(|value| value.to_str()) == Some("jsonl")
 }
 
 fn validate_file_size(path: &Path) -> Result<(), String> {
@@ -802,11 +853,24 @@ fn collect_jsonl_files(
                     continue;
                 };
                 for project_entry in project_entries.flatten() {
-                    if project_entry
-                        .file_type()
-                        .is_ok_and(|file_type| file_type.is_file())
-                    {
+                    let Ok(project_file_type) = project_entry.file_type() else {
+                        continue;
+                    };
+                    if project_file_type.is_file() {
                         push_jsonl_file(&project_entry, output, enforce_size_limit);
+                    } else if project_file_type.is_dir() {
+                        let tasks = project_entry.path().join("tasks");
+                        let Ok(task_entries) = fs::read_dir(&tasks) else {
+                            continue;
+                        };
+                        for task_entry in task_entries.flatten() {
+                            if task_entry
+                                .file_type()
+                                .is_ok_and(|file_type| file_type.is_file())
+                            {
+                                push_jsonl_file(&task_entry, output, enforce_size_limit);
+                            }
+                        }
                     }
                 }
             }
@@ -1310,5 +1374,59 @@ mod tests {
             SessionLayout::ProjectDirectories
         )
         .expect("delete project session"));
+    }
+
+    #[test]
+    fn cwd_encoding_matches_pi_agent_layout() {
+        assert_eq!(
+            encode_session_cwd("/home/tfdx8045/code/agent"),
+            "--home-tfdx8045-code-agent--"
+        );
+        assert_eq!(
+            decode_session_cwd("--home-tfdx8045-code-agent--"),
+            "/home/tfdx8045/code/agent"
+        );
+    }
+
+    #[test]
+    fn agent_tree_collects_cwd_group_files_and_task_sessions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        let cwd_group = root.join(encode_session_cwd("/home/tfdx8045/code/agent"));
+        let session_file = cwd_group.join("2024-01-01T00-00-00_abc.jsonl");
+        let task_file = cwd_group
+            .join("2024-01-01T00-00-00_abc")
+            .join("tasks")
+            .join("task-1.jsonl");
+        write_session_header(&session_file, "parent-session");
+        write_session_header(&task_file, "task-session");
+
+        let sessions = scan_sessions_in_root(&root, SessionLayout::ProjectDirectories);
+        let mut ids: Vec<_> = sessions
+            .iter()
+            .map(|session| session.session_id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["parent-session", "task-session"]);
+    }
+
+    #[test]
+    fn title_uses_the_first_type_text_content_item() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join("titled.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"session-title\",\"cwd\":\"/work\"}\n\
+             {\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Fix the auth bug in login\"},{\"type\":\"text\",\"text\":\"ignored second\"}]}}\n",
+        )
+        .expect("session");
+        let sessions = scan_sessions_in_root(&root, SessionLayout::Flat);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].title.as_deref(),
+            Some("Fix the auth bug in login")
+        );
     }
 }

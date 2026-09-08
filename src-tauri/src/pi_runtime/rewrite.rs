@@ -1,9 +1,10 @@
-//! Option B: project Pi `models.json` `baseUrl`s through the local proxy.
+//! Takeover for Pi: project `models.json` `baseUrl`s through the local proxy.
 //!
-//! The CC Switch database keeps the real upstream URL. When the local proxy
-//! is running, the live `models.json` written for Pi points at
-//! `http://<reachable-host>:<port>/pi/<provider-id>[/v1|/v1beta]`. Stopping
-//! or disabling the local proxy restores the stored upstream URLs.
+//! The CC Switch database keeps the real upstream URL. When Pi takeover is
+//! on and the local proxy is running, the live `models.json` written for Pi
+//! points at `http://<reachable-host>:<port>/pi/<provider-id>[/v1|/v1beta]`.
+//! Disabling takeover or stopping the local proxy restores the stored
+//! upstream URLs.
 //!
 //! Unknown JSON fields are left untouched; only `baseUrl` (provider-level and
 //! per-model) is rewritten. Pi 0.85+ allows `api` on the model when the

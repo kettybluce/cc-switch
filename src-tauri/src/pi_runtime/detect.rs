@@ -26,7 +26,7 @@ agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 printf 'agentDir=%s\n' "$agent_dir"
 if [ -f "$agent_dir/models.json" ]; then printf 'models=1\n'; else printf 'models=0\n'; fi
 if [ -d "$agent_dir/sessions" ]; then printf 'sessions=1\n'; else printf 'sessions=0\n'; fi
-printf 'sessionCount=%s\n' "$(find "$agent_dir/sessions" -maxdepth 2 -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' \r')"
+printf 'sessionCount=%s\n' "$(find "$agent_dir/sessions" -maxdepth 4 -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' \r')"
 "#;
 
 /// What a discovered runtime target can actually do.

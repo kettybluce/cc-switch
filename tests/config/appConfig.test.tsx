@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAdditiveAppId, isProxyAppId, PROXY_APP_IDS } from "@/config/appConfig";
+import { isAdditiveAppId, isProxyAppId, isTakeoverAppId, PROXY_APP_IDS, TAKEOVER_APP_IDS } from "@/config/appConfig";
 
 describe("appConfig provider lifecycle", () => {
   it.each(["opencode", "openclaw", "hermes", "pi"])(
@@ -20,5 +20,18 @@ describe("appConfig provider lifecycle", () => {
     expect(PROXY_APP_IDS).toEqual(["claude", "codex", "gemini", "grokbuild"]);
     expect(isProxyAppId("pi")).toBe(false);
     expect(isProxyAppId("claude")).toBe(true);
+  });
+
+  it("includes Pi in takeover apps alongside Claude and Codex", () => {
+    expect(TAKEOVER_APP_IDS).toEqual([
+      "claude",
+      "codex",
+      "gemini",
+      "grokbuild",
+      "pi",
+    ]);
+    expect(isTakeoverAppId("pi")).toBe(true);
+    expect(isTakeoverAppId("claude")).toBe(true);
+    expect(isTakeoverAppId("opencode")).toBe(false);
   });
 });

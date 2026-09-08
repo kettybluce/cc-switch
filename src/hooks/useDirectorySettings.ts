@@ -41,7 +41,7 @@ const APP_DIRECTORY_META: Record<
   opencode: { key: "opencode", defaultFolder: ".config/opencode" },
   openclaw: { key: "openclaw", defaultFolder: ".openclaw" },
   hermes: { key: "hermes", defaultFolder: ".hermes" },
-  pi: { key: "pi", defaultFolder: ".pi/agent" },
+  pi: { key: "pi", defaultFolder: ".pi" },
 };
 
 const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<

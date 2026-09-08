@@ -33,6 +33,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import {
   getAppLabel,
   PROXY_APP_IDS,
+  TAKEOVER_APP_IDS,
   type ProxyAppId,
 } from "@/config/appConfig";
 
@@ -279,8 +280,8 @@ export function ProxyPanel({
                     defaultValue: "应用接管",
                   })}
                 </p>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  {PROXY_APP_IDS.map((appType) => {
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {TAKEOVER_APP_IDS.map((appType) => {
                     const isEnabled = takeoverStatus?.[appType] ?? false;
                     return (
                       <div

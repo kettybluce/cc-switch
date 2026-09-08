@@ -187,7 +187,7 @@ export interface UsageRangeSelection {
  * every dashboard query (see `folded_app_type_sql`).
  * `opencode` usage reaches this dashboard through session importers. `pi`
  * records both session imports and local-proxy traffic as `app_type = "pi"`
- * when Option B projection is on. `openclaw` / `hermes` appear only as
+ * when Pi takeover projection is on. `openclaw` / `hermes` appear only as
  * managed apps elsewhere.
  */
 export type AppType =

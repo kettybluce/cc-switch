@@ -2,6 +2,17 @@
 //!
 //! Pi owns account login and the active provider/model in `settings.json`.
 //! CC Switch only manages explicit provider entries in `models.json`.
+//!
+//! Path policy (Pi Coding Agent):
+//! - `piConfigDir` is Pi **home**, default `~/.pi` (same shape as `~/.claude`).
+//! - Live files Pi actually reads live one layer down:
+//!   `{piConfigDir}/agent/models.json` and `{piConfigDir}/agent/settings.json`.
+//! - `PI_CODING_AGENT_DIR` is Pi's own env and already names the **agent**
+//!   directory; it is not the home.
+//! - A legacy override that already ends in `agent` is used as-is so we do
+//!   not write `{home}/agent/agent/models.json`.
+//! - Top-level `{piConfigDir}/models.json` is a mirror only. The agent file
+//!   is canonical; writes keep both in sync so they cannot diverge.
 
 use crate::config::get_home_dir;
 use crate::error::AppError;
@@ -29,6 +40,13 @@ pub(crate) struct PiNativeDefaults {
     pub session_dir: Option<String>,
 }
 
+/// Pi home (`~/.pi`). This is what Settings → Pi configuration directory
+/// names; live models/settings/sessions are under the `agent/` child.
+pub(crate) fn get_pi_config_dir() -> Result<PathBuf, AppError> {
+    Ok(pi_home_from_agent_dir(&get_pi_agent_dir()?))
+}
+
+/// Directory Pi actually reads: `{piConfigDir}/agent`.
 pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
     #[cfg(test)]
     if let Some(path) = TEST_AGENT_DIR
@@ -36,31 +54,25 @@ pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
         .expect("lock Pi test directory")
         .clone()
     {
-        return resolve_pi_agent_dir(Some(path), None, get_home_dir().join(".pi").join("agent"));
+        return require_absolute(path, "Pi settings override");
     }
 
-    resolve_pi_agent_dir(
-        crate::settings::get_pi_override_dir(),
-        std::env::var_os("PI_CODING_AGENT_DIR"),
-        get_home_dir().join(".pi").join("agent"),
-    )
+    if let Some(path) = crate::settings::get_pi_override_dir() {
+        let home = require_absolute(path, "Pi settings override")?;
+        return Ok(agent_dir_from_pi_home(&home));
+    }
+
+    if let Some(value) = std::env::var_os("PI_CODING_AGENT_DIR").filter(|value| !value.is_empty()) {
+        return require_absolute(
+            crate::settings::resolve_override_path(value.to_string_lossy().as_ref()),
+            "PI_CODING_AGENT_DIR",
+        );
+    }
+
+    Ok(get_home_dir().join(".pi").join("agent"))
 }
 
-fn resolve_pi_agent_dir(
-    settings_override: Option<PathBuf>,
-    env_override: Option<std::ffi::OsString>,
-    default_path: PathBuf,
-) -> Result<PathBuf, AppError> {
-    let (path, source) = match settings_override {
-        Some(path) => (path, "Pi settings override"),
-        None => match env_override {
-            Some(value) if !value.is_empty() => (
-                crate::settings::resolve_override_path(value.to_string_lossy().as_ref()),
-                "PI_CODING_AGENT_DIR",
-            ),
-            _ => (default_path, "Pi default"),
-        },
-    };
+fn require_absolute(path: PathBuf, source: &str) -> Result<PathBuf, AppError> {
     if !path.is_absolute() {
         return Err(AppError::InvalidInput(format!(
             "{source} must resolve to an absolute directory: {}",
@@ -68,6 +80,47 @@ fn resolve_pi_agent_dir(
         )));
     }
     Ok(path)
+}
+
+/// True when `path` is already the agent layer (`…/agent`), not Pi home.
+pub(crate) fn is_pi_agent_leaf(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("agent"))
+}
+
+/// `{piHome}/agent`, unless `pi_home` is already that directory (legacy
+/// overrides that pointed at the agent layer).
+pub(crate) fn agent_dir_from_pi_home(pi_home: &Path) -> PathBuf {
+    if is_pi_agent_leaf(pi_home) {
+        pi_home.to_path_buf()
+    } else {
+        pi_home.join("agent")
+    }
+}
+
+pub(crate) fn pi_home_from_agent_dir(agent_dir: &Path) -> PathBuf {
+    if is_pi_agent_leaf(agent_dir) {
+        agent_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| agent_dir.to_path_buf())
+    } else {
+        agent_dir.to_path_buf()
+    }
+}
+
+/// Top-level `{piHome}/models.json` (or settings.json) mirror. `None` when
+/// that path would be the same as the canonical agent file.
+pub(crate) fn get_pi_top_level_path(file_name: &str) -> Result<Option<PathBuf>, AppError> {
+    let agent_dir = get_pi_agent_dir()?;
+    let agent = agent_dir.join(file_name);
+    let top = pi_home_from_agent_dir(&agent_dir).join(file_name);
+    if top == agent {
+        Ok(None)
+    } else {
+        Ok(Some(top))
+    }
 }
 
 pub(crate) fn get_pi_models_path() -> Result<PathBuf, AppError> {
@@ -80,10 +133,11 @@ pub(crate) fn get_pi_settings_path() -> Result<PathBuf, AppError> {
 
 pub(crate) fn read_pi_native_defaults() -> Result<PiNativeDefaults, AppError> {
     let path = get_pi_settings_path()?;
-    if !path.exists() {
-        return Ok(PiNativeDefaults::default());
-    }
-    let value = read_json5_value(&path, "Pi settings")?;
+    let value = match read_json5_value(&path, "Pi settings") {
+        Ok(value) => value,
+        Err(AppError::Io { .. }) => return Ok(PiNativeDefaults::default()),
+        Err(error) => return Err(error),
+    };
     let object = value.as_object().ok_or_else(|| {
         AppError::Config(format!(
             "Pi settings root must be an object: {}",
@@ -489,29 +543,78 @@ mod tests {
 
     #[test]
     fn relative_agent_directory_is_rejected() {
-        let error = resolve_pi_agent_dir(
-            None,
-            Some("relative/pi-agent".into()),
-            PathBuf::from("default"),
-        )
-        .expect_err("relative Pi directory must be rejected");
+        let error = require_absolute(PathBuf::from("relative/pi-agent"), "PI_CODING_AGENT_DIR")
+            .expect_err("relative Pi directory must be rejected");
         assert!(error.to_string().contains("absolute directory"));
     }
 
     #[test]
-    fn settings_directory_precedes_the_environment() {
+    fn pi_home_override_selects_the_agent_layer() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let settings_dir = temp.path().join("settings-agent");
-        let env_dir = temp.path().join("env-agent");
-
+        let pi_home = temp.path().join(".pi");
         assert_eq!(
-            resolve_pi_agent_dir(
-                Some(settings_dir.clone()),
-                Some(env_dir.into_os_string()),
-                temp.path().join("default-agent"),
-            )
-            .expect("resolve Pi directory"),
-            settings_dir
+            agent_dir_from_pi_home(&pi_home),
+            pi_home.join("agent"),
+            "canonical live dir is <piConfigDir>/agent"
+        );
+        assert_eq!(
+            agent_dir_from_pi_home(&pi_home.join("agent")),
+            pi_home.join("agent"),
+            "a legacy override that already ends in agent must not be doubled"
+        );
+        assert_eq!(pi_home_from_agent_dir(&pi_home.join("agent")), pi_home);
+        assert!(is_pi_agent_leaf(&pi_home.join("agent")));
+        assert!(!is_pi_agent_leaf(&pi_home));
+    }
+
+    #[test]
+    #[serial]
+    fn writing_models_keeps_the_top_level_mirror_in_sync() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider("cc-switch-sync", &provider()).expect("insert provider");
+
+        let agent_path = get_pi_models_path().expect("agent models path");
+        let top_path = get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("top-level mirror is distinct");
+        let agent_bytes = fs::read(&agent_path).expect("read agent models");
+        let top_bytes = fs::read(&top_path).expect("read top-level models");
+        assert_eq!(agent_bytes, top_bytes);
+        assert!(agent_path.ends_with(Path::new("agent").join("models.json")));
+        assert_eq!(
+            top_path.file_name().and_then(|name| name.to_str()),
+            Some("models.json")
+        );
+        assert_ne!(agent_path, top_path);
+    }
+
+    #[test]
+    #[serial]
+    fn a_stale_agent_file_is_healed_from_a_newer_top_level_write() {
+        let _agent = test_support::TestAgentDir::new();
+        let agent_path = get_pi_models_path().expect("agent models path");
+        let top_path = get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("top-level mirror");
+        fs::create_dir_all(agent_path.parent().expect("agent dir")).expect("mkdir agent");
+        fs::write(&agent_path, r#"{"providers":{"stale":{}}}"#).expect("stale agent");
+        // Ensure the top-level mtime wins even on coarse filesystems.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(
+            &top_path,
+            r#"{"providers":{"openai":{"name":"yumcode-std"}}}"#,
+        )
+        .expect("fresh top-level");
+
+        let providers = read_pi_native_providers().expect("heal and read");
+        assert!(
+            providers.contains_key("openai"),
+            "agent file must pick up the live top-level providers Pi was missing"
+        );
+        assert!(!providers.contains_key("stale"));
+        assert_eq!(
+            fs::read_to_string(&agent_path).expect("agent after heal"),
+            fs::read_to_string(&top_path).expect("top-level after heal")
         );
     }
 

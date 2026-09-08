@@ -186,17 +186,16 @@ Pi 原生订阅登录和 OAuth 由 Pi 管理：
 
 ### 4.9 路由与故障转移
 
-Pi 前端不提供接管开关、网关状态机和故障转移：
+Pi 与 Claude / Codex 共用**接管 + 本地代理**产品路径，但不走故障转移数据面：
 
-- 不显示“需要路由”“不支持路由”或 `gatewayStatus`。
-- 不显示故障转移端点管理。
-- 不显示网关凭证和网关诊断。
+- Pi 出现在主界面接管开关和「设置 → 代理」应用接管列表（`TAKEOVER_APP_IDS`）。
+- 不显示故障转移开关、故障转移端点管理、网关凭证或 `gatewayStatus`。
 - 不从预设写入 `allowGateway` 等能力字段。
-- 不把 Pi 加入 Claude/Codex 的应用接管列表或故障转移队列。
+- 不把 Pi 加入 Claude/Codex 的故障转移队列（`PROXY_APP_IDS` 不含 Pi）。
 
-后端不为 Pi 建立故障转移配置。通用代理基建遇到 Pi 的接管/故障转移路径时应明确跳过。
+后端不为 Pi 建立故障转移配置。通用代理基建遇到 Pi 的故障转移路径时应明确跳过。
 
-例外是本地代理投影（Option B）：开启 CC Switch 本地代理后（与 Claude / Codex 同一开关），运行位置面板显示 Pi 是否已把 `models.json` 的 `baseUrl` 改写到 `/pi/<provider_id>`，并提供「检测代理」确认 `/health`。WSL NAT 下需把本地代理监听地址设为 `0.0.0.0`。没有单独的 Pi 代理开关；投影跟随本地代理。不注入进程级 `HTTP_PROXY`，也不改写发行版全局网络设置。凭证不得出现在界面、日志、toast 或恢复命令中。详见 [Pi 原生契约与实现边界](./pi-native-contract-zh.md) 的「代理」一节。
+Pi 走 Claude/Codex 同一条接管 + 本地代理路径：在「设置 → 代理」打开 Pi 接管后，运行位置面板显示 Pi 是否已把 `~/.pi/agent/models.json` 的 `baseUrl` 改写到 `/pi/<provider_id>`，并提供「检测代理」确认 `/health`。WSL NAT 下需把本地代理监听地址设为 `0.0.0.0`。仅启动本地代理、不打开 Pi 接管时不再自动改写。不注入进程级 `HTTP_PROXY`，也不改写发行版全局网络设置。凭证不得出现在界面、日志、toast 或恢复命令中。详见 [Pi 原生契约与实现边界](./pi-native-contract-zh.md) 的「代理」一节。
 
 ## 5. 提示词页面
 

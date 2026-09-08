@@ -5,7 +5,7 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::CostCalculator;
+use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state_on_conn, SessionSyncResult,
@@ -56,6 +56,7 @@ struct PiCosts {
 }
 
 impl PiCosts {
+    #[allow(dead_code)]
     fn reported(self) -> Option<(Decimal, Decimal, Decimal, Decimal, Decimal)> {
         let component_total = self.input + self.output + self.cache_read + self.cache_write;
         let total = if self.total > Decimal::ZERO {
@@ -85,6 +86,7 @@ struct PiUsageRecord {
     output_tokens: u32,
     cache_read_tokens: u32,
     cache_write_tokens: u32,
+    #[allow(dead_code)]
     costs: PiCosts,
     status_code: i64,
     error_message: Option<String>,
@@ -540,7 +542,6 @@ fn parse_usage_record(
         && output_tokens == 0
         && cache_read_tokens == 0
         && cache_write_tokens == 0
-        && costs.reported().is_none()
         && !failed
     {
         return None;
@@ -662,6 +663,43 @@ fn token_count(usage: &Value, key: &str) -> u32 {
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .min(u32::MAX as u64) as u32
+}
+
+/// Unit prices from live `models.json` (`cost.input` etc. are USD / million).
+/// Embedded `usage.cost.total` in session JSONL is typically 0; do not trust it.
+fn pricing_from_pi_models_json(model: &str) -> Option<ModelPricing> {
+    if model.is_empty() || model == UNKNOWN_MODEL {
+        return None;
+    }
+    let providers = crate::pi_config::read_pi_native_providers().ok()?;
+    for node in providers.values() {
+        let Some(models) = node.get("models").and_then(Value::as_array) else {
+            continue;
+        };
+        for entry in models {
+            let id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
+            if id != model {
+                continue;
+            }
+            return model_entry_unit_prices(entry);
+        }
+    }
+    None
+}
+
+fn model_entry_unit_prices(entry: &Value) -> Option<ModelPricing> {
+    let cost = entry.get("cost")?;
+    let parse = |key: &str| -> Option<Decimal> {
+        cost.get(key)
+            .and_then(parse_decimal)
+            .filter(|value| *value >= Decimal::ZERO)
+    };
+    Some(ModelPricing {
+        input_cost_per_million: parse("input")?,
+        output_cost_per_million: parse("output")?,
+        cache_read_cost_per_million: parse("cacheRead").unwrap_or(Decimal::ZERO),
+        cache_creation_cost_per_million: parse("cacheWrite").unwrap_or(Decimal::ZERO),
+    })
 }
 
 fn parse_costs(value: Option<&Value>) -> PiCosts {
@@ -864,18 +902,18 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
         model: Some(record.model.clone()),
         message_id: None,
     };
-    let costs = record.costs.reported().or_else(|| {
-        find_model_pricing(conn, &record.model).map(|pricing| {
-            let calculated =
-                CostCalculator::calculate_for_app(APP_TYPE, &usage, &pricing, Decimal::ONE);
-            (
-                calculated.input_cost,
-                calculated.output_cost,
-                calculated.cache_read_cost,
-                calculated.cache_creation_cost,
-                calculated.total_cost,
-            )
-        })
+    let unit_prices = pricing_from_pi_models_json(&record.model)
+        .or_else(|| find_model_pricing(conn, &record.model));
+    let costs = unit_prices.map(|pricing| {
+        let calculated =
+            CostCalculator::calculate_for_app(APP_TYPE, &usage, &pricing, Decimal::ONE);
+        (
+            calculated.input_cost,
+            calculated.output_cost,
+            calculated.cache_read_cost,
+            calculated.cache_creation_cost,
+            calculated.total_cost,
+        )
     });
     let (input_cost, output_cost, cache_read_cost, cache_write_cost, total_cost) =
         costs.unwrap_or((
@@ -1056,8 +1094,9 @@ mod tests {
             assert_eq!(assistant.4, 1_700_000_001);
             assert_eq!(assistant.5, INPUT_TOKEN_SEMANTICS_FRESH);
             assert_eq!(
-                Decimal::from_str(&assistant.6).expect("reported total"),
-                Decimal::from_str("0.0000255").expect("expected total")
+                Decimal::from_str(&assistant.6).expect("priced total"),
+                Decimal::ZERO,
+                "JSONL embedded cost must not be trusted; without models.json prices cost is 0"
             );
 
             let empty_failure: (i64, i64, String) = conn.query_row(

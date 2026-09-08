@@ -57,11 +57,10 @@ export type ProxyAppId = Extract<
 >;
 
 /**
- * Apps with a complete local gateway + failover data plane.
+ * Apps with a complete local-gateway **failover** data plane.
  *
- * Pi is intentionally excluded: it has no takeover switch or failover
- * queue. When the local proxy is running, Pi projection is applied
- * automatically by rewriting `models.json` baseUrls (Option B).
+ * Pi is excluded on purpose: it shares Claude/Codex takeover + proxy
+ * traffic, but not the failover queue UI or circuit-breaker switcher.
  */
 export const PROXY_APP_IDS: ProxyAppId[] = [
   "claude",
@@ -72,6 +71,28 @@ export const PROXY_APP_IDS: ProxyAppId[] = [
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);
+}
+
+export type TakeoverAppId = Extract<
+  AppId,
+  "claude" | "codex" | "gemini" | "grokbuild" | "pi"
+>;
+
+/**
+ * Apps whose live config is rewritten onto the local proxy when takeover
+ * is enabled. Pi uses the same product control as Claude/Codex; the live
+ * rewrite is `models.json` `baseUrl` projection rather than env vars.
+ */
+export const TAKEOVER_APP_IDS: TakeoverAppId[] = [
+  "claude",
+  "codex",
+  "gemini",
+  "grokbuild",
+  "pi",
+];
+
+export function isTakeoverAppId(appId: string): appId is TakeoverAppId {
+  return (TAKEOVER_APP_IDS as string[]).includes(appId);
 }
 
 export type AdditiveAppId = Extract<

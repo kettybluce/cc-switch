@@ -35,6 +35,7 @@ pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), 
         || takeover.grokbuild
         || takeover.opencode
         || takeover.openclaw
+        || takeover.pi
     {
         return Err(
             "仍有应用处于代理接管状态，请先在设置中关闭对应应用接管后再停止本地路由。".to_string(),

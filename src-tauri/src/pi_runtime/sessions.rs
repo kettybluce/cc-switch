@@ -33,7 +33,7 @@ set -u
 root="$1"
 if [ ! -d "$root" ]; then printf 'missing\n'; exit 0; fi
 printf 'ok\n'
-find "$root" -maxdepth 2 -type f -name '*.jsonl' -printf '%s\t%T@\t%P\n' 2>/dev/null
+find "$root" -maxdepth 4 -type f -name '*.jsonl' -printf '%s\t%T@\t%P\n' 2>/dev/null
 "#;
 
 /// `$1` sessions root; relative paths arrive on stdin, one per line.

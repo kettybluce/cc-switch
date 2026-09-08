@@ -32,4 +32,17 @@ describe("ProxyToggle", () => {
 
     expect(screen.getByRole("switch")).toBeEnabled();
   });
+
+  it("accepts Pi as a takeover app", () => {
+    useProxyStatusMock.mockImplementation(() => ({
+      isRunning: false,
+      takeoverStatus: { pi: false },
+      setTakeoverForApp: vi.fn(),
+      isPending: false,
+      isInitialStatusPending: false,
+      status: undefined,
+    }));
+    render(<ProxyToggle activeApp="pi" />);
+    expect(screen.getByRole("switch")).toBeEnabled();
+  });
 });

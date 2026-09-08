@@ -1,7 +1,7 @@
 //! Reaching the CC Switch local proxy from Pi.
 //!
-//! Option B points Pi at the local proxy by rewriting `baseUrl` in
-//! `models.json`. Process-level `HTTP_PROXY` injection is not used.
+//! Pi takeover points the live `models.json` `baseUrl`s at the local proxy.
+//! Process-level `HTTP_PROXY` injection is not used.
 //!
 //! `127.0.0.1` does not mean the same thing on both sides of the WSL boundary.
 //! Under mirrored networking (Windows 11 22H2+, `networkingMode=mirrored`) the

@@ -102,7 +102,7 @@ pub(crate) fn sync_pi_wsl_sessions() -> Result<SessionSyncOutcome, String> {
 #[tauri::command]
 pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiProxyPlan, String> {
     let target = crate::pi_runtime::target();
-    let enabled = crate::services::pi_proxy::proxy_projection_enabled();
+    let enabled = crate::services::pi_proxy::proxy_projection_enabled(state.db.as_ref());
     let port = state
         .proxy_service
         .get_status()

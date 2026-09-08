@@ -49,7 +49,8 @@ export interface ProxyTakeoverStatus {
   grokbuild: boolean;
   opencode: boolean;
   openclaw: boolean;
-  hermes: boolean;
+  hermes?: boolean;
+  pi: boolean;
 }
 
 export interface ProviderHealth {

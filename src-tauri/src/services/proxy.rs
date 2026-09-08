@@ -1130,6 +1130,12 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
+        let pi_enabled = self
+            .db
+            .get_proxy_config_for_app("pi")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false);
         // OpenCode and OpenClaw don't support proxy features, always return false
         let opencode_enabled = false;
         let openclaw_enabled = false;
@@ -1141,7 +1147,99 @@ impl ProxyService {
             grokbuild: grokbuild_enabled,
             opencode: opencode_enabled,
             openclaw: openclaw_enabled,
+            pi: pi_enabled,
         })
+    }
+
+    /// Pi takeover: project managed `models.json` `baseUrl`s through `/pi/<id>`.
+    ///
+    /// Additive membership means we never whole-file backup `models.json`.
+    /// Restore always uses the CC Switch database as the source of truth for
+    /// real upstream URLs — the same rewrite Option B used, now gated on the
+    /// per-app takeover switch like Claude/Codex.
+    async fn set_pi_takeover(&self, enabled: bool) -> Result<(), String> {
+        let app_type_str = "pi";
+        let _guard = self.switch_locks.lock_for_app(app_type_str).await;
+
+        if enabled {
+            if !self.is_running().await {
+                self.start().await?;
+            }
+
+            let current_config = self
+                .db
+                .get_proxy_config_for_app(app_type_str)
+                .await
+                .map_err(|e| format!("获取 {app_type_str} 配置失败: {e}"))?;
+            if current_config.enabled {
+                match self.live_takeover_matches_current_proxy(&AppType::Pi).await {
+                    Ok(true) => {
+                        self.refresh_active_target_from_current_provider(&AppType::Pi)
+                            .await;
+                        return Ok(());
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        log::warn!("检测 Pi 接管配置失败（将继续重建接管）: {e}");
+                    }
+                }
+            }
+
+            self.takeover_live_config_strict(&AppType::Pi).await?;
+
+            let mut updated_config = self
+                .db
+                .get_proxy_config_for_app(app_type_str)
+                .await
+                .map_err(|e| format!("获取 {app_type_str} 配置失败: {e}"))?;
+            updated_config.enabled = true;
+            self.db
+                .update_proxy_config_for_app(updated_config)
+                .await
+                .map_err(|e| format!("设置 {app_type_str} enabled 状态失败: {e}"))?;
+            let _ = self.db.set_live_takeover_active(true).await;
+            self.refresh_active_target_from_current_provider(&AppType::Pi)
+                .await;
+            return Ok(());
+        }
+
+        let current_config = self
+            .db
+            .get_proxy_config_for_app(app_type_str)
+            .await
+            .map_err(|e| format!("获取 {app_type_str} 配置失败: {e}"))?;
+        if !current_config.enabled {
+            crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+            return Ok(());
+        }
+
+        crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+        let _ = self.db.delete_live_backup(app_type_str).await;
+
+        let mut updated_config = self
+            .db
+            .get_proxy_config_for_app(app_type_str)
+            .await
+            .map_err(|e| format!("获取 {app_type_str} 配置失败: {e}"))?;
+        updated_config.enabled = false;
+        self.db
+            .update_proxy_config_for_app(updated_config)
+            .await
+            .map_err(|e| format!("清除 {app_type_str} enabled 状态失败: {e}"))?;
+        let _ = self.db.clear_provider_health_for_app(app_type_str).await;
+
+        let any_enabled = self
+            .db
+            .is_live_takeover_active()
+            .await
+            .map_err(|e| format!("检查接管状态失败: {e}"))?;
+        if !any_enabled {
+            let _ = self.db.set_live_takeover_active(false).await;
+            if self.is_running().await {
+                let _ = self.stop().await;
+            }
+        }
+        Ok(())
     }
 
     /// 为指定应用开启/关闭 Live 接管
@@ -1152,6 +1250,9 @@ impl ProxyService {
         let app = AppType::from_str(app_type).map_err(|e| format!("无效的应用类型: {e}"))?;
         if !app.supports_local_proxy() {
             return Err(format!("{} 不支持本地路由", app.as_str()));
+        }
+        if matches!(app, AppType::Pi) {
+            return self.set_pi_takeover(enabled).await;
         }
         let app_type_str = app.as_str();
         let _guard = self.switch_locks.lock_for_app(app_type_str).await;
@@ -2118,6 +2219,9 @@ impl ProxyService {
                 self.write_grok_live(&live_config)?;
                 log::info!("Grok Build Live 配置已接管，代理地址: {proxy_grok_base_url}");
             }
+            AppType::Pi => {
+                self.project_pi_live().await?;
+            }
             _ => return Err("该应用不支持代理功能".to_string()),
         }
 
@@ -2184,6 +2288,9 @@ impl ProxyService {
                         );
                     }
                 }
+            }
+            AppType::Pi => {
+                let _ = self.project_pi_live().await;
             }
             _ => {}
         }
@@ -2254,9 +2361,25 @@ impl ProxyService {
                     log::info!("Grok Build Live 配置已恢复");
                 }
             }
+            AppType::Pi => {
+                crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+                log::info!("Pi Live models.json 已恢复为上游 URL");
+            }
             _ => {}
         }
 
+        Ok(())
+    }
+
+    async fn project_pi_live(&self) -> Result<(), String> {
+        let port = self
+            .get_status()
+            .await
+            .map(|status| status.port)
+            .unwrap_or(0);
+        crate::services::pi_proxy::project_through_running_proxy(&self.db, port)
+            .map_err(|error| error.to_string())?;
+        log::info!("Pi Live models.json 已接管，请求将经本地代理 /pi/<id> 转发");
         Ok(())
     }
 
@@ -2269,6 +2392,7 @@ impl ProxyService {
             AppType::Codex,
             AppType::Gemini,
             AppType::GrokBuild,
+            AppType::Pi,
         ] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
@@ -2298,6 +2422,12 @@ impl ProxyService {
         &self,
         app_type: &AppType,
     ) -> Result<(), String> {
+        if matches!(app_type, AppType::Pi) {
+            crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+            log::info!("Pi Live models.json 已恢复为上游 URL");
+            return Ok(());
+        }
+
         let app_type_str = app_type.as_str();
 
         // 1) 优先从 Live 备份恢复（这是"原始 Live"的唯一可靠来源）
@@ -2381,6 +2511,7 @@ impl ProxyService {
                 Ok(config) => Self::is_grok_live_taken_over(&config),
                 Err(_) => false,
             },
+            AppType::Pi => crate::services::pi_proxy::live_models_are_projected(),
             _ => false,
         }
     }
@@ -2541,6 +2672,12 @@ impl ProxyService {
                             })
                         });
                 Ok(Self::is_grok_live_taken_over(&config) && base_url_matches)
+            }
+            AppType::Pi => {
+                let status = self.get_status().await.unwrap_or_default();
+                Ok(crate::services::pi_proxy::live_models_match_origin_port(
+                    status.port,
+                ))
             }
             _ => Ok(false),
         }
@@ -2708,7 +2845,7 @@ impl ProxyService {
             }
         }
 
-        false
+        crate::services::pi_proxy::live_models_are_projected()
     }
 
     fn is_claude_live_taken_over(config: &Value) -> bool {
@@ -3412,6 +3549,9 @@ impl ProxyService {
         if !app.supports_local_proxy() {
             return Err(format!("{} 不支持本地路由", app.as_str()));
         }
+        if matches!(app, AppType::Pi) {
+            return Err("Pi 不支持故障转移热切换".to_string());
+        }
         let outcome = self.hot_switch_provider(app_type, provider_id).await?;
 
         if outcome.logical_target_changed {
@@ -4014,6 +4154,7 @@ impl ProxyService {
                 AppType::Codex,
                 AppType::Gemini,
                 AppType::GrokBuild,
+                AppType::Pi,
             ] {
                 updated_any |= self
                     .reproject_takeover_live_config_if_enabled(&app_type)
@@ -4161,7 +4302,11 @@ mod tests {
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db);
 
-        assert!(service.set_takeover_for_app("pi", true).await.is_err());
+        assert!(service
+            .set_takeover_for_app("opencode", true)
+            .await
+            .is_err());
+        assert!(service.set_takeover_for_app("hermes", true).await.is_err());
         assert!(!service.is_running().await);
         assert!(service.switch_proxy_target("pi", "missing").await.is_err());
     }

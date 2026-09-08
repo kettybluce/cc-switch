@@ -23,7 +23,7 @@ export type PiApiFormat =
   | "google-vertex"
   | "pi-messages";
 
-/** `api` values Option B can rewrite onto `/pi/<id>…`. */
+/** `api` values Pi takeover can rewrite onto `/pi/<id>…`. */
 export const PI_PROXY_ROUTABLE_APIS = [
   "openai-completions",
   "openai-chat",

@@ -25,6 +25,8 @@
 
 Pi 可能装在 CC Switch 所在的机器上，也可能装在 WSL2 发行版里。两者是各自独立的安装，拥有各自的 `models.json` 和会话目录，因此运行位置是设备级设置，不做合并。缺省即本机运行时。
 
+`piConfigDir` 是 Pi **主目录**（默认 `~/.pi`，与 `~/.claude` 同形）。Pi 实际读取的文件在下一层：`{piConfigDir}/agent/models.json`、`agent/settings.json`、`agent/sessions/`。`PI_CODING_AGENT_DIR` 指向的是 agent 目录本身。若顶层 `{piConfigDir}/models.json` 存在，写入时与 agent 文件保持同步，不得分叉。
+
 WSL 运行时通过 `wsl.exe` 访问，不走 `\\wsl.localhost`：UNC 访问 WSL9p 共享很慢，且发行版停止时直接失败。脚本是代码里的常量，发行版名、路径和会话 ID 一律作为位置参数传入。
 
 会话先按 `size`/`mtime` 清单增量镜像到本地缓存，再交给既有的本机扫描、解析和用量导入流程。缓存只是传输细节，不构成第二套会话格式；恢复和删除作用于发行版内的原始会话，而不是镜像副本。
@@ -46,13 +48,15 @@ Pi 在全局设置中保存的当前供应商和模型不进入供应商列表�
 
 ### 代理
 
-开启 CC Switch **本地代理**后（与 Claude / Codex 同一开关），已管理供应商的请求会自动投影到本地代理：
+Pi 与 Claude / Codex 走同一条产品路径：**接管 + 本地代理**。在「设置 → 代理」中打开 Pi 接管后（会按需启动本地代理），已管理供应商的请求经本地代理转发：
 
 ```
 Pi → CC Switch 本地代理 → 供应商 API
 ```
 
-做法是改写运行中的 `models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI / Azure Responses 风格再加 `/v1`，Google 若上游带 `/v1beta` 或 `/v1` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。没有单独的 Pi 代理开关；投影跟随本地代理的开启与停止。
+做法是改写运行中的 `~/.pi/agent/models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI / Azure Responses 风格再加 `/v1`，Google 若上游带 `/v1beta` 或 `/v1` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭 Pi 接管或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。
+
+这就是 Pi 的接管实现（additive 应用不能整文件备份 `models.json`）。以前的 Option B「本地代理一开就自动改写 baseUrl、没有 Pi 接管开关」已降级：仅启动本地代理、不打开 Pi 接管时，不再改写 Pi。`flags.wsl_proxy` 仍可作为高级退出。
 
 `api` 可写在供应商级，也可只写在模型级（Pi 0.85 起允许）。字段决定走哪条已有路由：`anthropic-messages` → `/v1/messages`，`openai-completions` → `/v1/chat/completions`，`openai-responses` 与 `azure-openai-responses` → `/v1/responses`，`google-generative-ai` → `/v1beta/*` 或 `/v1/*`。同一供应商下模型 `api` 不一致时，只给协议会撞路径后缀的模型写入各自的投影 `baseUrl`。`bedrock-converse-stream`、`pi-messages`、`google-vertex`、`openai-codex-responses`、`mistral-conversations` 等本地代理没有对应处理器的协议不会改写，Pi 仍直连上游。
 
@@ -72,7 +76,7 @@ CC Switch 仍不为 Pi 做故障转移队列或网关状态机；请求由 Pi �
 
 全局会话页只枚举绝对 `sessionDir`、`~` 路径或 Pi 默认目录。相对 `sessionDir` 依赖启动 Pi 时的项目工作目录，CC Switch 没有可靠上下文，因此明确显示“需要项目上下文”，不会猜测目录。
 
-会话解析只消费 UI 所需字段。未知条目被忽略；删除前会验证文件仍在已解析的 Pi 会话根目录中，并核对会话 ID。用量导入读取助手消息、toolResult、compaction 与 branch_summary 上的 `usage`；Pi 0.85 起把 `cacheWrite1h` 并入缓存写入，仅有 `reasoning`、没有 `output` 的回合也会计入完成量。
+会话解析只消费 UI 所需字段。未知条目被忽略；删除前会验证文件仍在已解析的 Pi 会话根目录中，并核对会话 ID。会话文件在 `agent/sessions/--<cwd-encoded>--/` 下：cwd 组目录里的 `*.jsonl` 会话文件，以及同名会话目录的 `tasks/*.jsonl`。用量导入读取助手消息、toolResult、compaction 与 branch_summary 上的 `message.usage` 令牌；**不信任** JSONL 里的 `cost.total`（实际几乎总是 0），费用按 `models.json` 中模型的单价 × 令牌计算，缺失时再回退数据库定价。Pi 0.85 起把 `cacheWrite1h` 并入缓存写入，仅有 `reasoning`、没有 `output` 的回合也会计入完成量。
 
 ## 明确不做
 

@@ -421,7 +421,20 @@ impl AppType {
         )
     }
 
+    /// Apps whose live config can be rewritten onto the local proxy
+    /// (Claude/Codex-style takeover). Pi is included: its takeover
+    /// implementation projects `models.json` `baseUrl`s through `/pi/<id>`.
     pub fn supports_local_proxy(&self) -> bool {
+        matches!(
+            self,
+            AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild | AppType::Pi
+        )
+    }
+
+    /// Failover queue + circuit-breaker data plane. Pi stays out: traffic is
+    /// already addressed per provider via `/pi/<id>`, so a Claude-style
+    /// failover queue would fight additive membership.
+    pub fn supports_auto_failover(&self) -> bool {
         matches!(
             self,
             AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild

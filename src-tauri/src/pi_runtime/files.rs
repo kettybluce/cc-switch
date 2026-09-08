@@ -67,6 +67,28 @@ if [ "$verify" != "$payload" ]; then printf 'verify-mismatch\n' >&2; exit 1; fi
 printf 'ok\n'
 "#;
 
+/// `$1` target, `$2` digest of the incoming payload. No revision check: the
+/// top-level `~/.pi/models.json` mirror is overwritten to match the agent file.
+const OVERWRITE_SCRIPT: &str = r#"
+set -u
+target="$1"; payload="$2"
+dir=$(dirname -- "$target")
+mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
+chmod 700 -- "$dir" 2>/dev/null || true
+umask 077
+tmp=$(mktemp -- "$dir/.cc-switch-XXXXXX") || { printf 'mktemp-failed\n' >&2; exit 1; }
+trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
+cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }
+chmod 600 -- "$tmp"
+written=$(sha256sum < "$tmp" | cut -d' ' -f1)
+if [ "$written" != "$payload" ]; then printf 'payload-mismatch\n' >&2; exit 1; fi
+mv -f -- "$tmp" "$target" || { printf 'replace-failed\n' >&2; exit 1; }
+trap - EXIT HUP INT TERM
+verify=$(sha256sum < "$target" | cut -d' ' -f1)
+if [ "$verify" != "$payload" ]; then printf 'verify-mismatch\n' >&2; exit 1; fi
+printf 'ok\n'
+"#;
+
 /// Pi's native configuration files that CC Switch reads or writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PiFile {
@@ -122,7 +144,7 @@ pub fn revision(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Resolve where `file` lives on the active runtime.
+/// Resolve where `file` lives on the active runtime (canonical agent layer).
 pub fn locate(file: PiFile) -> PiResult<PiFileLocation> {
     locate_on(&super::target(), file)
 }
@@ -136,26 +158,61 @@ pub fn locate_on(target: &PiRuntimeTarget, file: PiFile) -> PiResult<PiFileLocat
         )),
         PiRuntimeTarget::Wsl {
             distro, agent_dir, ..
+        } => locate_wsl_under(distro, agent_dir, file.file_name()),
+    }
+}
+
+/// Top-level `{piHome}/models.json` (or settings.json) mirror, if it is a
+/// distinct path from the canonical agent file.
+pub fn locate_top_level(file: PiFile) -> PiResult<Option<PiFileLocation>> {
+    locate_top_level_on(&super::target(), file)
+}
+
+fn locate_top_level_on(target: &PiRuntimeTarget, file: PiFile) -> PiResult<Option<PiFileLocation>> {
+    match target {
+        PiRuntimeTarget::Local => {
+            let Some(path) = crate::pi_config::get_pi_top_level_path(file.file_name())
+                .map_err(|error| PiRuntimeError::config_not_found(error.to_string()))?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(PiFileLocation::Local(path)))
+        }
+        PiRuntimeTarget::Wsl {
+            distro, agent_dir, ..
         } => {
-            let path = format!("{agent_dir}/{}", file.file_name());
-            if !wsl::is_valid_linux_path(&path) {
-                return Err(PiRuntimeError::invalid_input(format!(
-                    "unusable Pi {} path in WSL '{distro}'",
-                    file.file_name()
-                )));
-            }
-            Ok(PiFileLocation::Wsl {
-                distro: distro.clone(),
-                path,
-            })
+            let Some(home) = agent_dir
+                .strip_suffix("/agent")
+                .filter(|home| !home.is_empty())
+            else {
+                return Ok(None);
+            };
+            Ok(Some(locate_wsl_under(distro, home, file.file_name())?))
         }
     }
 }
 
+fn locate_wsl_under(distro: &str, dir: &str, file_name: &str) -> PiResult<PiFileLocation> {
+    let path = format!("{dir}/{file_name}");
+    if !wsl::is_valid_linux_path(&path) {
+        return Err(PiRuntimeError::invalid_input(format!(
+            "unusable Pi {file_name} path in WSL '{distro}'"
+        )));
+    }
+    Ok(PiFileLocation::Wsl {
+        distro: distro.to_string(),
+        path,
+    })
+}
+
 /// Read `file` from the active runtime, rejecting anything over `max_bytes`.
 pub fn read(file: PiFile, max_bytes: u64) -> PiResult<PiFileRead> {
-    let location = locate(file)?;
-    match &location {
+    heal_agent_from_top_level(file, max_bytes);
+    read_at(&locate(file)?, file, max_bytes)
+}
+
+fn read_at(location: &PiFileLocation, file: PiFile, max_bytes: u64) -> PiResult<PiFileRead> {
+    match location {
         PiFileLocation::Local(path) => read_local(file, path, max_bytes, location.clone()),
         PiFileLocation::Wsl { distro, path } => {
             read_wsl(file, distro, path, max_bytes, location.clone())
@@ -168,10 +225,124 @@ pub fn read(file: PiFile, max_bytes: u64) -> PiResult<PiFileRead> {
 pub fn write(file: PiFile, bytes: &[u8], expected_revision: &str) -> PiResult<()> {
     let location = locate(file)?;
     match &location {
+        PiFileLocation::Local(path) => write_local(file, path, bytes, expected_revision)?,
+        PiFileLocation::Wsl { distro, path } => {
+            write_wsl(file, distro, path, bytes, expected_revision)?
+        }
+    }
+    sync_top_level_mirror(file, bytes);
+    Ok(())
+}
+
+/// Best-effort copy of the canonical agent file to `{piHome}/models.json`
+/// (or settings.json). A mirror miss must not fail the agent write Pi reads.
+fn sync_top_level_mirror(file: PiFile, bytes: &[u8]) {
+    let Ok(Some(location)) = locate_top_level(file) else {
+        return;
+    };
+    if let Err(error) = overwrite_at(&location, file, bytes) {
+        log::warn!(
+            "[PiConfig] could not sync top-level {} mirror ({}): {error}",
+            file.file_name(),
+            location.display()
+        );
+    }
+}
+
+fn overwrite_at(location: &PiFileLocation, file: PiFile, bytes: &[u8]) -> PiResult<()> {
+    match location {
+        PiFileLocation::Local(path) => {
+            ensure_private_parent(path)?;
+            crate::config::atomic_write_private(path, bytes)
+                .map_err(|error| PiRuntimeError::command_failed(error.to_string()))?;
+            Ok(())
+        }
+        PiFileLocation::Wsl { distro, path } => overwrite_wsl(file, distro, path, bytes),
+    }
+}
+
+/// If CC Switch previously wrote only `~/.pi/models.json`, copy that live
+/// content into the agent file Pi actually reads. After the copy, both files
+/// match. Local runtimes use mtime so a stale agent file loses to a newer
+/// top-level write; WSL prefers the agent file (writes already targeted it).
+fn heal_agent_from_top_level(file: PiFile, max_bytes: u64) {
+    if !matches!(file, PiFile::Models | PiFile::Settings) {
+        return;
+    }
+    let Ok(agent_loc) = locate(file) else {
+        return;
+    };
+    let Ok(Some(top_loc)) = locate_top_level(file) else {
+        return;
+    };
+    if top_loc == agent_loc {
+        return;
+    }
+    let Ok(agent) = read_at(&agent_loc, file, max_bytes) else {
+        return;
+    };
+    let Ok(top) = read_at(&top_loc, file, max_bytes) else {
+        return;
+    };
+    match (&agent.bytes, &top.bytes) {
+        (None, None) => {}
+        (Some(bytes), None) => {
+            let _ = overwrite_at(&top_loc, file, bytes);
+        }
+        (None, Some(bytes)) => {
+            if let Err(error) = write_at(&agent_loc, file, bytes, MISSING_REVISION) {
+                log::warn!(
+                    "[PiConfig] could not restore {} from top-level mirror: {error}",
+                    file.file_name()
+                );
+            }
+        }
+        (Some(agent_bytes), Some(top_bytes)) if agent_bytes == top_bytes => {}
+        (Some(agent_bytes), Some(top_bytes)) => {
+            if top_is_newer(&top_loc, &agent_loc) {
+                if let Err(error) = write_at(&agent_loc, file, top_bytes, &agent.revision) {
+                    log::warn!(
+                        "[PiConfig] could not heal {} from newer top-level file: {error}",
+                        file.file_name()
+                    );
+                }
+            } else {
+                let _ = overwrite_at(&top_loc, file, agent_bytes);
+            }
+        }
+    }
+}
+
+fn write_at(
+    location: &PiFileLocation,
+    file: PiFile,
+    bytes: &[u8],
+    expected_revision: &str,
+) -> PiResult<()> {
+    match location {
         PiFileLocation::Local(path) => write_local(file, path, bytes, expected_revision),
         PiFileLocation::Wsl { distro, path } => {
             write_wsl(file, distro, path, bytes, expected_revision)
         }
+    }
+}
+
+fn top_is_newer(top: &PiFileLocation, agent: &PiFileLocation) -> bool {
+    match (top, agent) {
+        (PiFileLocation::Local(top_path), PiFileLocation::Local(agent_path)) => {
+            let top_mtime = fs::metadata(top_path).and_then(|meta| meta.modified()).ok();
+            let agent_mtime = fs::metadata(agent_path)
+                .and_then(|meta| meta.modified())
+                .ok();
+            match (top_mtime, agent_mtime) {
+                (Some(top), Some(agent)) => top > agent,
+                (Some(_), None) => true,
+                _ => false,
+            }
+        }
+        // WSL writes already targeted the agent path; do not clobber it from
+        // a top-level file we cannot mtime-compare cheaply.
+        _ => false,
     }
 }
 
@@ -375,6 +546,32 @@ fn write_wsl(
         ))),
         other => Err(PiRuntimeError::command_failed(format!(
             "writing Pi {} to WSL '{distro}' returned an unexpected status: {}",
+            file.file_name(),
+            other.unwrap_or("no output")
+        ))),
+    }
+}
+
+fn overwrite_wsl(file: PiFile, distro: &str, path: &str, bytes: &[u8]) -> PiResult<()> {
+    let payload_revision = revision(bytes);
+    let output = wsl::run(
+        &WslRequest::guarded(distro, OVERWRITE_SCRIPT)
+            .arg(path)
+            .arg(&payload_revision)
+            .stdin(bytes.to_vec())
+            .timeout(wsl::DEFAULT_TIMEOUT),
+    )?;
+    if !output.succeeded() {
+        let detail = wsl::first_line(&output.stderr).unwrap_or("no stderr output");
+        return Err(PiRuntimeError::command_failed(format!(
+            "mirroring Pi {} in WSL '{distro}' failed: {detail}",
+            file.file_name()
+        )));
+    }
+    match wsl::first_line(&output.payload_lossy()) {
+        Some("ok") => Ok(()),
+        other => Err(PiRuntimeError::command_failed(format!(
+            "mirroring Pi {} in WSL '{distro}' returned an unexpected status: {}",
             file.file_name(),
             other.unwrap_or("no output")
         ))),
@@ -604,5 +801,22 @@ mod tests {
             error.code,
             crate::pi_runtime::error::PiRuntimeErrorCode::PiConfigConflict
         );
+    }
+
+    #[test]
+    #[serial]
+    fn local_writes_sync_the_top_level_models_mirror() {
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let _target = TestTarget::install(PiRuntimeTarget::Local);
+        let document = b"{\"providers\":{\"openai\":{}}}\n";
+        write(PiFile::Models, document, MISSING_REVISION).expect("write models");
+
+        let agent = crate::pi_config::get_pi_models_path().expect("agent path");
+        let top = crate::pi_config::get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("mirror");
+        assert_eq!(fs::read(&agent).expect("agent"), document);
+        assert_eq!(fs::read(&top).expect("top-level"), document);
+        assert_ne!(agent, top);
     }
 }
