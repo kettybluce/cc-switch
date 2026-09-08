@@ -647,8 +647,8 @@ mod tests {
             "GNU -printf and portable find must both use SESSION_JSONL_MAXDEPTH"
         );
         assert!(
-            !MANIFEST_SCRIPT.contains("2>/dev/null"),
-            "manifest listing must not swallow find stderr into fetched=0"
+            !MANIFEST_SCRIPT.contains("-printf '%s\\t%T@\\t%P\\n' 2>/dev/null"),
+            "the GNU listing must not swallow -printf stderr into fetched=0"
         );
     }
 
@@ -885,7 +885,7 @@ mod tests {
             stubs.path(),
             "find",
             &format!(
-                "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    -printf)\n      echo 'find: unknown predicate `-printf'\\'' >&2\n      exit 1\n      ;;\n  esac\ndone\nexec {real_find} \"$@\"\n"
+                "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"-printf\" ]; then\n    echo 'find: unknown predicate -printf' >&2\n    exit 1\n  fi\ndone\nexec {real_find} \"$@\"\n"
             ),
         );
 

@@ -809,9 +809,15 @@ fn matches_session_layout(root: &Path, source: &Path, layout: SessionLayout) -> 
 
 fn is_pi_task_session(relative: &Path) -> bool {
     let components: Vec<_> = relative.components().collect();
-    components.len() == 4
+    let depth = components.len();
+    depth >= 4
+        && depth <= crate::pi_runtime::SESSION_JSONL_MAXDEPTH as usize
         && components[2].as_os_str() == "tasks"
         && relative.extension().and_then(|value| value.to_str()) == Some("jsonl")
+        && components.iter().all(|component| {
+            let name = component.as_os_str();
+            name != "." && name != ".."
+        })
 }
 
 fn validate_file_size(path: &Path) -> Result<(), String> {
@@ -865,22 +871,45 @@ fn collect_jsonl_files(
                     if project_file_type.is_file() {
                         push_jsonl_file(&project_entry, output, enforce_size_limit);
                     } else if project_file_type.is_dir() {
-                        let tasks = project_entry.path().join("tasks");
-                        let Ok(task_entries) = fs::read_dir(&tasks) else {
-                            continue;
-                        };
-                        for task_entry in task_entries.flatten() {
-                            if task_entry
-                                .file_type()
-                                .is_ok_and(|file_type| file_type.is_file())
-                            {
-                                push_jsonl_file(&task_entry, output, enforce_size_limit);
-                            }
-                        }
+                        collect_task_jsonl(
+                            &project_entry.path().join("tasks"),
+                            output,
+                            enforce_size_limit,
+                            3,
+                        );
                     }
                 }
             }
             SessionLayout::Flat | SessionLayout::ProjectDirectories => {}
+        }
+    }
+}
+
+fn collect_task_jsonl(
+    dir: &Path,
+    output: &mut Vec<PathBuf>,
+    enforce_size_limit: bool,
+    dir_depth: usize,
+) {
+    let max_depth = crate::pi_runtime::SESSION_JSONL_MAXDEPTH as usize;
+    if dir_depth >= max_depth {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_depth = dir_depth + 1;
+        if file_depth > max_depth {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() {
+            push_jsonl_file(&entry, output, enforce_size_limit);
+        } else if file_type.is_dir() {
+            collect_task_jsonl(&entry.path(), output, enforce_size_limit, file_depth);
         }
     }
 }
@@ -1409,8 +1438,14 @@ mod tests {
             .join("2024-01-01T00-00-00_abc")
             .join("tasks")
             .join("task-1.jsonl");
+        let deep_file = cwd_group
+            .join("2024-01-01T00-00-00_abc")
+            .join("tasks")
+            .join("group")
+            .join("deep-task.jsonl");
         write_session_header(&session_file, "parent-session");
         write_session_header(&task_file, "task-session");
+        write_session_header(&deep_file, "deep-task-session");
 
         let sessions = scan_sessions_in_root(&root, SessionLayout::ProjectDirectories);
         let mut ids: Vec<_> = sessions
@@ -1418,7 +1453,10 @@ mod tests {
             .map(|session| session.session_id.as_str())
             .collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec!["parent-session", "task-session"]);
+        assert_eq!(
+            ids,
+            vec!["deep-task-session", "parent-session", "task-session"]
+        );
     }
 
     #[test]
