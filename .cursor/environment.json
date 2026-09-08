@@ -1,0 +1,4 @@
+{
+  "name": "CC Switch",
+  "install": "bash .cursor/install.sh"
+}
