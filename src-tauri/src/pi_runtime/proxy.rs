@@ -281,6 +281,9 @@ pub struct PiProxyPlan {
     /// `http://host:port` used as the origin of rewritten `baseUrl`s.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Local proxy listen address (e.g. `127.0.0.1` or `0.0.0.0`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen_address: Option<String>,
     /// Unused: Option B does not inject process-level proxy env vars.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_proxy: Option<String>,
@@ -311,6 +314,7 @@ pub fn plan(
         projected,
         gateway,
         origin,
+        listen_address: None,
         forward_proxy: None,
         forward_proxy_health: None,
         environment: BTreeMap::new(),

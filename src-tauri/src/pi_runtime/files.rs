@@ -102,7 +102,7 @@ impl PiFileLocation {
     pub fn display(&self) -> String {
         match self {
             Self::Local(path) => path.display().to_string(),
-            Self::Wsl { distro, path } => format!("\\\\wsl\\{distro}{path}"),
+            Self::Wsl { distro, path } => format!("wsl:{distro}:{path}"),
         }
     }
 }
@@ -566,6 +566,10 @@ mod tests {
         let location = locate(PiFile::Models).expect("locate models");
         assert!(matches!(location, PiFileLocation::Wsl { .. }));
         assert!(location.display().contains("Ubuntu-22.04"));
+        assert!(
+            !location.display().contains(r"\\wsl"),
+            "error text must not suggest a pasteable UNC path"
+        );
     }
 
     #[test]

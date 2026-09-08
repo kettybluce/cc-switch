@@ -837,7 +837,7 @@
     "hermesConfigDir": "Hermes 設定ディレクトリ",
     "hermesConfigDirDescription": "Hermes の設定ディレクトリ（config.yaml）を上書きします。",
     "piConfigDir": "Pi 設定ディレクトリ",
-    "piConfigDirDescription": "Pi の設定ディレクトリ（models.json、指示ファイル、プロンプト、Skills、セッション）を上書きします。",
+    "piConfigDirDescription": "ローカルの Pi Agent ディレクトリ（models.json、指示ファイル、プロンプト、Skills、セッション）を上書きします。WSL 内の Pi は「設定 → Pi 実行位置」を使い、\\\\wsl.localhost パスは指定しないでください。",
     "browsePlaceholderClaude": "例: /home/<your-username>/.claude",
     "browsePlaceholderCodex": "例: /home/<your-username>/.codex",
     "browsePlaceholderGemini": "例: /home/<your-username>/.gemini",

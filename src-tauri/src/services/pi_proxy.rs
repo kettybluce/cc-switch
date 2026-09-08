@@ -8,9 +8,10 @@
 use crate::database::Database;
 use crate::error::AppError;
 use crate::pi_runtime::rewrite::{
-    live_provider_node, restore_provider_base_urls, strip_proxy_base_urls,
+    config_uses_proxy_base_url, live_provider_node, restore_provider_base_urls,
+    strip_proxy_base_urls,
 };
-use crate::pi_runtime::{self, PiRuntimeTarget};
+use crate::pi_runtime::{self, PiRuntimeKind, PiRuntimeTarget};
 use crate::provider::Provider;
 use crate::store::AppState;
 use serde_json::Value;
@@ -41,6 +42,31 @@ pub fn proxy_projection_enabled() -> bool {
     crate::pi_runtime::settings().flags.wsl_proxy
 }
 
+/// Restore the previous runtime's live `models.json` when the user switches
+/// location, so a Windows install is not left pointing at a WSL gateway
+/// (and vice versa).
+pub fn runtime_switch_requires_restore(
+    previous: &PiRuntimeTarget,
+    next_kind: PiRuntimeKind,
+    next_distro: Option<&str>,
+) -> bool {
+    match previous {
+        PiRuntimeTarget::Local => next_kind != PiRuntimeKind::Local,
+        PiRuntimeTarget::Wsl { distro, .. } => {
+            next_kind != PiRuntimeKind::Wsl || next_distro != Some(distro.as_str())
+        }
+    }
+}
+
+/// Whether the active runtime's live `models.json` currently has projected
+/// `/pi/<id>` baseUrls. Used by the runtime panel so "projected" matches
+/// the file Pi actually reads.
+pub fn live_models_are_projected() -> bool {
+    crate::pi_config::read_pi_native_providers()
+        .ok()
+        .is_some_and(|native| native.values().any(config_uses_proxy_base_url))
+}
+
 /// Origin (`http://host:port`) Pi should use to reach the local proxy.
 ///
 /// On the local runtime this is loopback. Inside WSL it is whichever address
@@ -57,15 +83,18 @@ pub fn resolve_origin(
         PiRuntimeTarget::Wsl { distro, .. } => {
             let health = crate::pi_runtime::proxy::resolve_gateway(distro, local_proxy_port)
                 .map_err(|error| AppError::Message(error.to_string()))?;
-            if let Some(endpoint) = health.endpoint.filter(|url| !url.is_empty()) {
-                return Ok(Some(endpoint.trim_end_matches('/').to_string()));
+            if health.reachable {
+                if let Some(endpoint) = health.endpoint.filter(|url| !url.is_empty()) {
+                    return Ok(Some(endpoint.trim_end_matches('/').to_string()));
+                }
             }
-            // Resolution failed; still emit loopback so mirrored networking
-            // setups keep working, and let Test Proxy report the miss.
+            // Do not write 127.0.0.1 into WSL models.json: under NAT that
+            // address is the distribution itself, so Pi would miss the proxy.
+            // Test Proxy reports the miss; the live file stays on upstream.
             log::warn!(
-                "[PiProxy] no WSL route to port {local_proxy_port} from '{distro}'; falling back to 127.0.0.1"
+                "[PiProxy] no reachable WSL route to port {local_proxy_port} from '{distro}'; leaving upstream URLs in place"
             );
-            Ok(Some(format!("http://127.0.0.1:{local_proxy_port}")))
+            Ok(None)
         }
     }
 }
@@ -413,6 +442,40 @@ mod tests {
         let settings = serde_json::from_str::<crate::pi_runtime::PiRuntimeSettings>("{}")
             .expect("deserialize empty Pi runtime settings");
         assert!(settings.flags.wsl_proxy);
+    }
+
+    #[test]
+    fn switching_runtime_restores_the_previous_models_file() {
+        assert!(!runtime_switch_requires_restore(
+            &PiRuntimeTarget::Local,
+            PiRuntimeKind::Local,
+            None
+        ));
+        assert!(runtime_switch_requires_restore(
+            &PiRuntimeTarget::Local,
+            PiRuntimeKind::Wsl,
+            Some("Ubuntu")
+        ));
+        let ubuntu = PiRuntimeTarget::Wsl {
+            distro: "Ubuntu".into(),
+            home: "/home/u".into(),
+            agent_dir: "/home/u/.pi/agent".into(),
+        };
+        assert!(runtime_switch_requires_restore(
+            &ubuntu,
+            PiRuntimeKind::Local,
+            None
+        ));
+        assert!(runtime_switch_requires_restore(
+            &ubuntu,
+            PiRuntimeKind::Wsl,
+            Some("Debian")
+        ));
+        assert!(!runtime_switch_requires_restore(
+            &ubuntu,
+            PiRuntimeKind::Wsl,
+            Some("Ubuntu")
+        ));
     }
 
     #[tokio::test]

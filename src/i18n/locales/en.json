@@ -837,7 +837,7 @@
     "hermesConfigDir": "Hermes Configuration Directory",
     "hermesConfigDirDescription": "Override Hermes configuration directory (config.yaml).",
     "piConfigDir": "Pi Configuration Directory",
-    "piConfigDirDescription": "Override the Pi configuration directory (models.json, instruction files, prompts, skills, and sessions).",
+    "piConfigDirDescription": "Override the local Pi agent directory (models.json, instruction files, prompts, skills, and sessions). For Pi inside WSL, use Settings → Pi runtime — do not point this at \\\\wsl.localhost.",
     "browsePlaceholderClaude": "e.g., /home/<your-username>/.claude",
     "browsePlaceholderCodex": "e.g., /home/<your-username>/.codex",
     "browsePlaceholderGemini": "e.g., /home/<your-username>/.gemini",

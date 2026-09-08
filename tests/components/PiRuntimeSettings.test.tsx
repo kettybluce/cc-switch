@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PiRuntimeSettings } from "@/components/settings/PiRuntimeSettings";
-import type { PiRuntimeStatus, WslPiProbe } from "@/lib/api/pi";
+import type { PiProxyPlan, PiRuntimeStatus, WslPiProbe } from "@/lib/api/pi";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -21,6 +21,7 @@ const refetchMock = vi.fn();
 
 let status: PiRuntimeStatus | undefined;
 let distros: WslPiProbe[] = [];
+let proxyPlan: PiProxyPlan | undefined;
 
 vi.mock("@/lib/query/pi", () => ({
   usePiRuntimeStatus: () => ({
@@ -33,7 +34,7 @@ vi.mock("@/lib/query/pi", () => ({
     data: enabled ? distros : undefined,
     isFetching: false,
   }),
-  usePiProxyPlan: () => ({ data: undefined }),
+  usePiProxyPlan: () => ({ data: proxyPlan }),
   useSetPiRuntime: () => ({ mutate: setRuntimeMock, isPending: false }),
   useSyncPiWslSessions: () => ({ mutate: syncSessionsMock, isPending: false }),
   useTestPiProxy: () => ({ mutate: testProxyMock, isPending: false }),
@@ -86,6 +87,7 @@ describe("PiRuntimeSettings", () => {
     refetchMock.mockReset();
     status = localStatus;
     distros = [probe];
+    proxyPlan = undefined;
   });
 
   it("renders the proxy panel even on a platform that cannot host WSL", () => {
@@ -126,6 +128,23 @@ describe("PiRuntimeSettings", () => {
     expect(
       screen.getByText("settings.piRuntime.natListenHint"),
     ).toBeInTheDocument();
+  });
+
+  it("hides the WSL NAT listen hint once the proxy already binds 0.0.0.0", () => {
+    status = wslStatus;
+    proxyPlan = {
+      enabled: true,
+      projected: true,
+      gateway: { reachable: true },
+      origin: "http://172.30.208.1:15721",
+      listenAddress: "0.0.0.0",
+      environment: {},
+    };
+    render(<PiRuntimeSettings />);
+
+    expect(
+      screen.queryByText("settings.piRuntime.natListenHint"),
+    ).not.toBeInTheDocument();
   });
 
   it("surfaces a runtime error without hiding the rest of the panel", () => {

@@ -96,6 +96,28 @@ pub fn proxy_base_url(origin: &str, provider_id: &str, kind: PiApiKind, upstream
     format!("{origin}{path}")
 }
 
+/// True when a live provider node currently points at the local proxy.
+pub fn config_uses_proxy_base_url(config: &Value) -> bool {
+    if config
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .is_some_and(is_pi_proxy_base_url)
+    {
+        return true;
+    }
+    config
+        .get("models")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|model| {
+                model
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_pi_proxy_base_url)
+            })
+        })
+}
+
 /// True when `url` is a CC Switch Pi proxy projection, not a real upstream.
 pub fn is_pi_proxy_base_url(url: &str) -> bool {
     let url = url.trim();
@@ -530,6 +552,26 @@ mod tests {
         assert!(!is_pi_proxy_base_url(
             "http://127.0.0.1:15721/claude/v1/messages"
         ));
+    }
+
+    #[test]
+    fn live_nodes_are_detected_from_provider_or_model_proxy_urls() {
+        assert!(config_uses_proxy_base_url(&json!({
+            "baseUrl": "http://172.30.208.1:15721/pi/anthropic",
+            "api": "anthropic-messages"
+        })));
+        assert!(config_uses_proxy_base_url(&json!({
+            "api": "anthropic-messages",
+            "models": [{
+                "id": "gpt",
+                "api": "openai-completions",
+                "baseUrl": "http://127.0.0.1:15721/pi/mixed/v1"
+            }]
+        })));
+        assert!(!config_uses_proxy_base_url(&json!({
+            "baseUrl": "https://api.anthropic.com",
+            "api": "anthropic-messages"
+        })));
     }
 
     #[test]

@@ -214,6 +214,7 @@ export function PiRuntimeSettings() {
         origin={proxyPlan?.origin}
         projected={Boolean(proxyPlan?.projected)}
         proxyRunning={Boolean(proxyPlan?.origin)}
+        listenAddress={proxyPlan?.listenAddress}
         testing={testProxy.isPending}
         onTestProxy={() => testProxy.mutate()}
       />
@@ -288,8 +289,19 @@ interface ProxyPanelProps {
   origin?: string;
   projected: boolean;
   proxyRunning: boolean;
+  listenAddress?: string;
   testing: boolean;
   onTestProxy: () => void;
+}
+
+function isLoopbackListen(address?: string): boolean {
+  const value = (address ?? "127.0.0.1").trim().toLowerCase();
+  return (
+    value === "" ||
+    value === "127.0.0.1" ||
+    value === "localhost" ||
+    value === "::1"
+  );
 }
 
 function ProxyPanel({
@@ -298,6 +310,7 @@ function ProxyPanel({
   origin,
   projected,
   proxyRunning,
+  listenAddress,
   testing,
   onTestProxy,
 }: ProxyPanelProps) {
@@ -340,7 +353,7 @@ function ProxyPanel({
             : (proxyHealth.error ?? t("settings.piRuntime.noRoute"))}
         </p>
       )}
-      {isWsl && (
+      {isWsl && isLoopbackListen(listenAddress) && (
         <p className="text-xs text-muted-foreground">
           {t("settings.piRuntime.natListenHint")}
         </p>

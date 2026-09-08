@@ -72,6 +72,15 @@ pub(crate) async fn set_pi_runtime(
         crate::pi_runtime::detect::probe(&distro).map_err(|error| error.to_string())?;
     }
 
+    let previous = crate::pi_runtime::target();
+    if crate::services::pi_proxy::runtime_switch_requires_restore(
+        &previous,
+        runtime.kind,
+        runtime.distro.as_deref(),
+    ) {
+        crate::services::pi_proxy::restore_after_proxy_stop(state.db.as_ref());
+    }
+
     crate::settings::set_pi_runtime_settings(runtime).map_err(|error| error.to_string())?;
     crate::pi_runtime::sessions::invalidate_sync_throttle();
     crate::services::pi_proxy::apply_for_state(state.inner())
@@ -101,7 +110,18 @@ pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiPr
         .map(|status| status.port)
         .unwrap_or_default();
 
-    crate::pi_runtime::proxy::plan(&target, enabled, port, None).map_err(|error| error.to_string())
+    let mut plan = crate::pi_runtime::proxy::plan(&target, enabled, port, None)
+        .map_err(|error| error.to_string())?;
+    if plan.projected {
+        plan.projected = crate::services::pi_proxy::live_models_are_projected();
+    }
+    if let Ok(config) = state.db.get_proxy_config().await {
+        let listen = config.listen_address.trim();
+        if !listen.is_empty() {
+            plan.listen_address = Some(listen.to_string());
+        }
+    }
+    Ok(plan)
 }
 
 /// Verify that this runtime can reach the CC Switch local proxy (`/health`).

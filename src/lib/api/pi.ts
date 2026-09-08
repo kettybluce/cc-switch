@@ -109,6 +109,8 @@ export interface PiProxyPlan {
   gateway: PiProxyHealth;
   /** `http://host:port` used as the origin of rewritten baseUrls. */
   origin?: string;
+  /** Local proxy listen address (`127.0.0.1` or `0.0.0.0`). */
+  listenAddress?: string;
   /** Unused: Option B does not inject process-level proxy env vars. */
   forwardProxy?: string;
   forwardProxyHealth?: PiProxyHealth;

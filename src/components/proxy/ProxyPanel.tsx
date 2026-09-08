@@ -551,7 +551,7 @@ export function ProxyPanel({
                   <p className="text-xs text-muted-foreground">
                     {t("proxy.settings.fields.listenAddress.description", {
                       defaultValue:
-                        "代理服务器监听的 IP 地址（推荐 127.0.0.1）",
+                        "代理服务器监听的 IP 地址（本机 127.0.0.1；WSL NAT 用 0.0.0.0）",
                     })}
                   </p>
                 </div>
