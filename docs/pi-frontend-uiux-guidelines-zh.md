@@ -120,7 +120,7 @@ CC Switch 不设置、展示或标记 Pi 的当前供应商和模型。
 - Azure OpenAI Responses（与 Responses 共用 `/v1/responses` 投影）
 - Anthropic Messages
 - Google Generative AI
-- Amazon Bedrock（写入 `models.json`，但不改写到本地代理）
+- Amazon Bedrock、OpenAI Codex Responses、Mistral Conversations、Google Vertex、Pi Messages（写入 `models.json`，但不改写到本地代理）
 
 创建时不提供“自定义接口格式”。编辑已有未知格式时，应显示并保留该值，不能因为下拉列表不认识就覆盖。
 

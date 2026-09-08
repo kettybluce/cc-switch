@@ -97,6 +97,9 @@ describe("Pi provider presets", () => {
     expect(isPiProxyRoutableApi("openai-responses")).toBe(true);
     expect(isPiProxyRoutableApi("bedrock-converse-stream")).toBe(false);
     expect(isPiProxyRoutableApi("pi-messages")).toBe(false);
+    expect(isPiProxyRoutableApi("google-vertex")).toBe(false);
+    expect(isPiProxyRoutableApi("openai-codex-responses")).toBe(false);
+    expect(isPiProxyRoutableApi("mistral-conversations")).toBe(false);
   });
 
   it("uses Pi's 272K context value for every GPT-5.6 Sol preset", () => {

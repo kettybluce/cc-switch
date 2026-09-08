@@ -144,7 +144,15 @@ describe("PiProviderForm", () => {
       screen.getByRole("button", { name: "providerPreset.custom" }),
     );
     await user.click(screen.getByRole("combobox", { name: /接口格式/ }));
-    expect(screen.getByText("Azure OpenAI Responses")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Azure OpenAI Responses" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "OpenAI Codex Responses" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Pi Messages" }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: "Amazon Bedrock" }));
     expect(screen.getByText("pi.form.proxyUnsupportedApi")).toBeInTheDocument();
   });

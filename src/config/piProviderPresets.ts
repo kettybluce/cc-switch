@@ -17,7 +17,11 @@ export type PiApiFormat =
   | "azure-openai-responses"
   | "anthropic-messages"
   | "google-generative-ai"
-  | "bedrock-converse-stream";
+  | "bedrock-converse-stream"
+  | "openai-codex-responses"
+  | "mistral-conversations"
+  | "google-vertex"
+  | "pi-messages";
 
 /** `api` values Option B can rewrite onto `/pi/<id>…`. */
 export const PI_PROXY_ROUTABLE_APIS = [
