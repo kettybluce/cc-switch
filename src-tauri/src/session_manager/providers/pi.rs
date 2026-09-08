@@ -831,7 +831,9 @@ fn push_jsonl_file(entry: &fs::DirEntry, output: &mut Vec<PathBuf>, enforce_size
 mod wsl_tests {
     use super::*;
     use crate::pi_runtime::test_support::TestTarget;
-    use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use crate::pi_runtime::wsl::test_support::{
+        gnu_find_emulation_available, LocalBashRunner, RunnerGuard,
+    };
     use serial_test::serial;
     use std::sync::Arc;
 
@@ -847,7 +849,10 @@ mod wsl_tests {
     }
 
     impl WslSessions {
-        fn new() -> Self {
+        fn new() -> Option<Self> {
+            if !gnu_find_emulation_available() {
+                return None;
+            }
             let wsl_home = tempfile::tempdir().expect("tempdir");
             let cc_home = tempfile::tempdir().expect("tempdir");
             let previous_home = std::env::var("CC_SWITCH_TEST_HOME").ok();
@@ -863,14 +868,14 @@ mod wsl_tests {
             let target = TestTarget::wsl("Ubuntu-22.04", &wsl_home.path().to_string_lossy());
             crate::pi_runtime::sessions::invalidate_sync_throttle();
 
-            Self {
+            Some(Self {
                 _wsl_home: wsl_home,
                 _cc_home: cc_home,
                 _runner: runner,
                 _target: target,
                 _previous_home: previous_home,
                 sessions_dir,
-            }
+            })
         }
     }
 
@@ -891,7 +896,9 @@ mod wsl_tests {
     #[test]
     #[serial]
     fn wsl_sessions_appear_in_the_session_list() {
-        let fixture = WslSessions::new();
+        let Some(fixture) = WslSessions::new() else {
+            return;
+        };
         fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
 
         let sessions = scan_sessions();
@@ -909,7 +916,9 @@ mod wsl_tests {
     #[test]
     #[serial]
     fn resuming_a_wsl_session_targets_the_path_inside_the_distribution() {
-        let fixture = WslSessions::new();
+        let Some(fixture) = WslSessions::new() else {
+            return;
+        };
         fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
 
         let sessions = scan_sessions();
@@ -930,7 +939,9 @@ mod wsl_tests {
     #[test]
     #[serial]
     fn messages_load_from_the_mirrored_copy() {
-        let fixture = WslSessions::new();
+        let Some(fixture) = WslSessions::new() else {
+            return;
+        };
         fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
 
         let sessions = scan_sessions();
@@ -949,7 +960,9 @@ mod wsl_tests {
     #[test]
     #[serial]
     fn deleting_a_wsl_session_removes_it_at_the_source() {
-        let fixture = WslSessions::new();
+        let Some(fixture) = WslSessions::new() else {
+            return;
+        };
         let origin = fixture.sessions_dir.join("abc.jsonl");
         fs::write(&origin, SESSION).expect("write WSL session");
 
@@ -969,7 +982,9 @@ mod wsl_tests {
     #[test]
     #[serial]
     fn an_empty_wsl_session_directory_is_not_an_error() {
-        let _fixture = WslSessions::new();
+        let Some(_fixture) = WslSessions::new() else {
+            return;
+        };
 
         assert!(scan_sessions().is_empty());
         assert!(matches!(session_discovery(), PiSessionDiscovery::Available));

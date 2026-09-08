@@ -411,7 +411,9 @@ fn ensure_private_parent(path: &Path) -> PiResult<()> {
 mod tests {
     use super::*;
     use crate::pi_runtime::test_support::TestTarget;
-    use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use crate::pi_runtime::wsl::test_support::{
+        posix_temp_home_available, LocalBashRunner, RunnerGuard,
+    };
     use serial_test::serial;
     use std::sync::Arc;
 
@@ -426,7 +428,10 @@ mod tests {
 
     /// A WSL runtime whose "Linux" filesystem is a temp directory reached
     /// through a real `bash`, so the scripts above are genuinely executed.
-    fn wsl_fixture() -> WslFixture {
+    fn wsl_fixture() -> Option<WslFixture> {
+        if !posix_temp_home_available() {
+            return None;
+        }
         let home = tempfile::tempdir().expect("tempdir");
         let home_path = home.path().to_string_lossy().into_owned();
         let agent_dir = home.path().join(".pi/agent");
@@ -435,18 +440,20 @@ mod tests {
             home.path().to_path_buf(),
         )));
         let target = TestTarget::wsl("Ubuntu-22.04", &home_path);
-        WslFixture {
+        Some(WslFixture {
             _home: home,
             _runner: runner,
             _target: target,
             agent_dir,
-        }
+        })
     }
 
     #[test]
     #[serial]
     fn a_missing_wsl_models_file_reads_as_missing() {
-        let _fixture = wsl_fixture();
+        let Some(_fixture) = wsl_fixture() else {
+            return;
+        };
 
         let read = read(PiFile::Models, LIMIT).expect("read models");
         assert!(read.bytes.is_none());
@@ -456,7 +463,9 @@ mod tests {
     #[test]
     #[serial]
     fn writing_creates_the_agent_directory_and_round_trips_bytes() {
-        let fixture = wsl_fixture();
+        let Some(fixture) = wsl_fixture() else {
+            return;
+        };
         let document = b"{\n  \"providers\": {\n    \"cc-switch\": {}\n  }\n}\n";
 
         write(PiFile::Models, document, MISSING_REVISION).expect("write models");
@@ -470,7 +479,9 @@ mod tests {
     #[test]
     #[serial]
     fn writing_with_a_stale_revision_leaves_the_file_alone() {
-        let fixture = wsl_fixture();
+        let Some(fixture) = wsl_fixture() else {
+            return;
+        };
         let original = b"{\"providers\":{\"external\":{}}}\n";
         write(PiFile::Models, original, MISSING_REVISION).expect("seed models");
 
@@ -494,7 +505,9 @@ mod tests {
     #[test]
     #[serial]
     fn a_failed_write_leaves_no_temporary_files_behind() {
-        let fixture = wsl_fixture();
+        let Some(fixture) = wsl_fixture() else {
+            return;
+        };
         write(PiFile::Models, b"{}\n", MISSING_REVISION).expect("seed models");
 
         let _ = write(PiFile::Models, b"{\"a\":1}\n", "0000")
@@ -516,7 +529,9 @@ mod tests {
     #[test]
     #[serial]
     fn oversized_wsl_files_are_refused_instead_of_streamed() {
-        let fixture = wsl_fixture();
+        let Some(fixture) = wsl_fixture() else {
+            return;
+        };
         fs::create_dir_all(&fixture.agent_dir).expect("create agent dir");
         fs::write(fixture.agent_dir.join("models.json"), vec![b'x'; 4096])
             .expect("write oversized models");
@@ -528,7 +543,9 @@ mod tests {
     #[test]
     #[serial]
     fn utf8_content_survives_the_pipe_intact() {
-        let _fixture = wsl_fixture();
+        let Some(_fixture) = wsl_fixture() else {
+            return;
+        };
         let document = "{\"providers\":{\"示例\":{\"name\":\"日本語 provider\"}}}\n".as_bytes();
 
         write(PiFile::Models, document, MISSING_REVISION).expect("write models");
@@ -540,7 +557,9 @@ mod tests {
     #[test]
     #[serial]
     fn settings_and_models_resolve_to_distinct_files() {
-        let _fixture = wsl_fixture();
+        let Some(_fixture) = wsl_fixture() else {
+            return;
+        };
 
         write(
             PiFile::Settings,
@@ -562,7 +581,9 @@ mod tests {
     #[test]
     #[serial]
     fn wsl_locations_are_described_without_a_unc_path_users_can_paste() {
-        let _fixture = wsl_fixture();
+        let Some(_fixture) = wsl_fixture() else {
+            return;
+        };
         let location = locate(PiFile::Models).expect("locate models");
         assert!(matches!(location, PiFileLocation::Wsl { .. }));
         assert!(location.display().contains("Ubuntu-22.04"));

@@ -203,7 +203,10 @@ fn normalize_version(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use crate::pi_runtime::wsl::test_support::{
+        posix_temp_home_available, LocalBashRunner, RunnerGuard,
+    };
+    use serial_test::serial;
     use std::sync::Arc;
 
     #[test]
@@ -264,7 +267,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn the_probe_script_runs_against_a_real_shell() {
+        if !posix_temp_home_available() {
+            return;
+        }
         let home = tempfile::tempdir().expect("tempdir");
         let agent = home.path().join(".pi/agent/sessions/project-a");
         std::fs::create_dir_all(&agent).expect("create sessions");

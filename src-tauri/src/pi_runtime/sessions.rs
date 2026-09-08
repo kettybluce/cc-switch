@@ -587,7 +587,9 @@ fn store_cache_manifest(cache: &Path, manifest: &CacheManifest) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use crate::pi_runtime::wsl::test_support::{
+        gnu_find_emulation_available, LocalBashRunner, RunnerGuard,
+    };
     use serial_test::serial;
     use std::sync::Arc;
 
@@ -760,6 +762,9 @@ mod tests {
     #[test]
     #[serial]
     fn a_full_refresh_mirrors_wsl_sessions_and_then_goes_incremental() {
+        if !gnu_find_emulation_available() {
+            return;
+        }
         let home = tempfile::tempdir().expect("tempdir");
         let config = tempfile::tempdir().expect("tempdir");
         let _home_guard = TestHome::install(config.path());

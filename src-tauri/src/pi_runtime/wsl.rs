@@ -499,6 +499,37 @@ pub mod test_support {
         }
     }
 
+    /// `bash -c` is on PATH and actually runs.
+    pub fn bash_available() -> bool {
+        Command::new("bash")
+            .args(["-c", "printf ok"])
+            .output()
+            .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"ok"))
+    }
+
+    /// Host temp paths look like Linux paths (`/tmp/...`), so
+    /// [`super::is_valid_linux_path`] accepts a WSL `agent_dir` built from a
+    /// tempfile. False on native Windows (`C:\Users\...`).
+    pub fn posix_temp_home_available() -> bool {
+        bash_available() && super::is_valid_linux_path(&std::env::temp_dir().to_string_lossy())
+    }
+
+    /// Production `MANIFEST_SCRIPT` uses GNU `find -printf`. macOS ships BSD
+    /// find; skip those tests there instead of failing CI.
+    pub fn gnu_find_emulation_available() -> bool {
+        if !posix_temp_home_available() {
+            return false;
+        }
+        Command::new("bash")
+            .args([
+                "-c",
+                "find . -maxdepth 0 -printf '%s\\t%T@\\t%P\\n' >/dev/null",
+            ])
+            .current_dir(std::env::temp_dir())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
     impl WslRunner for LocalBashRunner {
         fn run(&self, request: &WslRequest) -> PiResult<WslExecResult> {
             // Validate exactly like the real runner so tests exercise the same
@@ -557,8 +588,22 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{LocalBashRunner, RunnerGuard};
+    use super::test_support::{
+        bash_available, gnu_find_emulation_available, LocalBashRunner, RunnerGuard,
+    };
     use super::*;
+    use serial_test::serial;
+
+    #[test]
+    fn linux_ci_keeps_the_local_bash_wsl_emulator() {
+        let available = gnu_find_emulation_available();
+        if cfg!(target_os = "linux") {
+            assert!(
+                available,
+                "Linux CI must keep running LocalBashRunner against GNU find"
+            );
+        }
+    }
 
     #[test]
     fn argv_passes_user_values_as_positional_parameters() {
@@ -606,7 +651,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn shell_startup_noise_is_stripped_from_the_payload() {
+        if !bash_available() {
+            return;
+        }
         let runner = tempfile::tempdir().expect("tempdir");
         let _guard = RunnerGuard::install(std::sync::Arc::new(LocalBashRunner::new(
             "Ubuntu-22.04",
@@ -638,7 +687,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn shell_metacharacters_in_arguments_stay_inert() {
+        if !bash_available() {
+            return;
+        }
         let runner = tempfile::tempdir().expect("tempdir");
         let _guard = RunnerGuard::install(std::sync::Arc::new(LocalBashRunner::new(
             "Ubuntu-22.04",
@@ -659,7 +712,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn unknown_distro_reports_the_wsl_diagnostic() {
+        if !bash_available() {
+            return;
+        }
         let runner = tempfile::tempdir().expect("tempdir");
         let _guard = RunnerGuard::install(std::sync::Arc::new(LocalBashRunner::new(
             "Ubuntu-22.04",
@@ -676,7 +733,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn stdin_payloads_reach_the_script() {
+        if !bash_available() {
+            return;
+        }
         let runner = tempfile::tempdir().expect("tempdir");
         let _guard = RunnerGuard::install(std::sync::Arc::new(LocalBashRunner::new(
             "Ubuntu-22.04",
@@ -690,7 +751,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn timeouts_kill_the_child_instead_of_hanging() {
+        if !bash_available() {
+            return;
+        }
         let runner = tempfile::tempdir().expect("tempdir");
         let _guard = RunnerGuard::install(std::sync::Arc::new(LocalBashRunner::new(
             "Ubuntu-22.04",

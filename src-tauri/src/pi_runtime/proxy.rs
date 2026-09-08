@@ -649,7 +649,8 @@ pub fn pi_process_env(endpoint: &ProxyEndpoint) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use crate::pi_runtime::wsl::test_support::{bash_available, LocalBashRunner, RunnerGuard};
+    use serial_test::serial;
     use std::sync::Arc;
 
     #[test]
@@ -805,7 +806,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn host_discovery_runs_against_a_real_shell() {
+        if !bash_available() {
+            return;
+        }
         let home = tempfile::tempdir().expect("tempdir");
         let _guard = RunnerGuard::install(Arc::new(LocalBashRunner::new(
             "Ubuntu-22.04",
