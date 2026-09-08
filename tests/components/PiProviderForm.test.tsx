@@ -129,6 +129,26 @@ describe("PiProviderForm", () => {
     expect(headers).toHaveClass("font-medium");
   });
 
+  it("lists Azure OpenAI Responses and warns that Bedrock is not proxied", async () => {
+    const user = userEvent.setup();
+    render(
+      <PiProviderForm
+        appId="pi"
+        submitLabel="Save azure api"
+        onSubmit={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "providerPreset.custom" }),
+    );
+    await user.click(screen.getByRole("combobox", { name: /接口格式/ }));
+    expect(screen.getByText("Azure OpenAI Responses")).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Amazon Bedrock" }));
+    expect(screen.getByText("pi.form.proxyUnsupportedApi")).toBeInTheDocument();
+  });
+
   it("uses the shared request-header hierarchy while config JSON stays visible", async () => {
     const user = userEvent.setup();
     render(

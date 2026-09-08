@@ -980,6 +980,7 @@
       "nameRequired": "Display name is required",
       "credential": "API Key",
       "credentialRequired": "Enter the API key for this preset",
+      "proxyUnsupportedApi": "This API is not rewritten through the CC Switch local proxy. Pi will call the upstream URL directly (Bedrock, Radius pi-messages, Vertex, Codex OAuth, and similar).",
       "absoluteHttpUrlRequired": "{{label}} must be an absolute HTTP or HTTPS URL",
       "positiveNumberRequired": "{{label}} must be a number greater than 0",
       "models": "Model configuration",

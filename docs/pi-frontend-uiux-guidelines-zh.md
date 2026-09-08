@@ -2,7 +2,7 @@
 
 > 状态：当前 Pi 前端的评审基线
 > 适用范围：供应商、提示词、Skills、Sessions，以及以后考虑接入的 Pi 原生设置
-> 最后更新：2026-08-05
+> 最后更新：2026-09-08
 
 这份文档面向 cc-switch 的设计者、开发者和评审者。它不是功能清单，也不是用户手册。新增 Pi 界面或字段时，应先用本文判断该能力是否该由 cc-switch 提供，再讨论具体组件。
 
@@ -117,9 +117,10 @@ CC Switch 不设置、展示或标记 Pi 的当前供应商和模型。
 
 - OpenAI Chat Completions
 - OpenAI Responses
+- Azure OpenAI Responses（与 Responses 共用 `/v1/responses` 投影）
 - Anthropic Messages
 - Google Generative AI
-- Amazon Bedrock
+- Amazon Bedrock（写入 `models.json`，但不改写到本地代理）
 
 创建时不提供“自定义接口格式”。编辑已有未知格式时，应显示并保留该值，不能因为下拉列表不认识就覆盖。
 

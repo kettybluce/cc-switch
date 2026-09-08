@@ -520,9 +520,17 @@ fn parse_usage_record(
                 .and_then(parse_timestamp_millis)
         });
     let input_tokens = token_count(usage_value, "input");
-    let output_tokens = token_count(usage_value, "output");
+    let mut output_tokens = token_count(usage_value, "output");
     let cache_read_tokens = token_count(usage_value, "cacheRead");
-    let cache_write_tokens = token_count(usage_value, "cacheWrite");
+    let cache_write_tokens = token_count(usage_value, "cacheWrite")
+        .saturating_add(token_count(usage_value, "cacheWrite1h"));
+    let reasoning_tokens = token_count(usage_value, "reasoning");
+    if output_tokens == 0 && reasoning_tokens > 0 {
+        // Pi 0.85 records reasoning separately. When `output` is empty the
+        // dashboard still needs a non-zero completion count so the turn is
+        // not dropped.
+        output_tokens = reasoning_tokens;
+    }
     let costs = parse_costs(usage_value.get("cost"));
     let stop_reason = (kind == "assistant")
         .then(|| message.and_then(|value| nonempty_string(value.get("stopReason"))))
@@ -1066,6 +1074,39 @@ mod tests {
         assert!(providers.iter().any(|provider| {
             provider.provider_id == PROVIDER_PLACEHOLDER && provider.provider_name == "Pi (Session)"
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn imports_pi_085_cache_write_1h_and_reasoning_only_usage() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "pi-085-usage");
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-085","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                r#"{"type":"message","id":"long-cache","parentId":null,"timestamp":"2023-11-14T22:13:21Z","message":{"role":"assistant","content":[{"type":"text","text":"cached"}],"provider":"anthropic","model":"claude","usage":{"input":4,"output":2,"cacheRead":0,"cacheWrite":1,"cacheWrite1h":9,"totalTokens":16,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop"}}"#,
+                r#"{"type":"message","id":"reason-only","parentId":"long-cache","timestamp":"2023-11-14T22:13:22Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."}],"provider":"openai","model":"gpt","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"reasoning":8,"totalTokens":8,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop"}}"#,
+            ],
+        );
+
+        let db = Database::memory()?;
+        let result = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(result.imported, 2);
+        assert!(result.errors.is_empty());
+
+        let conn = lock_conn!(db.conn);
+        let totals: (i64, i64, i64) = conn.query_row(
+            "SELECT SUM(output_tokens), SUM(cache_creation_tokens), COUNT(*)
+             FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(
+            totals,
+            (10, 10, 2),
+            "reasoning-only output plus cacheWrite+cacheWrite1h"
+        );
         Ok(())
     }
 

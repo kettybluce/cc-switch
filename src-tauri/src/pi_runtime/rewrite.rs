@@ -6,8 +6,9 @@
 //! or disabling the local proxy restores the stored upstream URLs.
 //!
 //! Unknown JSON fields are left untouched; only `baseUrl` (provider-level and
-//! per-model) is rewritten.
-
+//! per-model) is rewritten. Pi 0.85+ allows `api` on the model when the
+//! provider omits it; mixed APIs under one provider get per-model projected
+//! URLs so Anthropic `/messages` and OpenAI `/v1/…` do not share a suffix.
 use serde_json::Value;
 
 /// Path prefix the local proxy uses for Pi-attributed traffic.
@@ -29,7 +30,10 @@ impl PiApiKind {
         match api.map(str::trim).unwrap_or_default() {
             "anthropic-messages" | "anthropic" => Self::AnthropicMessages,
             "openai-completions" | "openai-chat" | "openai" => Self::OpenaiCompletions,
-            "openai-responses" => Self::OpenaiResponses,
+            // Azure Responses speaks the same `/v1/responses` wire as OpenAI
+            // Responses. Pi's Azure SDK only rewrites `*.azure.com` hosts to
+            // `/openai/v1`; a projected loopback/gateway origin keeps `/v1`.
+            "openai-responses" | "azure-openai-responses" | "azure-openai" => Self::OpenaiResponses,
             "google-generative-ai" | "gemini" | "gemini-cli" => Self::GoogleGenerativeAi,
             _ => Self::Unsupported,
         }
@@ -40,9 +44,19 @@ impl PiApiKind {
     }
 }
 
-/// Read the `api` field from a Pi provider node.
+/// Effective `api` for a provider node.
+///
+/// Pi 0.85 allows `api` on models when the provider omits it. Auth and
+/// path-suffix choice follow the provider field when it is a supported
+/// protocol, otherwise the unanimous supported model `api`. Mixed model
+/// APIs stay `Unsupported` at provider level so we do not pick one suffix
+/// for every model.
 pub fn provider_api_kind(config: &Value) -> PiApiKind {
-    PiApiKind::from_api_field(config.get("api").and_then(Value::as_str))
+    let declared = PiApiKind::from_api_field(config.get("api").and_then(Value::as_str));
+    if declared.is_supported() {
+        return declared;
+    }
+    unanimous_supported_kind(&model_api_kinds(config, None)).unwrap_or(declared)
 }
 
 /// Whether `provider_id` is safe to embed as a single URL path segment.
@@ -63,8 +77,8 @@ pub fn is_safe_provider_id(provider_id: &str) -> bool {
 /// the Pi process can actually reach (loopback on the host, or the WSL
 /// gateway / mirrored loopback inside a distribution).
 ///
-/// `upstream` is the stored URL, used only to preserve a `/v1beta` suffix
-/// for Google-style providers.
+/// `upstream` is the stored URL, used to preserve Google `/v1beta` or `/v1`
+/// path suffixes that Pi joins onto when building `…/models/…` requests.
 pub fn proxy_base_url(origin: &str, provider_id: &str, kind: PiApiKind, upstream: &str) -> String {
     let origin = origin.trim().trim_end_matches('/');
     let path = match kind {
@@ -73,14 +87,7 @@ pub fn proxy_base_url(origin: &str, provider_id: &str, kind: PiApiKind, upstream
             format!("/pi/{provider_id}/v1")
         }
         PiApiKind::GoogleGenerativeAi => {
-            if strip_query(upstream)
-                .trim_end_matches('/')
-                .ends_with("/v1beta")
-            {
-                format!("/pi/{provider_id}/v1beta")
-            } else {
-                format!("/pi/{provider_id}")
-            }
+            format!("/pi/{provider_id}{}", google_proxy_suffix(upstream))
         }
         PiApiKind::Unsupported => {
             return upstream.to_string();
@@ -118,57 +125,79 @@ pub fn provider_id_from_proxy_url(url: &str) -> Option<&str> {
 /// Rewrite provider-level and per-model `baseUrl`s onto the local proxy.
 ///
 /// Returns `true` when at least one URL changed. Unsupported APIs and
-/// unusable provider ids are left alone.
+/// unusable provider ids are left alone. When every model shares one
+/// supported `api` (even if the provider omits `api`), the provider URL is
+/// rewritten with that protocol. Mixed supported APIs keep the provider URL
+/// untouched unless the provider itself declared a supported `api`, and
+/// models whose protocol would inherit the wrong path suffix get their own
+/// projected `baseUrl`.
 pub fn project_provider_base_urls(config: &mut Value, provider_id: &str, origin: &str) -> bool {
     if !is_safe_provider_id(provider_id) {
         return false;
     }
-    let kind = provider_api_kind(config);
-    if !kind.is_supported() {
+
+    let declared_kind = PiApiKind::from_api_field(config.get("api").and_then(Value::as_str));
+    let provider_api = config
+        .get("api")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let original_provider_url = config
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let model_kinds = model_api_kinds(config, provider_api.as_deref());
+    let provider_project_kind = if declared_kind.is_supported() {
+        Some(declared_kind)
+    } else {
+        unanimous_supported_kind(&model_kinds)
+    };
+
+    if provider_project_kind.is_none() && model_kinds.iter().all(|kind| !kind.is_supported()) {
         return false;
     }
 
     let mut changed = false;
-    if let Some(current) = config
-        .get("baseUrl")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    {
-        let projected = proxy_base_url(origin, provider_id, kind, &current);
+    if let (Some(kind), Some(current)) = (provider_project_kind, original_provider_url.as_deref()) {
+        let projected = proxy_base_url(origin, provider_id, kind, current);
         if current != projected {
             config["baseUrl"] = Value::String(projected);
             changed = true;
         }
     }
 
-    let provider_api = config
-        .get("api")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    if let Some(models) = config.get_mut("models").and_then(Value::as_array_mut) {
-        for model in models {
-            let Some(current) = model
-                .get("baseUrl")
+    let Some(models) = config.get_mut("models").and_then(Value::as_array_mut) else {
+        return changed;
+    };
+    for model in models {
+        let model_kind = PiApiKind::from_api_field(
+            model
+                .get("api")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-            else {
-                continue;
-            };
-            let model_kind = PiApiKind::from_api_field(
-                model
-                    .get("api")
-                    .and_then(Value::as_str)
-                    .or(provider_api.as_deref()),
-            );
-            if !model_kind.is_supported() {
-                continue;
-            }
+                .or(provider_api.as_deref()),
+        );
+        if !model_kind.is_supported() {
+            continue;
+        }
+
+        if let Some(current) = model
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
             let projected = proxy_base_url(origin, provider_id, model_kind, &current);
             if current != projected {
                 model["baseUrl"] = Value::String(projected);
                 changed = true;
             }
+            continue;
         }
+
+        if provider_project_kind == Some(model_kind) {
+            continue;
+        }
+        let upstream = original_provider_url.as_deref().unwrap_or("");
+        model["baseUrl"] = Value::String(proxy_base_url(origin, provider_id, model_kind, upstream));
+        changed = true;
     }
 
     changed
@@ -207,16 +236,56 @@ pub fn restore_provider_base_urls(live: &mut Value, stored: &Value) -> bool {
         {
             continue;
         }
-        let Some(upstream) = stored_models
+        match stored_models
             .and_then(|models| models.get(index))
             .and_then(|model| model.get("baseUrl"))
             .and_then(Value::as_str)
-            .filter(|url| !is_pi_proxy_base_url(url))
-        else {
-            continue;
-        };
-        model["baseUrl"] = Value::String(upstream.to_string());
-        changed = true;
+        {
+            Some(upstream) if !is_pi_proxy_base_url(upstream) => {
+                model["baseUrl"] = Value::String(upstream.to_string());
+                changed = true;
+            }
+            Some(_) => {}
+            None => {
+                if let Some(object) = model.as_object_mut() {
+                    object.remove("baseUrl");
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// Drop projected proxy URLs when there is no stored upstream to restore.
+///
+/// Used when importing a live node that already points at the local proxy
+/// into a new database card.
+pub fn strip_proxy_base_urls(config: &mut Value) -> bool {
+    let mut changed = false;
+    if config
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .is_some_and(is_pi_proxy_base_url)
+    {
+        if let Some(object) = config.as_object_mut() {
+            object.remove("baseUrl");
+            changed = true;
+        }
+    }
+    if let Some(models) = config.get_mut("models").and_then(Value::as_array_mut) {
+        for model in models {
+            if model
+                .get("baseUrl")
+                .and_then(Value::as_str)
+                .is_some_and(is_pi_proxy_base_url)
+            {
+                if let Some(object) = model.as_object_mut() {
+                    object.remove("baseUrl");
+                    changed = true;
+                }
+            }
+        }
     }
     changed
 }
@@ -249,6 +318,49 @@ pub fn live_provider_node(
         restore_provider_base_urls(&mut node, stored);
     }
     node
+}
+
+fn model_api_kinds(config: &Value, provider_api: Option<&str>) -> Vec<PiApiKind> {
+    config
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .map(|model| {
+                    PiApiKind::from_api_field(
+                        model.get("api").and_then(Value::as_str).or(provider_api),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unanimous_supported_kind(kinds: &[PiApiKind]) -> Option<PiApiKind> {
+    let mut found = None;
+    for &kind in kinds {
+        if !kind.is_supported() {
+            continue;
+        }
+        match found {
+            None => found = Some(kind),
+            Some(previous) if previous != kind => return None,
+            _ => {}
+        }
+    }
+    found
+}
+
+fn google_proxy_suffix(upstream: &str) -> &'static str {
+    let path = strip_query(upstream).trim_end_matches('/');
+    if path.ends_with("/v1beta") {
+        "/v1beta"
+    } else if path.ends_with("/v1") {
+        "/v1"
+    } else {
+        ""
+    }
 }
 
 fn overlay_managed_fields(live: &mut Value, stored: &Value) {
@@ -288,8 +400,24 @@ mod tests {
             PiApiKind::OpenaiResponses
         );
         assert_eq!(
-            PiApiKind::from_api_field(Some("google-generative-ai")),
-            PiApiKind::GoogleGenerativeAi
+            PiApiKind::from_api_field(Some("azure-openai-responses")),
+            PiApiKind::OpenaiResponses
+        );
+        assert_eq!(
+            PiApiKind::from_api_field(Some("pi-messages")),
+            PiApiKind::Unsupported
+        );
+        assert_eq!(
+            PiApiKind::from_api_field(Some("mistral-conversations")),
+            PiApiKind::Unsupported
+        );
+        assert_eq!(
+            PiApiKind::from_api_field(Some("google-vertex")),
+            PiApiKind::Unsupported
+        );
+        assert_eq!(
+            PiApiKind::from_api_field(Some("openai-codex-responses")),
+            PiApiKind::Unsupported
         );
         assert_eq!(
             PiApiKind::from_api_field(Some("bedrock-converse-stream")),
@@ -352,6 +480,28 @@ mod tests {
                 "https://generativelanguage.googleapis.com",
             ),
             "http://127.0.0.1:15721/pi/gemini"
+        );
+        assert_eq!(
+            proxy_base_url(
+                "http://127.0.0.1:15721",
+                "gemini",
+                PiApiKind::GoogleGenerativeAi,
+                "https://generativelanguage.googleapis.com/v1",
+            ),
+            "http://127.0.0.1:15721/pi/gemini/v1"
+        );
+    }
+
+    #[test]
+    fn azure_responses_use_the_same_v1_suffix_as_openai_responses() {
+        assert_eq!(
+            proxy_base_url(
+                "http://127.0.0.1:15721",
+                "azure",
+                PiApiKind::OpenaiResponses,
+                "https://my-resource.openai.azure.com/openai/v1",
+            ),
+            "http://127.0.0.1:15721/pi/azure/v1"
         );
     }
 
@@ -484,6 +634,97 @@ mod tests {
     }
 
     #[test]
+    fn model_level_only_api_still_projects_the_provider_url() {
+        let mut config = json!({
+            "baseUrl": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "models": [{ "id": "gpt", "api": "openai-completions" }]
+        });
+        assert_eq!(provider_api_kind(&config), PiApiKind::OpenaiCompletions);
+        assert!(project_provider_base_urls(
+            &mut config,
+            "cc-switch-test",
+            "http://127.0.0.1:15721"
+        ));
+        assert_eq!(
+            config["baseUrl"],
+            "http://127.0.0.1:15721/pi/cc-switch-test/v1"
+        );
+        assert!(config["models"][0].get("baseUrl").is_none());
+    }
+
+    #[test]
+    fn mixed_model_apis_get_per_model_projected_urls() {
+        let mut config = json!({
+            "baseUrl": "https://gateway.example.com",
+            "apiKey": "secret",
+            "models": [
+                { "id": "claude", "api": "anthropic-messages" },
+                { "id": "gpt", "api": "openai-completions" }
+            ]
+        });
+        assert_eq!(provider_api_kind(&config), PiApiKind::Unsupported);
+        assert!(project_provider_base_urls(
+            &mut config,
+            "mixed",
+            "http://127.0.0.1:15721"
+        ));
+        assert_eq!(config["baseUrl"], "https://gateway.example.com");
+        assert_eq!(
+            config["models"][0]["baseUrl"],
+            "http://127.0.0.1:15721/pi/mixed"
+        );
+        assert_eq!(
+            config["models"][1]["baseUrl"],
+            "http://127.0.0.1:15721/pi/mixed/v1"
+        );
+
+        let stored = json!({
+            "baseUrl": "https://gateway.example.com",
+            "models": [
+                { "id": "claude", "api": "anthropic-messages" },
+                { "id": "gpt", "api": "openai-completions" }
+            ]
+        });
+        assert!(restore_provider_base_urls(&mut config, &stored));
+        assert_eq!(config["baseUrl"], "https://gateway.example.com");
+        assert!(config["models"][0].get("baseUrl").is_none());
+        assert!(config["models"][1].get("baseUrl").is_none());
+    }
+
+    #[test]
+    fn azure_openai_responses_projects_like_openai_responses() {
+        let mut config = json!({
+            "baseUrl": "https://my-resource.openai.azure.com/openai/v1",
+            "api": "azure-openai-responses",
+            "apiKey": "secret",
+            "models": [{ "id": "gpt-5" }]
+        });
+        assert!(project_provider_base_urls(
+            &mut config,
+            "azure",
+            "http://172.30.208.1:15721"
+        ));
+        assert_eq!(config["baseUrl"], "http://172.30.208.1:15721/pi/azure/v1");
+    }
+
+    #[test]
+    fn pi_messages_stays_on_the_real_upstream() {
+        let mut config = json!({
+            "baseUrl": "https://radius.example/v1",
+            "api": "pi-messages",
+            "oauth": "radius",
+            "models": [{ "id": "gateway-model" }]
+        });
+        assert!(!project_provider_base_urls(
+            &mut config,
+            "radius",
+            "http://127.0.0.1:15721"
+        ));
+        assert_eq!(config["baseUrl"], "https://radius.example/v1");
+    }
+
+    #[test]
     fn unsafe_provider_ids_are_refused() {
         assert!(!is_safe_provider_id("../etc"));
         assert!(!is_safe_provider_id("a/b"));
@@ -522,6 +763,14 @@ mod tests {
         assert!(
             contract.contains("没有单独的 Pi 代理开关"),
             "contract must not treat a Pi-only toggle as the primary UX"
+        );
+        assert!(
+            contract.contains("azure-openai-responses"),
+            "contract must route Pi 0.85 Azure Responses through /v1/responses"
+        );
+        assert!(
+            contract.contains("模型级"),
+            "contract must mention model-level api projection"
         );
     }
 }

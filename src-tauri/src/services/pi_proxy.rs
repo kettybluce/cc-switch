@@ -8,7 +8,7 @@
 use crate::database::Database;
 use crate::error::AppError;
 use crate::pi_runtime::rewrite::{
-    is_pi_proxy_base_url, live_provider_node, restore_provider_base_urls,
+    live_provider_node, restore_provider_base_urls, strip_proxy_base_urls,
 };
 use crate::pi_runtime::{self, PiRuntimeTarget};
 use crate::provider::Provider;
@@ -179,15 +179,7 @@ pub fn sanitize_native_for_db(native: &mut Value, stored: Option<&Value>) {
         restore_provider_base_urls(native, stored);
         return;
     }
-    if native
-        .get("baseUrl")
-        .and_then(Value::as_str)
-        .is_some_and(is_pi_proxy_base_url)
-    {
-        if let Some(object) = native.as_object_mut() {
-            object.remove("baseUrl");
-        }
-    }
+    strip_proxy_base_urls(native);
 }
 
 fn rewrite_one(
@@ -339,6 +331,20 @@ mod tests {
         });
         sanitize_native_for_db(&mut native, None);
         assert!(native.get("baseUrl").is_none());
+    }
+
+    #[test]
+    fn sanitize_drops_injected_model_proxy_urls_without_a_stored_card() {
+        let mut native = json!({
+            "api": "anthropic-messages",
+            "models": [{
+                "id": "gpt",
+                "api": "openai-completions",
+                "baseUrl": "http://127.0.0.1:15721/pi/imported/v1"
+            }]
+        });
+        sanitize_native_for_db(&mut native, None);
+        assert!(native["models"][0].get("baseUrl").is_none());
     }
 
     struct ProjectionOverride {

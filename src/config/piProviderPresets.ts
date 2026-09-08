@@ -14,9 +14,31 @@ import {
 export type PiApiFormat =
   | "openai-completions"
   | "openai-responses"
+  | "azure-openai-responses"
   | "anthropic-messages"
   | "google-generative-ai"
   | "bedrock-converse-stream";
+
+/** `api` values Option B can rewrite onto `/pi/<id>…`. */
+export const PI_PROXY_ROUTABLE_APIS = [
+  "openai-completions",
+  "openai-chat",
+  "openai",
+  "openai-responses",
+  "azure-openai-responses",
+  "azure-openai",
+  "anthropic-messages",
+  "anthropic",
+  "google-generative-ai",
+  "gemini",
+  "gemini-cli",
+] as const;
+
+export function isPiProxyRoutableApi(api: string | undefined): boolean {
+  return PI_PROXY_ROUTABLE_APIS.includes(
+    (api ?? "").trim() as (typeof PI_PROXY_ROUTABLE_APIS)[number],
+  );
+}
 
 export type PiPresetModel = PiCatalogModel & {
   thinkingLevelMap?: PiThinkingLevelMap;

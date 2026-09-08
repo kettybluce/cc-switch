@@ -980,6 +980,7 @@
       "nameRequired": "表示名を入力してください",
       "credential": "API キー",
       "credentialRequired": "このプリセットの API キーを入力してください",
+      "proxyUnsupportedApi": "この API 形式は CC Switch のローカルプロキシへは書き換えません。Pi は上流 URL へ直接接続します（Bedrock、Radius pi-messages、Vertex、Codex OAuth など）。",
       "absoluteHttpUrlRequired": "{{label}} は絶対 HTTP または HTTPS URL で指定してください",
       "positiveNumberRequired": "{{label}} は 0 より大きい数値で指定してください",
       "models": "モデル設定",

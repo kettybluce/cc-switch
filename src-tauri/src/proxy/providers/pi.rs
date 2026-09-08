@@ -155,6 +155,17 @@ mod tests {
     }
 
     #[test]
+    fn azure_openai_responses_use_bearer_like_openai_responses() {
+        let adapter = PiAdapter::new();
+        let provider = provider(
+            "azure-openai-responses",
+            "https://my-resource.openai.azure.com/openai/v1",
+        );
+        let auth = adapter.extract_auth(&provider).expect("auth");
+        assert_eq!(auth.strategy, AuthStrategy::Bearer);
+    }
+
+    #[test]
     fn google_providers_use_goog_api_key() {
         let adapter = PiAdapter::new();
         let provider = provider(

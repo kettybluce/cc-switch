@@ -48,6 +48,7 @@ import {
 } from "./helpers/requestHeaders";
 import {
   piProviderPresets,
+  isPiProxyRoutableApi,
   type PiApiFormat,
   type PiProviderPreset,
 } from "@/config/piProviderPresets";
@@ -70,6 +71,7 @@ import { translatePiProviderMutationError } from "@/utils/errorUtils";
 const PI_API_FORMATS = [
   { value: "openai-completions", label: "OpenAI Chat Completions" },
   { value: "openai-responses", label: "OpenAI Responses" },
+  { value: "azure-openai-responses", label: "Azure OpenAI Responses" },
   { value: "anthropic-messages", label: "Anthropic Messages" },
   { value: "google-generative-ai", label: "Google Generative AI" },
   { value: "bedrock-converse-stream", label: "Amazon Bedrock" },
@@ -1413,6 +1415,11 @@ export function PiProviderForm({
                   defaultValue: "选择 AI 服务的 API 接口格式",
                 })}
               </p>
+              {includeApi && api && !isPiProxyRoutableApi(api) && (
+                <p className="text-xs text-muted-foreground">
+                  {t("pi.form.proxyUnsupportedApi")}
+                </p>
+              )}
             </Field>
 
             <ApiKeySection

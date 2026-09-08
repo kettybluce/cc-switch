@@ -981,6 +981,7 @@
       "nameRequired": "顯示名稱為必填",
       "credential": "API Key",
       "credentialRequired": "請填寫此預設的 API Key",
+      "proxyUnsupportedApi": "此介面格式不會改寫到 CC Switch 本機代理，Pi 會直連上游（Bedrock、Radius pi-messages、Vertex、Codex OAuth 等）。",
       "absoluteHttpUrlRequired": "{{label}} 必須是絕對 HTTP 或 HTTPS URL",
       "positiveNumberRequired": "{{label}} 必須是大於 0 的數字",
       "models": "模型設定",

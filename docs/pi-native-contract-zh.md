@@ -34,7 +34,7 @@ WSL 运行时通过 `wsl.exe` 访问，不走 `\\wsl.localhost`：UNC 访问 WSL
 结构化表单只验证并编辑常用字段：
 
 - 供应商级 `name`、`baseUrl`、`apiKey`、`api`、`headers`
-- 模型级 `id`、`name`、`reasoning`、`input`、`contextWindow`、`maxTokens`
+- 模型级 `id`、`name`、`api`、`reasoning`、`input`、`contextWindow`、`maxTokens`
 
 已有配置中的其他字段原样保留。供应商是否可管理只取决于节点是否显式存在于 `models.json.providers`：`anthropic`、`openai`、`deepseek` 等 Pi 内置 ID，以及带有未知字段的节点，都按普通显式配置同步。CC Switch 不把 Pi 运行时合并出的内置模型复制回配置，也不解析或执行 `apiKey`、Header 中的环境变量和命令表达式。请求仍由 Pi 自己发出。
 
@@ -52,11 +52,11 @@ Pi 在全局设置中保存的当前供应商和模型不进入供应商列表�
 Pi → CC Switch 本地代理 → 供应商 API
 ```
 
-做法是改写运行中的 `models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI 风格再加 `/v1`，Google 若上游带 `/v1beta` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。没有单独的 Pi 代理开关；投影跟随本地代理的开启与停止。
+做法是改写运行中的 `models.json` 里每个已管理节点的 `baseUrl`（以及模型级 `baseUrl`），指向 `http://<可达主机>:<本地代理端口>/pi/<provider_id>`（OpenAI / Azure Responses 风格再加 `/v1`，Google 若上游带 `/v1beta` 或 `/v1` 则保留该后缀）。真实上游地址只保存在 CC Switch 数据库；关闭或停止本地代理时，把 `models.json` 恢复成数据库中的上游 URL。没有单独的 Pi 代理开关；投影跟随本地代理的开启与停止。
 
-`api` 字段决定走哪条已有路由：`anthropic-messages` → `/v1/messages`，`openai-completions` → `/v1/chat/completions`，`openai-responses` → `/v1/responses`，`google-generative-ai` → `/v1beta/*`。`bedrock-converse-stream` 等本地代理没有对应处理器的协议不会改写，Pi 仍直连上游。
+`api` 可写在供应商级，也可只写在模型级（Pi 0.85 起允许）。字段决定走哪条已有路由：`anthropic-messages` → `/v1/messages`，`openai-completions` → `/v1/chat/completions`，`openai-responses` 与 `azure-openai-responses` → `/v1/responses`，`google-generative-ai` → `/v1beta/*` 或 `/v1/*`。同一供应商下模型 `api` 不一致时，只给协议会撞路径后缀的模型写入各自的投影 `baseUrl`。`bedrock-converse-stream`、`pi-messages`、`google-vertex`、`openai-codex-responses`、`mistral-conversations` 等本地代理没有对应处理器的协议不会改写，Pi 仍直连上游。
 
-这不是进程级 `HTTP_PROXY` / `HTTPS_PROXY` 注入，也不是发行版全局代理。CC Switch 不修改 `/etc/environment`、`/etc/profile`、`~/.bashrc`。密钥仍通过 `models.json` 的既有字段写入，从不出现在 `wsl.exe` 命令行或日志里。
+这不是进程级 `HTTP_PROXY` / `HTTPS_PROXY` 注入，也不是发行版全局代理，也不写入 Pi 全局 `settings.json` 的 `httpProxy`。CC Switch 不修改 `/etc/environment`、`/etc/profile`、`~/.bashrc`。密钥仍通过 `models.json` 的既有字段写入，从不出现在 `wsl.exe` 命令行或日志里。
 
 回环地址在 WSL 边界两侧含义不同：镜像网络模式下 `127.0.0.1` 与 Windows 共享，默认 NAT 模式下则不是，此时 Windows 主机表现为发行版的默认网关。因此候选地址按优先级探测（镜像回环 → 默认网关 → `resolv.conf`），并把命中的方式与解析出的端点回报给界面。NAT 模式下若本地代理只监听 `127.0.0.1`，发行版无法经网关连上，需要把监听地址改成 `0.0.0.0`。「检测代理」只确认本地代理 `/health` 可连；供应商 401 是密钥问题，与代理可达性分开显示。
 
@@ -72,7 +72,7 @@ CC Switch 仍不为 Pi 做故障转移队列或网关状态机；请求由 Pi �
 
 全局会话页只枚举绝对 `sessionDir`、`~` 路径或 Pi 默认目录。相对 `sessionDir` 依赖启动 Pi 时的项目工作目录，CC Switch 没有可靠上下文，因此明确显示“需要项目上下文”，不会猜测目录。
 
-会话解析只消费 UI 所需字段。未知条目被忽略；删除前会验证文件仍在已解析的 Pi 会话根目录中，并核对会话 ID。
+会话解析只消费 UI 所需字段。未知条目被忽略；删除前会验证文件仍在已解析的 Pi 会话根目录中，并核对会话 ID。用量导入读取助手消息、toolResult、compaction 与 branch_summary 上的 `usage`；Pi 0.85 起把 `cacheWrite1h` 并入缓存写入，仅有 `reasoning`、没有 `output` 的回合也会计入完成量。
 
 ## 明确不做
 
@@ -80,7 +80,7 @@ CC Switch 仍不为 Pi 做故障转移队列或网关状态机；请求由 Pi �
 - 默认供应商或默认模型写入
 - 故障转移队列和网关状态机；本地代理按 `models.json` 的 `baseUrl` 投影转发，不改写 Pi 发出的请求体协议（除已有 Claude/Codex/Gemini 转换路径外）
 - 修改发行版的 `/etc/environment`、`/etc/profile`、`~/.bashrc` 等共享环境
-- 以 `HTTP_PROXY` / `HTTPS_PROXY` 作为 Pi 的主路径（默认关闭，不注入进程环境）
+- 以 `HTTP_PROXY` / `HTTPS_PROXY` 作为 Pi 的主路径（默认关闭，不注入进程环境）；不写入 Pi `settings.json` 的 `httpProxy`
 - Pi 运行时内置供应商与内置模型目录的复制
 - 完整 `compat`、`modelOverrides` 和费用编辑器；思考档位只提供 Pi 原生 `thinkingLevelMap` 的轻量入口
 - 相对会话目录的全局猜测

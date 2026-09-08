@@ -3,7 +3,10 @@ import {
   getPiModelCatalogReference,
   piModelCatalog,
 } from "@/config/piModelCatalog";
-import { piProviderPresets } from "@/config/piProviderPresets";
+import {
+  isPiProxyRoutableApi,
+  piProviderPresets,
+} from "@/config/piProviderPresets";
 
 describe("Pi provider presets", () => {
   it("owns a broad provider catalog without OpenCode-only templates", () => {
@@ -87,6 +90,13 @@ describe("Pi provider presets", () => {
       RightCode: "openai-responses",
       "AWS Bedrock": "bedrock-converse-stream",
     });
+  });
+
+  it("treats Azure OpenAI Responses as proxy-routable and Bedrock as not", () => {
+    expect(isPiProxyRoutableApi("azure-openai-responses")).toBe(true);
+    expect(isPiProxyRoutableApi("openai-responses")).toBe(true);
+    expect(isPiProxyRoutableApi("bedrock-converse-stream")).toBe(false);
+    expect(isPiProxyRoutableApi("pi-messages")).toBe(false);
   });
 
   it("uses Pi's 272K context value for every GPT-5.6 Sol preset", () => {
