@@ -40,6 +40,18 @@ vi.mock("@/lib/query/pi", () => ({
   useTestPiProxy: () => ({ mutate: testProxyMock, isPending: false }),
 }));
 
+const setTakeoverForAppMock = vi.fn();
+let takeoverEnabled = false;
+
+vi.mock("@/hooks/useProxyStatus", () => ({
+  useProxyStatus: () => ({
+    takeoverStatus: { pi: takeoverEnabled },
+    setTakeoverForApp: setTakeoverForAppMock,
+    isPending: false,
+    isInitialStatusPending: false,
+  }),
+}));
+
 const probe: WslPiProbe = {
   distro: "Ubuntu-22.04",
   home: "/home/tfdx8045",
@@ -85,6 +97,8 @@ describe("PiRuntimeSettings", () => {
     syncSessionsMock.mockReset();
     testProxyMock.mockReset();
     refetchMock.mockReset();
+    setTakeoverForAppMock.mockReset();
+    takeoverEnabled = false;
     status = localStatus;
     distros = [probe];
     proxyPlan = undefined;
@@ -94,7 +108,7 @@ describe("PiRuntimeSettings", () => {
     status = { ...localStatus, wslAvailable: false };
     render(<PiRuntimeSettings />);
     expect(screen.getByText("settings.piRuntime.title")).toBeInTheDocument();
-    expect(screen.getByText("settings.piRuntime.useProxy")).toBeInTheDocument();
+    expect(screen.getByText("settings.piRuntime.takeover")).toBeInTheDocument();
     expect(
       screen.queryByText("settings.piRuntime.location"),
     ).not.toBeInTheDocument();
@@ -169,18 +183,44 @@ describe("PiRuntimeSettings", () => {
     await waitFor(() => expect(syncSessionsMock).toHaveBeenCalledTimes(1));
   });
 
-  it("shows that Pi follows the local proxy without a separate switch", () => {
+  it("shows a Claude-style takeover switch that starts the proxy on enable", async () => {
     render(<PiRuntimeSettings />);
-    expect(screen.getByText("settings.piRuntime.useProxy")).toBeInTheDocument();
+    expect(screen.getByText("settings.piRuntime.takeover")).toBeInTheDocument();
     expect(
-      screen.getByText("settings.piRuntime.useProxyDescription"),
+      screen.getByText("settings.piRuntime.takeoverDescription"),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    const toggle = screen.getByRole("switch");
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).not.toBeChecked();
+    expect(
+      screen.getByText("settings.piRuntime.proxyStopped"),
+    ).toBeInTheDocument();
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(setTakeoverForAppMock).toHaveBeenCalledWith({
+        appType: "pi",
+        enabled: true,
+      }),
+    );
     expect(
       screen.getByText("settings.piRuntime.testProxy"),
     ).toBeInTheDocument();
+  });
+
+  it("shows takeover-on copy when live models.json is projected", () => {
+    takeoverEnabled = true;
+    proxyPlan = {
+      enabled: true,
+      projected: true,
+      gateway: { reachable: true },
+      origin: "http://127.0.0.1:15721",
+      listenAddress: "127.0.0.1",
+      environment: {},
+    };
+    render(<PiRuntimeSettings />);
+    expect(screen.getByRole("switch")).toBeChecked();
     expect(
-      screen.getByText("settings.piRuntime.proxyStopped"),
+      screen.getByText("settings.piRuntime.takeoverOn"),
     ).toBeInTheDocument();
   });
 

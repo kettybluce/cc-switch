@@ -7,6 +7,7 @@ import type {
   AppProxyConfig,
   ProxyTakeoverStatus,
 } from "@/types/proxy";
+import { piKeys } from "@/lib/query/pi";
 
 export const proxyKeys = {
   status: ["proxyStatus"] as const,
@@ -59,8 +60,13 @@ export function useSetProxyTakeoverForApp() {
   return useMutation({
     mutationFn: ({ appType, enabled }: { appType: string; enabled: boolean }) =>
       proxyApi.setProxyTakeoverForApp(appType, enabled),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: proxyKeys.takeoverStatus });
+      queryClient.invalidateQueries({ queryKey: proxyKeys.status });
+      if (variables.appType === "pi") {
+        queryClient.invalidateQueries({ queryKey: piKeys.proxyPlan });
+        queryClient.invalidateQueries({ queryKey: piKeys.runtimeStatus });
+      }
     },
   });
 }

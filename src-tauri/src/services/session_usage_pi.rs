@@ -667,24 +667,61 @@ fn token_count(usage: &Value, key: &str) -> u32 {
 
 /// Unit prices from live `models.json` (`cost.input` etc. are USD / million).
 /// Embedded `usage.cost.total` in session JSONL is typically 0; do not trust it.
-fn pricing_from_pi_models_json(model: &str) -> Option<ModelPricing> {
+///
+/// Lookup tries the response model first, then the requested model, using the
+/// same candidate stripping as the shared pricing table (namespaces, date
+/// suffixes, Claude role maps). Claude/Codex costing is unchanged.
+fn pricing_from_pi_models_json(model: &str, request_model: &str) -> Option<ModelPricing> {
+    let providers = crate::pi_config::read_pi_native_providers().ok()?;
+    lookup_models_json_pricing(&providers, model)
+        .or_else(|| lookup_models_json_pricing(&providers, request_model))
+}
+
+fn lookup_models_json_pricing(
+    providers: &indexmap::IndexMap<String, Value>,
+    model: &str,
+) -> Option<ModelPricing> {
     if model.is_empty() || model == UNKNOWN_MODEL {
         return None;
     }
-    let providers = crate::pi_config::read_pi_native_providers().ok()?;
+    let wanted = crate::services::usage_stats::model_pricing_candidates(model);
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut mapped = None;
     for node in providers.values() {
         let Some(models) = node.get("models").and_then(Value::as_array) else {
             continue;
         };
         for entry in models {
             let id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
-            if id != model {
-                continue;
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            for label in [id, name] {
+                if label.is_empty() {
+                    continue;
+                }
+                let candidates = crate::services::usage_stats::model_pricing_candidates(label);
+                if !candidates
+                    .iter()
+                    .any(|candidate| wanted.contains(candidate))
+                {
+                    continue;
+                }
+                let Some(prices) = model_entry_unit_prices(entry) else {
+                    continue;
+                };
+                if label == model || candidates.iter().any(|candidate| candidate == model) {
+                    return Some(prices);
+                }
+                mapped.get_or_insert(prices);
+                break;
             }
-            return model_entry_unit_prices(entry);
         }
     }
-    None
+    mapped
 }
 
 fn model_entry_unit_prices(entry: &Value) -> Option<ModelPricing> {
@@ -902,8 +939,15 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
         model: Some(record.model.clone()),
         message_id: None,
     };
-    let unit_prices = pricing_from_pi_models_json(&record.model)
-        .or_else(|| find_model_pricing(conn, &record.model));
+    let unit_prices = pricing_from_pi_models_json(&record.model, &record.request_model)
+        .or_else(|| find_model_pricing(conn, &record.model))
+        .or_else(|| {
+            if record.request_model != record.model {
+                find_model_pricing(conn, &record.request_model)
+            } else {
+                None
+            }
+        });
     let costs = unit_prices.map(|pricing| {
         let calculated =
             CostCalculator::calculate_for_app(APP_TYPE, &usage, &pricing, Decimal::ONE);
@@ -973,6 +1017,9 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pi_config::test_support::TestAgentDir;
+    use serde_json::json;
+    use serial_test::serial;
     use std::fs::FileTimes;
     use std::io::Write;
 
@@ -1188,6 +1235,96 @@ mod tests {
         assert_eq!(
             Decimal::from_str(&total).expect("calculated total"),
             Decimal::from_str("0.0000155").expect("expected total")
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn models_json_unit_prices_times_tokens_even_when_jsonl_cost_is_zero() -> Result<(), AppError> {
+        let _agent = TestAgentDir::new();
+        crate::pi_config::insert_pi_provider(
+            "priced-pi",
+            &json!({
+                "name": "Priced",
+                "baseUrl": "https://api.example.com/v1",
+                "api": "openai-completions",
+                "models": [{
+                    "id": "fixture-model",
+                    "cost": { "input": 1, "output": 2, "cacheRead": 0.1, "cacheWrite": 0.5 }
+                }]
+            }),
+        )
+        .expect("write models.json prices");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "models-json-priced");
+        let assistant = assistant_line("priced", "2023-11-14T22:13:21Z", 10);
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-models-json","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                &assistant,
+            ],
+        );
+
+        let db = Database::memory()?;
+        assert_eq!(sync_pi_files(&db, std::slice::from_ref(&path)).imported, 1);
+
+        let conn = lock_conn!(db.conn);
+        let total: String = conn.query_row(
+            "SELECT total_cost_usd FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            Decimal::from_str(&total).expect("calculated total"),
+            Decimal::from_str("0.0000155").expect("expected total")
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn models_json_prices_follow_request_model_and_namespace_maps() -> Result<(), AppError> {
+        let _agent = TestAgentDir::new();
+        crate::pi_config::insert_pi_provider(
+            "mapped-pi",
+            &json!({
+                "name": "Mapped",
+                "baseUrl": "https://api.anthropic.com",
+                "api": "anthropic-messages",
+                "models": [{
+                    "id": "claude-sonnet-4-5",
+                    "name": "Sonnet",
+                    "cost": { "input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75 }
+                }]
+            }),
+        )
+        .expect("write mapped models.json");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "mapped-model");
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-map","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                r#"{"type":"message","id":"mapped","parentId":null,"timestamp":"2023-11-14T22:13:21Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"provider":"mapped-pi","model":"sonnet","responseModel":"anthropic/claude-sonnet-4-5","usage":{"input":1000000,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":1000000,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop"}}"#,
+            ],
+        );
+
+        let db = Database::memory()?;
+        assert_eq!(sync_pi_files(&db, std::slice::from_ref(&path)).imported, 1);
+
+        let conn = lock_conn!(db.conn);
+        let total: String = conn.query_row(
+            "SELECT total_cost_usd FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            Decimal::from_str(&total).expect("priced via models.json map"),
+            Decimal::from_str("3").expect("1M input tokens at $3/M")
         );
         Ok(())
     }

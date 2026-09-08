@@ -86,12 +86,12 @@ export function ProxyPanel({
       toast.success(
         enabled
           ? t("proxy.takeover.enabled", {
-              app: appType,
-              defaultValue: `${appType} 接管已启用`,
+              app: getAppLabel(appType),
+              defaultValue: `${getAppLabel(appType)} 接管已启用`,
             })
           : t("proxy.takeover.disabled", {
-              app: appType,
-              defaultValue: `${appType} 接管已关闭`,
+              app: getAppLabel(appType),
+              defaultValue: `${getAppLabel(appType)} 接管已关闭`,
             }),
         { closeButton: true },
       );

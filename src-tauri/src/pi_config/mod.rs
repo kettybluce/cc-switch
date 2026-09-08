@@ -590,31 +590,57 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_stale_agent_file_is_healed_from_a_newer_top_level_write() {
+    fn an_empty_agent_file_is_migrated_from_a_populated_top_level_write() {
         let _agent = test_support::TestAgentDir::new();
         let agent_path = get_pi_models_path().expect("agent models path");
         let top_path = get_pi_top_level_path("models.json")
             .expect("top-level path")
             .expect("top-level mirror");
         fs::create_dir_all(agent_path.parent().expect("agent dir")).expect("mkdir agent");
-        fs::write(&agent_path, r#"{"providers":{"stale":{}}}"#).expect("stale agent");
-        // Ensure the top-level mtime wins even on coarse filesystems.
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&agent_path, r#"{"providers":{}}"#).expect("empty agent");
         fs::write(
             &top_path,
             r#"{"providers":{"openai":{"name":"yumcode-std"}}}"#,
         )
-        .expect("fresh top-level");
+        .expect("populated top-level");
 
         let providers = read_pi_native_providers().expect("heal and read");
         assert!(
             providers.contains_key("openai"),
-            "agent file must pick up the live top-level providers Pi was missing"
+            "empty agent file must pick up providers from the top-level mirror"
         );
-        assert!(!providers.contains_key("stale"));
         assert_eq!(
             fs::read_to_string(&agent_path).expect("agent after heal"),
             fs::read_to_string(&top_path).expect("top-level after heal")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_populated_agent_file_wins_over_a_diverged_top_level_mirror() {
+        let _agent = test_support::TestAgentDir::new();
+        let agent_path = get_pi_models_path().expect("agent models path");
+        let top_path = get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("top-level mirror");
+        fs::create_dir_all(agent_path.parent().expect("agent dir")).expect("mkdir agent");
+        fs::write(
+            &agent_path,
+            r#"{"providers":{"canonical":{"name":"agent"}}}"#,
+        )
+        .expect("canonical agent");
+        fs::write(
+            &top_path,
+            r#"{"providers":{"stale":{"baseUrl":"http://127.0.0.1:1/pi/x"}}}"#,
+        )
+        .expect("stale top-level");
+
+        let providers = read_pi_native_providers().expect("read canonical");
+        assert!(providers.contains_key("canonical"));
+        assert!(!providers.contains_key("stale"));
+        assert_eq!(
+            fs::read_to_string(&agent_path).expect("agent"),
+            fs::read_to_string(&top_path).expect("top")
         );
     }
 

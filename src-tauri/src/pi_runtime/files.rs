@@ -182,6 +182,7 @@ fn locate_top_level_on(target: &PiRuntimeTarget, file: PiFile) -> PiResult<Optio
             distro, agent_dir, ..
         } => {
             let Some(home) = agent_dir
+                .trim_end_matches('/')
                 .strip_suffix("/agent")
                 .filter(|home| !home.is_empty())
             else {
@@ -234,6 +235,22 @@ pub fn write(file: PiFile, bytes: &[u8], expected_revision: &str) -> PiResult<()
     Ok(())
 }
 
+/// Re-copy the canonical agent file onto `{piHome}/models.json` (or
+/// settings.json) even when the agent bytes did not change. Restore/project
+/// paths use this so a leftover top-level file cannot keep proxy URLs.
+pub fn sync_canonical_to_mirror(file: PiFile) {
+    let Ok(location) = locate(file) else {
+        return;
+    };
+    let Ok(read) = read_at(&location, file, 1024 * 1024) else {
+        return;
+    };
+    let Some(bytes) = read.bytes.as_deref() else {
+        return;
+    };
+    sync_top_level_mirror(file, bytes);
+}
+
 /// Best-effort copy of the canonical agent file to `{piHome}/models.json`
 /// (or settings.json). A mirror miss must not fail the agent write Pi reads.
 fn sync_top_level_mirror(file: PiFile, bytes: &[u8]) {
@@ -261,10 +278,15 @@ fn overwrite_at(location: &PiFileLocation, file: PiFile, bytes: &[u8]) -> PiResu
     }
 }
 
-/// If CC Switch previously wrote only `~/.pi/models.json`, copy that live
-/// content into the agent file Pi actually reads. After the copy, both files
-/// match. Local runtimes use mtime so a stale agent file loses to a newer
-/// top-level write; WSL prefers the agent file (writes already targeted it).
+/// Keep `{piHome}/agent/{file}` and `{piHome}/{file}` from diverging.
+///
+/// The agent file is canonical (what Pi reads). Top-level is a mirror:
+/// - missing agent + existing top → one-time migration into the agent file
+/// - empty `models.json` providers + populated top → same migration
+/// - otherwise the agent file wins and the top-level copy is overwritten
+///
+/// Never clobber a populated agent file from a newer top-level write: that
+/// reintroduced proxy `baseUrl`s after takeover restore.
 fn heal_agent_from_top_level(file: PiFile, max_bytes: u64) {
     if !matches!(file, PiFile::Models | PiFile::Settings) {
         return;
@@ -299,10 +321,13 @@ fn heal_agent_from_top_level(file: PiFile, max_bytes: u64) {
         }
         (Some(agent_bytes), Some(top_bytes)) if agent_bytes == top_bytes => {}
         (Some(agent_bytes), Some(top_bytes)) => {
-            if top_is_newer(&top_loc, &agent_loc) {
+            let migrate_empty_models = matches!(file, PiFile::Models)
+                && models_document_has_no_providers(agent_bytes)
+                && !models_document_has_no_providers(top_bytes);
+            if migrate_empty_models {
                 if let Err(error) = write_at(&agent_loc, file, top_bytes, &agent.revision) {
                     log::warn!(
-                        "[PiConfig] could not heal {} from newer top-level file: {error}",
+                        "[PiConfig] could not migrate {} from top-level mirror: {error}",
                         file.file_name()
                     );
                 }
@@ -310,6 +335,17 @@ fn heal_agent_from_top_level(file: PiFile, max_bytes: u64) {
                 let _ = overwrite_at(&top_loc, file, agent_bytes);
             }
         }
+    }
+}
+
+fn models_document_has_no_providers(bytes: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    match value.get("providers") {
+        None => true,
+        Some(serde_json::Value::Object(providers)) => providers.is_empty(),
+        Some(_) => false,
     }
 }
 
@@ -324,25 +360,6 @@ fn write_at(
         PiFileLocation::Wsl { distro, path } => {
             write_wsl(file, distro, path, bytes, expected_revision)
         }
-    }
-}
-
-fn top_is_newer(top: &PiFileLocation, agent: &PiFileLocation) -> bool {
-    match (top, agent) {
-        (PiFileLocation::Local(top_path), PiFileLocation::Local(agent_path)) => {
-            let top_mtime = fs::metadata(top_path).and_then(|meta| meta.modified()).ok();
-            let agent_mtime = fs::metadata(agent_path)
-                .and_then(|meta| meta.modified())
-                .ok();
-            match (top_mtime, agent_mtime) {
-                (Some(top), Some(agent)) => top > agent,
-                (Some(_), None) => true,
-                _ => false,
-            }
-        }
-        // WSL writes already targeted the agent path; do not clobber it from
-        // a top-level file we cannot mtime-compare cheaply.
-        _ => false,
     }
 }
 
@@ -818,5 +835,88 @@ mod tests {
         assert_eq!(fs::read(&agent).expect("agent"), document);
         assert_eq!(fs::read(&top).expect("top-level"), document);
         assert_ne!(agent, top);
+    }
+
+    #[test]
+    #[serial]
+    fn local_writes_sync_the_top_level_settings_mirror() {
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let _target = TestTarget::install(PiRuntimeTarget::Local);
+        let document = b"{\"defaultModel\":\"opus\"}\n";
+        write(PiFile::Settings, document, MISSING_REVISION).expect("write settings");
+
+        let agent = crate::pi_config::get_pi_settings_path().expect("agent settings");
+        let top = crate::pi_config::get_pi_top_level_path("settings.json")
+            .expect("top-level path")
+            .expect("mirror");
+        assert_eq!(fs::read(&agent).expect("agent"), document);
+        assert_eq!(fs::read(&top).expect("top-level"), document);
+    }
+
+    #[test]
+    #[serial]
+    fn a_missing_agent_file_is_restored_from_the_top_level_mirror() {
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let _target = TestTarget::install(PiRuntimeTarget::Local);
+        let agent = crate::pi_config::get_pi_models_path().expect("agent path");
+        let top = crate::pi_config::get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("mirror");
+        fs::create_dir_all(top.parent().expect("pi home")).expect("mkdir home");
+        fs::write(&top, r#"{"providers":{"openai":{"name":"from-top"}}}"#).expect("top only");
+
+        let read_back = read(PiFile::Models, LIMIT).expect("migrate");
+        let live = String::from_utf8(read_back.bytes.expect("agent restored")).expect("utf8");
+        assert!(live.contains("from-top"));
+        assert_eq!(
+            fs::read_to_string(&agent).expect("agent"),
+            fs::read_to_string(&top).expect("top")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_canonical_agent_file_overwrites_a_diverged_top_level_mirror() {
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let _target = TestTarget::install(PiRuntimeTarget::Local);
+        let agent = crate::pi_config::get_pi_models_path().expect("agent path");
+        let top = crate::pi_config::get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("mirror");
+        fs::create_dir_all(agent.parent().expect("agent dir")).expect("mkdir agent");
+        fs::write(&agent, r#"{"providers":{"canonical":{"name":"agent"}}}"#).expect("agent");
+        fs::write(
+            &top,
+            r#"{"providers":{"stale":{"baseUrl":"http://127.0.0.1:15721/pi/stale"}}}"#,
+        )
+        .expect("diverged top");
+
+        read(PiFile::Models, LIMIT).expect("heal");
+        let agent_text = fs::read_to_string(&agent).expect("agent");
+        let top_text = fs::read_to_string(&top).expect("top");
+        assert!(agent_text.contains("canonical"));
+        assert!(!agent_text.contains("stale"));
+        assert_eq!(agent_text, top_text);
+    }
+
+    #[test]
+    #[serial]
+    fn an_empty_agent_models_file_is_migrated_from_a_populated_top_level() {
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let _target = TestTarget::install(PiRuntimeTarget::Local);
+        let agent = crate::pi_config::get_pi_models_path().expect("agent path");
+        let top = crate::pi_config::get_pi_top_level_path("models.json")
+            .expect("top-level path")
+            .expect("mirror");
+        fs::create_dir_all(agent.parent().expect("agent dir")).expect("mkdir agent");
+        fs::write(&agent, r#"{"providers":{}}"#).expect("empty agent");
+        fs::write(&top, r#"{"providers":{"openai":{"name":"yumcode-std"}}}"#).expect("top");
+
+        let providers = crate::pi_config::read_pi_native_providers().expect("migrate");
+        assert!(providers.contains_key("openai"));
+        assert_eq!(
+            fs::read_to_string(&agent).expect("agent"),
+            fs::read_to_string(&top).expect("top")
+        );
     }
 }

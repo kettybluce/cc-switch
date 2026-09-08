@@ -1185,7 +1185,11 @@ impl ProxyService {
                 }
             }
 
-            self.takeover_live_config_strict(&AppType::Pi).await?;
+            self.takeover_live_config_strict(&AppType::Pi)
+                .await
+                .inspect_err(|_| {
+                    crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+                })?;
 
             let mut updated_config = self
                 .db
@@ -1209,11 +1213,13 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取 {app_type_str} 配置失败: {e}"))?;
         if !current_config.enabled {
-            crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+            crate::services::pi_proxy::restore_live_providers(&self.db)
+                .map_err(|error| format!("恢复 Pi models.json 失败: {error}"))?;
             return Ok(());
         }
 
-        crate::services::pi_proxy::restore_after_proxy_stop(&self.db);
+        crate::services::pi_proxy::restore_live_providers(&self.db)
+            .map_err(|error| format!("恢复 Pi models.json 失败: {error}"))?;
         let _ = self.db.delete_live_backup(app_type_str).await;
 
         let mut updated_config = self

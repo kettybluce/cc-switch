@@ -13,6 +13,7 @@ import {
 } from "@/lib/query/proxy";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { getAppLabel } from "@/config/appConfig";
+import { piKeys } from "@/lib/query/pi";
 
 /**
  * 代理服务状态管理
@@ -133,6 +134,10 @@ export function useProxyStatus() {
       );
       queryClient.invalidateQueries({ queryKey: proxyKeys.status });
       queryClient.invalidateQueries({ queryKey: proxyKeys.takeoverStatus });
+      if (variables.appType === "pi") {
+        queryClient.invalidateQueries({ queryKey: piKeys.proxyPlan });
+        queryClient.invalidateQueries({ queryKey: piKeys.runtimeStatus });
+      }
     },
     onError: (error: Error) => {
       const detail =

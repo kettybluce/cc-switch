@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Loader2,
   Monitor,
+  Radio,
   RefreshCw,
   Terminal,
 } from "lucide-react";
@@ -17,6 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { ToggleRow } from "@/components/ui/toggle-row";
+import { useProxyStatus } from "@/hooks/useProxyStatus";
 import type {
   PiFeatureFlags,
   PiProxyHealth,
@@ -48,6 +51,13 @@ export function PiRuntimeSettings() {
   const setRuntime = useSetPiRuntime();
   const syncSessions = useSyncPiWslSessions();
   const testProxy = useTestPiProxy();
+  const {
+    takeoverStatus,
+    setTakeoverForApp,
+    isPending: isTakeoverPending,
+    isInitialStatusPending,
+  } = useProxyStatus();
+  const takeoverEnabled = takeoverStatus?.pi ?? false;
 
   const isWsl = status?.target.kind === "wsl";
   // Probing every distribution starts a login shell in each, so the list is
@@ -210,6 +220,11 @@ export function PiRuntimeSettings() {
 
       <ProxyPanel
         isWsl={isWsl}
+        takeoverEnabled={takeoverEnabled}
+        takeoverPending={isTakeoverPending || isInitialStatusPending}
+        onTakeoverChange={(enabled) =>
+          void setTakeoverForApp({ appType: "pi", enabled })
+        }
         proxyHealth={proxyPlan?.gateway}
         origin={proxyPlan?.origin}
         projected={Boolean(proxyPlan?.projected)}
@@ -285,6 +300,9 @@ function WslRuntimeDetails({ probe, syncing, onSync }: WslRuntimeDetailsProps) {
 
 interface ProxyPanelProps {
   isWsl: boolean;
+  takeoverEnabled: boolean;
+  takeoverPending: boolean;
+  onTakeoverChange: (enabled: boolean) => void;
   proxyHealth?: PiProxyHealth;
   origin?: string;
   projected: boolean;
@@ -306,6 +324,9 @@ function isLoopbackListen(address?: string): boolean {
 
 function ProxyPanel({
   isWsl,
+  takeoverEnabled,
+  takeoverPending,
+  onTakeoverChange,
   proxyHealth,
   origin,
   projected,
@@ -317,25 +338,29 @@ function ProxyPanel({
   const { t } = useTranslation();
   const endpoint = origin ?? proxyHealth?.endpoint;
 
+  const statusKey = takeoverEnabled
+    ? projected
+      ? "settings.piRuntime.takeoverOn"
+      : "settings.piRuntime.takeoverPending"
+    : proxyRunning
+      ? "settings.piRuntime.takeoverOff"
+      : "settings.piRuntime.proxyStopped";
+
   return (
-    <div className="space-y-1.5 rounded-lg border border-border/60 p-3">
-      <p className="text-sm font-normal leading-snug">
-        {t("settings.piRuntime.useProxy")}
-      </p>
-      <p className="text-xs text-muted-foreground">
-        {t("settings.piRuntime.useProxyDescription")}
-      </p>
-      {projected ? (
-        <p className="text-xs text-muted-foreground">
-          {t("settings.piRuntime.projected")}
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          {proxyRunning
-            ? t("settings.piRuntime.proxyOff")
-            : t("settings.piRuntime.proxyStopped")}
-        </p>
-      )}
+    <div className="space-y-3 rounded-lg border border-border/60 p-3">
+      <ToggleRow
+        icon={
+          <Radio
+            className={`h-4 w-4 ${takeoverEnabled ? "text-emerald-500" : "text-muted-foreground"}`}
+          />
+        }
+        title={t("settings.piRuntime.takeover")}
+        description={t("settings.piRuntime.takeoverDescription")}
+        checked={takeoverEnabled}
+        onCheckedChange={onTakeoverChange}
+        disabled={takeoverPending}
+      />
+      <p className="text-xs text-muted-foreground">{t(statusKey)}</p>
       {endpoint && (
         <p className="font-mono text-xs text-muted-foreground" title={endpoint}>
           {t("settings.piRuntime.resolvedEndpoint", { endpoint })}

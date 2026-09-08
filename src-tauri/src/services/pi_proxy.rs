@@ -184,6 +184,7 @@ pub fn sync_live_providers(db: &Database, origin: Option<&str>) -> Result<usize,
         }
         changed += 1;
     }
+    sync_models_mirror();
     if changed > 0 {
         log::info!(
             "[PiProxy] {} Pi provider baseUrl(s) {}",
@@ -196,6 +197,10 @@ pub fn sync_live_providers(db: &Database, origin: Option<&str>) -> Result<usize,
         );
     }
     Ok(changed)
+}
+
+fn sync_models_mirror() {
+    crate::pi_runtime::files::sync_canonical_to_mirror(crate::pi_runtime::files::PiFile::Models);
 }
 
 /// Project after a proxy start only when Pi takeover is already enabled.
@@ -213,9 +218,14 @@ pub fn sync_after_proxy_start(db: &Database, local_proxy_port: u16) {
 /// Restore real upstream URLs when the local proxy stops so Pi can still
 /// reach providers directly.
 pub fn restore_after_proxy_stop(db: &Database) {
-    if let Err(error) = sync_live_providers(db, None) {
+    if let Err(error) = restore_live_providers(db) {
         log::warn!("[PiProxy] failed to restore Pi models.json after proxy stop: {error}");
     }
+}
+
+/// Restore upstream URLs and keep the top-level `models.json` mirror in sync.
+pub fn restore_live_providers(db: &Database) -> Result<usize, AppError> {
+    sync_live_providers(db, None)
 }
 
 /// Rewrite live `models.json` to match the current takeover + proxy state.
@@ -350,6 +360,16 @@ mod tests {
             .expect("read live")
             .expect("present");
         assert_eq!(restored["baseUrl"], "https://api.example.com/v1");
+
+        let agent_path = crate::pi_config::get_pi_models_path().expect("agent");
+        let top_path = crate::pi_config::get_pi_top_level_path("models.json")
+            .expect("top path")
+            .expect("top-level mirror");
+        assert_eq!(
+            std::fs::read_to_string(&agent_path).expect("agent bytes"),
+            std::fs::read_to_string(&top_path).expect("top bytes"),
+            "project/restore must keep ~/.pi/models.json identical to agent/models.json"
+        );
     }
 
     #[test]
@@ -580,6 +600,15 @@ mod tests {
             .await
             .expect("disable Pi takeover");
         assert_eq!(live_base_url(), "https://api.example.com/v1");
+        let agent_path = crate::pi_config::get_pi_models_path().expect("agent");
+        let top_path = crate::pi_config::get_pi_top_level_path("models.json")
+            .expect("top path")
+            .expect("mirror");
+        assert_eq!(
+            std::fs::read_to_string(&agent_path).expect("agent"),
+            std::fs::read_to_string(&top_path).expect("top"),
+            "disabling takeover must restore both models.json files"
+        );
     }
 
     #[tokio::test]
