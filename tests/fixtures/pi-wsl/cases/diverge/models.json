@@ -1,0 +1,10 @@
+{
+  "providers": {
+    "stale-proxy": {
+      "name": "Leftover after takeover restore",
+      "baseUrl": "http://127.0.0.1:15721/pi/stale-proxy/v1",
+      "apiKey": "test-key-not-secret",
+      "api": "openai-completions"
+    }
+  }
+}

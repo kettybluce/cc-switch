@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"sess-parent-abc123","timestamp":"2026-03-14T10:32:00.000Z","cwd":"/home/tfdx8045/code/agent"}
+{"type":"model_change","id":"mc-1","parentId":null,"timestamp":"2026-03-14T10:32:01.000Z","provider":"cc-switch-harness","model":"gpt-4.1-mini"}
+{"type":"message","id":"u1","parentId":"mc-1","timestamp":"2026-03-14T10:32:02.000Z","message":{"role":"user","content":[{"type":"text","text":"Fix the WSL session scanner"}],"timestamp":1710412322000}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-03-14T10:32:08.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Looking at the nested session layout."}],"provider":"cc-switch-harness","model":"gpt-4.1-mini","responseId":"msg_a1","timestamp":1710412328000,"usage":{"input":1000000,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":1000000,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop"}}

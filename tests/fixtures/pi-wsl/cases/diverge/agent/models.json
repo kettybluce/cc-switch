@@ -1,0 +1,22 @@
+{
+  "providers": {
+    "cc-switch-harness": {
+      "name": "Harness OpenAI",
+      "baseUrl": "https://api.example.com/v1",
+      "apiKey": "test-key-not-secret",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "gpt-4.1-mini",
+          "name": "GPT 4.1 Mini",
+          "cost": {
+            "input": 0.4,
+            "output": 1.6,
+            "cacheRead": 0.1,
+            "cacheWrite": 0.5
+          }
+        }
+      ]
+    }
+  }
+}

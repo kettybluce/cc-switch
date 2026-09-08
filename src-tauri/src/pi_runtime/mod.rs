@@ -22,6 +22,8 @@ pub mod proxy;
 pub mod rewrite;
 pub mod sessions;
 pub mod wsl;
+#[cfg(test)]
+mod wsl_linux_harness;
 
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
