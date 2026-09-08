@@ -434,6 +434,11 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi_config_dir: Option<String>,
 
+    // ===== Pi 运行时（设备级）=====
+    /// 选择 Pi 运行在本机还是 WSL 发行版中。缺省即本机运行时。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_runtime: Option<crate::pi_runtime::PiRuntimeSettings>,
+
     // ===== 当前供应商 ID（设备级）=====
     /// 当前 Claude 供应商 ID（本地存储，优先于数据库 is_current）
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -550,6 +555,7 @@ impl Default for AppSettings {
             openclaw_config_dir: None,
             hermes_config_dir: None,
             pi_config_dir: None,
+            pi_runtime: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
@@ -970,6 +976,27 @@ pub fn get_pi_override_dir() -> Option<PathBuf> {
         .pi_config_dir
         .as_ref()
         .map(|path| resolve_override_path(path))
+}
+
+/// Device-level Pi runtime selection.
+///
+/// Missing settings mean the local runtime, which is what every installation
+/// predating the WSL runtime has.
+pub fn get_pi_runtime_settings() -> crate::pi_runtime::PiRuntimeSettings {
+    settings_store()
+        .read()
+        .ok()
+        .and_then(|settings| settings.pi_runtime.clone())
+        .unwrap_or_default()
+}
+
+/// Persist the Pi runtime selection and drop the memoized resolution.
+pub fn set_pi_runtime_settings(
+    runtime: crate::pi_runtime::PiRuntimeSettings,
+) -> Result<(), AppError> {
+    mutate_settings(|settings| settings.pi_runtime = Some(runtime))?;
+    crate::pi_runtime::invalidate_target_cache();
+    Ok(())
 }
 
 pub fn preserve_codex_official_auth_on_switch() -> bool {

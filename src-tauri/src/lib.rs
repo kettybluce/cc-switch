@@ -26,6 +26,7 @@ mod openclaw_config;
 mod opencode_config;
 mod panic_hook;
 mod pi_config;
+mod pi_runtime;
 mod prompt;
 mod prompt_files;
 mod provider;

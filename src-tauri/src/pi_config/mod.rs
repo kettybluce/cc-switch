@@ -3,19 +3,17 @@
 //! Pi owns account login and the active provider/model in `settings.json`.
 //! CC Switch only manages explicit provider entries in `models.json`.
 
-use crate::config::{atomic_write_private, get_home_dir};
+use crate::config::get_home_dir;
 use crate::error::AppError;
+use crate::pi_runtime::files::PiFile;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 const MAX_PI_FILE_BYTES: u64 = 1024 * 1024;
-const MISSING_MODELS_REVISION: &str = "missing";
+const MISSING_MODELS_REVISION: &str = crate::pi_runtime::files::MISSING_REVISION;
 static MODELS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 #[cfg(test)]
 static TEST_AGENT_DIR: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
@@ -296,42 +294,28 @@ fn read_models_document(path: &Path) -> Result<Value, AppError> {
 }
 
 fn read_models_document_with_revision(path: &Path) -> Result<(Value, String), AppError> {
-    if !path.exists() {
+    let read = crate::pi_runtime::files::read(PiFile::Models, MAX_PI_FILE_BYTES)?;
+    let Some(bytes) = read.bytes else {
         return Ok((
             Value::Object(Map::new()),
             MISSING_MODELS_REVISION.to_string(),
         ));
-    }
-    let bytes = read_file_limited(path, "Pi models")?;
-    let revision = revision(&bytes);
+    };
     let document = parse_json5_value(path, "Pi models", bytes)?;
-    Ok((document, revision))
+    Ok((document, read.revision))
 }
 
 fn read_json5_value(path: &Path, label: &str) -> Result<Value, AppError> {
-    parse_json5_value(path, label, read_file_limited(path, label)?)
-}
-
-fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>, AppError> {
-    let file = fs::File::open(path).map_err(|error| AppError::io(path, error))?;
-    let metadata = file.metadata().map_err(|error| AppError::io(path, error))?;
-    if metadata.len() > MAX_PI_FILE_BYTES {
-        return Err(AppError::InvalidInput(format!(
-            "{label} file exceeds the 1 MiB limit: {}",
-            path.display()
-        )));
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_PI_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| AppError::io(path, error))?;
-    if bytes.len() as u64 > MAX_PI_FILE_BYTES {
-        return Err(AppError::InvalidInput(format!(
-            "{label} file exceeds the 1 MiB limit: {}",
-            path.display()
-        )));
-    }
-    Ok(bytes)
+    let file = if label == "Pi settings" {
+        PiFile::Settings
+    } else {
+        PiFile::Models
+    };
+    let read = crate::pi_runtime::files::read(file, MAX_PI_FILE_BYTES)?;
+    let bytes = read
+        .bytes
+        .ok_or_else(|| AppError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound)))?;
+    parse_json5_value(path, label, bytes)
 }
 
 fn parse_json5_value(path: &Path, label: &str, bytes: Vec<u8>) -> Result<Value, AppError> {
@@ -393,62 +377,17 @@ fn empty_json_object() -> &'static Map<String, Value> {
 }
 
 fn write_models_document(
-    path: &Path,
+    _path: &Path,
     document: &Value,
     expected_revision: &str,
 ) -> Result<(), AppError> {
     let mut bytes =
         serde_json::to_vec_pretty(document).map_err(|source| AppError::JsonSerialize { source })?;
     bytes.push(b'\n');
-    ensure_private_models_parent(path)?;
-    ensure_models_revision(path, expected_revision)?;
-    atomic_write_private(path, &bytes)
-}
-
-fn ensure_models_revision(path: &Path, expected_revision: &str) -> Result<(), AppError> {
-    let actual_revision = match fs::File::open(path) {
-        Ok(_) => revision(&read_file_limited(path, "Pi models")?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            MISSING_MODELS_REVISION.to_string()
-        }
-        Err(error) => return Err(AppError::io(path, error)),
-    };
-    if actual_revision == expected_revision {
-        Ok(())
-    } else {
-        Err(AppError::Conflict(format!(
-            "Pi models.json changed outside CC Switch: {}",
-            path.display()
-        )))
-    }
-}
-
-fn revision(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-fn ensure_private_models_parent(path: &Path) -> Result<(), AppError> {
-    let parent = path.parent().ok_or_else(|| {
-        AppError::Config(format!(
-            "Pi models path has no parent directory: {}",
-            path.display()
-        ))
-    })?;
-    let created = !parent.exists();
-    fs::create_dir_all(parent).map_err(|source| AppError::io(parent, source))?;
-
-    #[cfg(not(unix))]
-    let _ = created;
-
-    #[cfg(unix)]
-    if created {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-            .map_err(|source| AppError::io(parent, source))?;
-    }
-
+    crate::pi_runtime::files::write(PiFile::Models, &bytes, expected_revision)?;
     Ok(())
 }
+
 
 fn optional_string(
     object: &Map<String, Value>,
@@ -517,6 +456,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use serial_test::serial;
+    use std::fs;
 
     fn provider() -> Value {
         json!({
@@ -619,7 +559,8 @@ mod tests {
     fn stale_models_revision_does_not_overwrite_an_external_edit() {
         let _agent = test_support::TestAgentDir::new();
         let path = get_pi_models_path().expect("models path");
-        ensure_private_models_parent(&path).expect("create agent directory");
+        fs::create_dir_all(path.parent().expect("agent directory"))
+            .expect("create agent directory");
         fs::write(&path, r#"{"providers":{"external":{"models":[]}}}"#)
             .expect("write initial models");
         let (_, stale_revision) =
