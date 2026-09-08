@@ -120,6 +120,14 @@ pub fn session_discovery() -> PiSessionDiscovery {
 }
 
 fn resolve_session_root() -> SessionRootResolution {
+    // A WSL runtime keeps Pi's sessions inside the distribution. They are
+    // mirrored into a local cache first so the scanner, parser and usage
+    // importer below stay exactly as they are for local Pi.
+    let target = crate::pi_runtime::target();
+    if target.is_wsl() {
+        return resolve_wsl_session_root(&target);
+    }
+
     let home = crate::config::get_home_dir();
     if let Some(raw) = std::env::var_os("PI_CODING_AGENT_SESSION_DIR") {
         if !raw.is_empty() {
@@ -152,6 +160,32 @@ fn resolve_session_root() -> SessionRootResolution {
         Err(error) => SessionRootResolution::Unavailable {
             reason: error.to_string(),
         },
+    }
+}
+
+fn resolve_wsl_session_root(
+    target: &crate::pi_runtime::PiRuntimeTarget,
+) -> SessionRootResolution {
+    let Some(root) = crate::pi_runtime::sessions::local_sessions_root(target) else {
+        return SessionRootResolution::Unavailable {
+            reason: "Pi WSL runtime has no session cache location".to_string(),
+        };
+    };
+
+    crate::pi_runtime::sessions::sync_if_stale(target);
+
+    // An empty cache is a valid state before Pi has written its first session.
+    if let Err(error) = fs::create_dir_all(&root) {
+        return SessionRootResolution::Unavailable {
+            reason: format!(
+                "Pi session cache is unavailable ({}): {error}",
+                root.display()
+            ),
+        };
+    }
+    SessionRootResolution::Available {
+        root,
+        layout: SessionLayout::ProjectDirectories,
     }
 }
 
@@ -286,6 +320,17 @@ fn delete_session_with_layout(
             tree.header.id
         ));
     }
+
+    // Deleting only the mirror would let the next refresh bring the session
+    // straight back, so a WSL session is removed at the source.
+    let target = crate::pi_runtime::target();
+    if target.is_wsl() {
+        let deleted = crate::pi_runtime::sessions::delete(&target, &source)
+            .map_err(|error| error.to_string())?;
+        crate::pi_runtime::sessions::invalidate_sync_throttle();
+        return Ok(deleted);
+    }
+
     fs::remove_file(&source)
         .map_err(|error| format!("Failed to delete Pi session {}: {error}", source.display()))?;
     Ok(true)
@@ -350,11 +395,24 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         created_at: header.timestamp,
         last_active_at: summary.last_active_at.or(header.timestamp),
         source_path: Some(source_path.clone()),
-        resume_command: Some(format!(
-            "pi --session {}",
-            crate::session_manager::terminal::shell_escape(&source_path)
-        )),
+        resume_command: Some(resume_command(&source)),
     })
+}
+
+/// Resuming has to hand Pi the path it knows about. For a WSL runtime that is
+/// the path inside the distribution, not the mirrored copy on Windows.
+fn resume_command(source: &Path) -> String {
+    let target = crate::pi_runtime::target();
+    if let (Some(distro), Some(linux_path)) = (
+        target.distro(),
+        crate::pi_runtime::sessions::wsl_source_path(&target, source),
+    ) {
+        return crate::pi_runtime::sessions::wsl_resume_command(distro, &linux_path);
+    }
+    format!(
+        "pi --session {}",
+        crate::session_manager::terminal::shell_escape(&source.to_string_lossy())
+    )
 }
 
 fn read_tree(path: &Path) -> Result<SessionTree, String> {
@@ -765,6 +823,152 @@ fn push_jsonl_file(entry: &fs::DirEntry, output: &mut Vec<PathBuf>, enforce_size
                 .is_ok_and(|metadata| metadata.len() <= MAX_SESSION_BYTES))
     {
         output.push(path);
+    }
+}
+
+#[cfg(test)]
+mod wsl_tests {
+    use super::*;
+    use crate::pi_runtime::test_support::TestTarget;
+    use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use serial_test::serial;
+    use std::sync::Arc;
+
+    /// A WSL runtime whose distribution filesystem is a temp directory, plus a
+    /// temp CC Switch home so the session mirror is isolated.
+    struct WslSessions {
+        _wsl_home: tempfile::TempDir,
+        _cc_home: tempfile::TempDir,
+        _runner: RunnerGuard,
+        _target: TestTarget,
+        _previous_home: Option<String>,
+        sessions_dir: PathBuf,
+    }
+
+    impl WslSessions {
+        fn new() -> Self {
+            let wsl_home = tempfile::tempdir().expect("tempdir");
+            let cc_home = tempfile::tempdir().expect("tempdir");
+            let previous_home = std::env::var("CC_SWITCH_TEST_HOME").ok();
+            std::env::set_var("CC_SWITCH_TEST_HOME", cc_home.path());
+
+            let sessions_dir = wsl_home.path().join(".pi/agent/sessions/work");
+            fs::create_dir_all(&sessions_dir).expect("create WSL sessions");
+
+            let runner = RunnerGuard::install(Arc::new(LocalBashRunner::new(
+                "Ubuntu-22.04",
+                wsl_home.path().to_path_buf(),
+            )));
+            let target = TestTarget::wsl("Ubuntu-22.04", &wsl_home.path().to_string_lossy());
+            crate::pi_runtime::sessions::invalidate_sync_throttle();
+
+            Self {
+                _wsl_home: wsl_home,
+                _cc_home: cc_home,
+                _runner: runner,
+                _target: target,
+                _previous_home: previous_home,
+                sessions_dir,
+            }
+        }
+    }
+
+    impl Drop for WslSessions {
+        fn drop(&mut self) {
+            crate::pi_runtime::sessions::invalidate_sync_throttle();
+            match self._previous_home.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    const SESSION: &str = "{\"type\":\"session\",\"version\":3,\"id\":\"wsl-session-1\",\"cwd\":\"/home/tfdx8045/workspace/agent\"}\n\
+{\"type\":\"message\",\"id\":\"m1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"Fix authentication bug\",\"timestamp\":\"2026-09-08T10:32:00Z\"}}\n\
+{\"type\":\"message\",\"id\":\"m2\",\"parentId\":\"m1\",\"message\":{\"role\":\"assistant\",\"content\":\"Done\",\"timestamp\":\"2026-09-08T10:50:32Z\"}}\n";
+
+    #[test]
+    #[serial]
+    fn wsl_sessions_appear_in_the_session_list() {
+        let fixture = WslSessions::new();
+        fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
+
+        let sessions = scan_sessions();
+
+        assert_eq!(sessions.len(), 1, "the WSL session should be discovered");
+        let session = &sessions[0];
+        assert_eq!(session.session_id, "wsl-session-1");
+        assert_eq!(session.title.as_deref(), Some("Fix authentication bug"));
+        assert_eq!(
+            session.project_dir.as_deref(),
+            Some("/home/tfdx8045/workspace/agent")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn resuming_a_wsl_session_targets_the_path_inside_the_distribution() {
+        let fixture = WslSessions::new();
+        fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
+
+        let sessions = scan_sessions();
+        let resume = sessions[0]
+            .resume_command
+            .as_deref()
+            .expect("a resume command");
+
+        assert!(resume.starts_with("wsl.exe -d Ubuntu-22.04 --"), "{resume}");
+        assert!(resume.contains(".pi/agent/sessions/work/abc.jsonl"), "{resume}");
+        // The mirrored copy must never be what Pi is pointed at.
+        assert!(!resume.contains("pi-wsl-sessions"), "{resume}");
+    }
+
+    #[test]
+    #[serial]
+    fn messages_load_from_the_mirrored_copy() {
+        let fixture = WslSessions::new();
+        fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
+
+        let sessions = scan_sessions();
+        let source = sessions[0].source_path.as_deref().expect("a source path");
+
+        let messages = load_messages(Path::new(source)).expect("load messages");
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Fix authentication bug", "Done"]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn deleting_a_wsl_session_removes_it_at_the_source() {
+        let fixture = WslSessions::new();
+        let origin = fixture.sessions_dir.join("abc.jsonl");
+        fs::write(&origin, SESSION).expect("write WSL session");
+
+        let sessions = scan_sessions();
+        let source = sessions[0].source_path.as_deref().expect("a source path");
+        let roots = session_roots();
+
+        let deleted = crate::session_manager::delete_session("pi", "wsl-session-1", source)
+            .expect("delete the session");
+
+        assert!(deleted);
+        assert!(!origin.exists(), "the session inside WSL should be gone");
+        assert!(!roots.is_empty());
+        assert!(scan_sessions().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn an_empty_wsl_session_directory_is_not_an_error() {
+        let _fixture = WslSessions::new();
+
+        assert!(scan_sessions().is_empty());
+        assert!(matches!(session_discovery(), PiSessionDiscovery::Available));
     }
 }
 

@@ -18,6 +18,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +111,57 @@ pub struct SessionSyncOutcome {
     pub bytes: u64,
     pub truncated: bool,
     pub errors: Vec<String>,
+}
+
+/// Session browsing, message loading and usage import all resolve the session
+/// root, so an unthrottled mirror would run several times per refresh and keep
+/// the WSL VM busy. One refresh per interval is enough to notice a session that
+/// Pi is actively appending to (design document §39, §74).
+const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+static LAST_SYNC: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Mirror WSL sessions unless a refresh already ran within the throttle
+/// window. Failures are logged rather than propagated: a stale mirror still
+/// renders, whereas a hard error would empty the session list.
+pub fn sync_if_stale(target: &PiRuntimeTarget) {
+    if !target.is_wsl() {
+        return;
+    }
+    {
+        let mut last = LAST_SYNC.lock().expect("lock the Pi session sync clock");
+        if last.is_some_and(|instant| instant.elapsed() < MIN_SYNC_INTERVAL) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    if let Err(error) = sync(target) {
+        log::warn!("[PiSession] mirroring WSL sessions failed: {error}");
+    }
+}
+
+/// Force the next [`sync_if_stale`] to do real work, for an explicit refresh.
+pub fn invalidate_sync_throttle() {
+    *LAST_SYNC.lock().expect("lock the Pi session sync clock") = None;
+}
+
+/// Command that resumes a mirrored session inside WSL.
+///
+/// Proxy variables are deliberately absent: a proxy URL can carry
+/// credentials, and a resume command is displayed, copied and written to shell
+/// history (design document §41).
+pub fn wsl_resume_command(distro: &str, linux_path: &str) -> String {
+    format!(
+        "wsl.exe -d {distro} -- bash -lic {}",
+        shell_single_quote(&format!(
+            "pi --session {}",
+            shell_single_quote(linux_path)
+        ))
+    )
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// Root of the local mirror for `distro`.
