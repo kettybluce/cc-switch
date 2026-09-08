@@ -791,7 +791,7 @@
       "syncSessions": "セッションを更新",
       "testProxy": "プロキシを確認",
       "useProxy": "Pi を CC Switch のローカルプロキシ経由にする",
-      "useProxyDescription": "有効にすると、管理中の各プロバイダーの models.json の baseUrl をローカルプロキシに書き換えます。実際の上流 URL は CC Switch に残します。ディストリビューション全体のネットワーク設定は変更しません。",
+      "useProxyDescription": "有効にすると、Pi が管理中の各プロバイダーの models.json の baseUrl をローカルプロキシに書き換えます。実際の上流 URL は CC Switch に残します。ディストリビューション全体のネットワーク設定は変更しません。",
       "resolvedEndpoint": "エンドポイント: {{endpoint}}",
       "proxyHealthOk": "プロキシに到達可能: {{host}}（{{strategy}}）",
       "localLoopback": "このマシン",

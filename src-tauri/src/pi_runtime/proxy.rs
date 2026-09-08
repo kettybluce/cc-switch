@@ -67,9 +67,14 @@ const FORWARD_PROBE_TARGET: &str = "https://example.com";
 
 /// Proxy protocols CC Switch can hand to Pi.
 ///
+/// Option B does not inject process-level proxy env vars. The non-HTTP
+/// variants and the parse/env helpers below are kept for an explicit
+/// fallback that is off by default.
+///
 /// Keeping these distinct is what prevents the `UnsupportedProxyProtocol`
 /// class of failure: a SOCKS proxy written as `HTTP_PROXY=http://…` fails at
 /// request time, far away from the setting that caused it (§47).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProxyProtocol {
@@ -79,6 +84,7 @@ pub enum ProxyProtocol {
     Socks5h,
 }
 
+#[allow(dead_code)]
 impl ProxyProtocol {
     pub fn scheme(self) -> &'static str {
         match self {
@@ -171,6 +177,7 @@ impl ProxyHealth {
 }
 
 /// A proxy endpoint Pi can be pointed at.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyEndpoint {
@@ -182,6 +189,7 @@ pub struct ProxyEndpoint {
     pub userinfo: Option<String>,
 }
 
+#[allow(dead_code)]
 impl ProxyEndpoint {
     pub fn url(&self) -> String {
         match &self.userinfo {

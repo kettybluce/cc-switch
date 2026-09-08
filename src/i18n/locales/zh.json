@@ -791,7 +791,7 @@
       "syncSessions": "刷新会话",
       "testProxy": "检测代理",
       "useProxy": "让 Pi 经 CC Switch 本地代理访问供应商",
-      "useProxyDescription": "开启后，把已管理供应商在 models.json 中的 baseUrl 改写为本地代理地址；真实上游地址只保存在 CC Switch。不会修改发行版的全局网络设置。",
+      "useProxyDescription": "开启后，把 Pi 已管理供应商在 models.json 中的 baseUrl 改写为本地代理地址；真实上游地址只保存在 CC Switch。不会修改发行版的全局网络设置。",
       "resolvedEndpoint": "端点：{{endpoint}}",
       "proxyHealthOk": "代理可达：{{host}}（{{strategy}}）",
       "localLoopback": "本机回环",

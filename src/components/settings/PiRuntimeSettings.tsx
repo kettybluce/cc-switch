@@ -246,11 +246,7 @@ interface WslRuntimeDetailsProps {
   onSync: () => void;
 }
 
-function WslRuntimeDetails({
-  probe,
-  syncing,
-  onSync,
-}: WslRuntimeDetailsProps) {
+function WslRuntimeDetails({ probe, syncing, onSync }: WslRuntimeDetailsProps) {
   const { t } = useTranslation();
 
   return (
@@ -347,9 +343,7 @@ function ProxyPanel({
             ? t("settings.piRuntime.proxyHealthOk", {
                 host: proxyHealth.host ?? "",
                 strategy: proxyHealth.strategy
-                  ? t(
-                      `settings.piRuntime.strategy.${proxyHealth.strategy}`,
-                    )
+                  ? t(`settings.piRuntime.strategy.${proxyHealth.strategy}`)
                   : t("settings.piRuntime.localLoopback"),
               })
             : (proxyHealth.error ?? t("settings.piRuntime.noRoute"))}

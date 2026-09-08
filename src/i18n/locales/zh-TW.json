@@ -791,7 +791,7 @@
       "syncSessions": "重新整理工作階段",
       "testProxy": "檢測代理",
       "useProxy": "讓 Pi 經 CC Switch 本機代理存取供應商",
-      "useProxyDescription": "開啟後，把已管理供應商在 models.json 中的 baseUrl 改寫為本機代理位址；真實上游位址只保存在 CC Switch。不會修改發行版的全域網路設定。",
+      "useProxyDescription": "開啟後，把 Pi 已管理供應商在 models.json 中的 baseUrl 改寫為本機代理位址；真實上游位址只保存在 CC Switch。不會修改發行版的全域網路設定。",
       "resolvedEndpoint": "端點：{{endpoint}}",
       "proxyHealthOk": "代理可達：{{host}}（{{strategy}}）",
       "localLoopback": "本機回環",
