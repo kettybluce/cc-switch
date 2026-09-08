@@ -117,12 +117,6 @@ pub struct PiFileRead {
     pub location: PiFileLocation,
 }
 
-impl PiFileRead {
-    pub fn exists(&self) -> bool {
-        self.bytes.is_some()
-    }
-}
-
 /// SHA-256 digest used for optimistic concurrency on Pi's native files.
 pub fn revision(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -466,7 +460,7 @@ mod tests {
         let _fixture = wsl_fixture();
 
         let read = read(PiFile::Models, LIMIT).expect("read models");
-        assert!(!read.exists());
+        assert!(!read.bytes.is_some());
         assert_eq!(read.revision, MISSING_REVISION);
     }
 
@@ -554,8 +548,14 @@ mod tests {
         write(PiFile::Settings, b"{\"defaultModel\":\"x\"}\n", MISSING_REVISION)
             .expect("write settings");
 
-        assert!(!read(PiFile::Models, LIMIT).expect("read models").exists());
-        assert!(read(PiFile::Settings, LIMIT).expect("read settings").exists());
+        assert!(read(PiFile::Models, LIMIT)
+            .expect("read models")
+            .bytes
+            .is_none());
+        assert!(read(PiFile::Settings, LIMIT)
+            .expect("read settings")
+            .bytes
+            .is_some());
     }
 
     #[test]
@@ -573,7 +573,7 @@ mod tests {
         let _agent = crate::pi_config::test_support::TestAgentDir::new();
         let _target = TestTarget::install(PiRuntimeTarget::Local);
 
-        assert!(!read(PiFile::Models, LIMIT).expect("read models").exists());
+        assert!(!read(PiFile::Models, LIMIT).expect("read models").bytes.is_some());
         write(PiFile::Models, b"{\"providers\":{}}\n", MISSING_REVISION)
             .expect("write models");
 

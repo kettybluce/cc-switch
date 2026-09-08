@@ -21,7 +21,9 @@
 use std::fmt;
 use std::io::Write;
 use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use super::error::{PiResult, PiRuntimeError};
@@ -89,15 +91,6 @@ impl WslRequest {
         self
     }
 
-    pub fn args<I, S>(mut self, values: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.args.extend(values.into_iter().map(Into::into));
-        self
-    }
-
     pub fn stdin(mut self, payload: Vec<u8>) -> Self {
         self.stdin = Some(payload);
         self
@@ -122,6 +115,10 @@ impl WslExecResult {
     }
 
     /// Script stdout is produced by Linux tools, so it is UTF-8.
+    ///
+    /// Production code reads [`WslExecResult::payload`] instead; this exists
+    /// so tests can assert on what a login shell printed before our output.
+    #[cfg(test)]
     pub fn stdout_lossy(&self) -> String {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
@@ -229,11 +226,15 @@ pub fn parse_distro_list(text: &str) -> Vec<String> {
     names
 }
 
+/// Test-only substitute for `wsl.exe`, so release builds never pay for the
+/// lookup and cannot have the runner swapped at runtime.
+#[cfg(test)]
 static RUNNER_OVERRIDE: LazyLock<Mutex<Option<Arc<dyn WslRunner>>>> =
     LazyLock::new(|| Mutex::new(None));
 
 /// Return the process-wide runner, honouring a test override.
 pub fn runner() -> Arc<dyn WslRunner> {
+    #[cfg(test)]
     if let Some(runner) = RUNNER_OVERRIDE
         .lock()
         .expect("lock WSL runner override")
@@ -246,9 +247,8 @@ pub fn runner() -> Arc<dyn WslRunner> {
 
 /// Install a runner for the current process. Returns the previous override so
 /// callers can restore it.
-pub fn set_runner_override(
-    runner: Option<Arc<dyn WslRunner>>,
-) -> Option<Arc<dyn WslRunner>> {
+#[cfg(test)]
+pub fn set_runner_override(runner: Option<Arc<dyn WslRunner>>) -> Option<Arc<dyn WslRunner>> {
     let mut guard = RUNNER_OVERRIDE.lock().expect("lock WSL runner override");
     std::mem::replace(&mut *guard, runner)
 }

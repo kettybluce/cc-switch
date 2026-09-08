@@ -60,18 +60,6 @@ impl WslPiProbe {
     pub fn pi_installed(&self) -> bool {
         self.pi_path.is_some()
     }
-
-    pub fn models_path(&self) -> String {
-        format!("{}/models.json", self.agent_dir)
-    }
-
-    pub fn settings_path(&self) -> String {
-        format!("{}/settings.json", self.agent_dir)
-    }
-
-    pub fn sessions_path(&self) -> String {
-        format!("{}/sessions", self.agent_dir)
-    }
 }
 
 /// List installed WSL distributions, filtering out the internal Docker images
@@ -228,8 +216,6 @@ mod tests {
 
         assert_eq!(probe.home, "/home/tfdx8045");
         assert_eq!(probe.agent_dir, "/home/tfdx8045/.pi/agent");
-        assert_eq!(probe.models_path(), "/home/tfdx8045/.pi/agent/models.json");
-        assert_eq!(probe.sessions_path(), "/home/tfdx8045/.pi/agent/sessions");
         assert_eq!(probe.pi_version.as_deref(), Some("0.4.1"));
         assert_eq!(probe.session_count, 137);
         assert!(probe.pi_installed());

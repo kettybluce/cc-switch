@@ -278,6 +278,93 @@ pub struct PiProxyPlan {
     pub environment: BTreeMap<String, String>,
 }
 
+/// Build the proxy plan for the Pi process.
+///
+/// `configured` is CC Switch's global outbound proxy URL. A loopback proxy is
+/// rehosted onto whichever address WSL can actually reach, because
+/// `127.0.0.1` inside the distribution is the distribution itself.
+pub fn plan(
+    target: &super::PiRuntimeTarget,
+    enabled: bool,
+    local_proxy_port: u16,
+    configured: Option<&str>,
+) -> PiResult<PiProxyPlan> {
+    let Some(distro) = target.distro() else {
+        return Ok(PiProxyPlan {
+            enabled: false,
+            gateway: ProxyHealth::unreachable(
+                "the proxy plan only applies to the WSL runtime",
+            ),
+            forward_proxy: None,
+            forward_proxy_health: None,
+            environment: BTreeMap::new(),
+        });
+    };
+
+    let gateway = if local_proxy_port == 0 {
+        ProxyHealth::unreachable("the CC Switch local proxy is not running")
+    } else {
+        resolve_gateway(distro, local_proxy_port)?
+    };
+
+    let endpoint = match configured.filter(|url| !url.trim().is_empty()) {
+        Some(url) => Some(rehost_for_wsl(ProxyEndpoint::parse(url)?, &gateway)?),
+        None => None,
+    };
+
+    let environment = match (&endpoint, enabled) {
+        (Some(endpoint), true) => pi_process_env(endpoint),
+        _ => BTreeMap::new(),
+    };
+
+    Ok(PiProxyPlan {
+        enabled: enabled && endpoint.is_some(),
+        gateway,
+        forward_proxy: endpoint.as_ref().map(ProxyEndpoint::display_url),
+        forward_proxy_health: None,
+        environment,
+    })
+}
+
+/// Verify the configured proxy from inside the distribution.
+pub fn verify(
+    target: &super::PiRuntimeTarget,
+    configured: Option<&str>,
+) -> PiResult<ProxyHealth> {
+    let Some(distro) = target.distro() else {
+        return Ok(ProxyHealth::unreachable(
+            "proxy verification only applies to the WSL runtime",
+        ));
+    };
+    let Some(url) = configured.filter(|url| !url.trim().is_empty()) else {
+        return Ok(ProxyHealth::unreachable(
+            "no outbound proxy is configured in CC Switch",
+        ));
+    };
+
+    let endpoint = ProxyEndpoint::parse(url)?;
+    let endpoint = if endpoint.is_loopback() {
+        let gateway = resolve_gateway(distro, endpoint.port)?;
+        rehost_for_wsl(endpoint, &gateway)?
+    } else {
+        endpoint
+    };
+    validate_forward_proxy(distro, &endpoint)
+}
+
+/// A loopback proxy has to be rewritten to the address WSL can route to.
+fn rehost_for_wsl(endpoint: ProxyEndpoint, gateway: &ProxyHealth) -> PiResult<ProxyEndpoint> {
+    if !endpoint.is_loopback() {
+        return Ok(endpoint);
+    }
+    let Some(host) = gateway.host.as_deref() else {
+        return Err(PiRuntimeError::proxy_unreachable(
+            "cannot reach a loopback proxy from WSL: no route to the Windows host was found",
+        ));
+    };
+    Ok(endpoint.rehost(host))
+}
+
 /// Parse the third field of `ip route show default`.
 pub fn parse_default_gateway(output: &str) -> Option<Ipv4Addr> {
     output
@@ -517,41 +604,6 @@ pub fn pi_process_env(endpoint: &ProxyEndpoint) -> BTreeMap<String, String> {
     environment
 }
 
-/// Build the command that launches Pi with the proxy applied to that process
-/// only (design document §46).
-pub fn build_pi_launch_argv(
-    distro: &str,
-    environment: &BTreeMap<String, String>,
-    pi_args: &[String],
-) -> PiResult<Vec<String>> {
-    let mut script = String::from("exec env");
-    let mut args = Vec::new();
-    let mut index = 1;
-
-    for _ in environment.keys() {
-        script.push_str(&format!(" \"${index}\""));
-        index += 1;
-    }
-    script.push_str(" pi");
-    for _ in pi_args {
-        script.push_str(&format!(" \"${index}\""));
-        index += 1;
-    }
-
-    for (key, value) in environment {
-        if key.is_empty() || key.contains('=') || key.chars().any(char::is_whitespace) {
-            return Err(PiRuntimeError::invalid_input(format!(
-                "invalid environment variable name: {key}"
-            )));
-        }
-        args.push(format!("{key}={value}"));
-    }
-    args.extend(pi_args.iter().cloned());
-
-    let request = WslRequest::new(distro, script).args(args).login(true);
-    wsl::build_wsl_argv(&request)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,46 +760,6 @@ mod tests {
         assert!(is_reachable(404));
         assert!(is_reachable(500));
         assert!(!is_reachable(0));
-    }
-
-    #[test]
-    fn the_launch_command_keeps_the_proxy_scoped_to_the_pi_process() {
-        let endpoint = ProxyEndpoint::parse("http://172.30.208.1:7890").expect("parse proxy");
-        let environment = pi_process_env(&endpoint);
-
-        let argv = build_pi_launch_argv(
-            "Ubuntu-22.04",
-            &environment,
-            &["--session".to_string(), "/home/me/s.jsonl".to_string()],
-        )
-        .expect("build launch argv");
-
-        assert_eq!(&argv[..5], &["-d", "Ubuntu-22.04", "--", "bash", "-lc"]);
-        // Values are positional parameters, so no proxy URL is ever spliced
-        // into the script text.
-        assert!(!argv[5].contains("172.30.208.1"));
-        assert!(argv[5].starts_with("exec env "));
-        assert!(argv.contains(&"HTTP_PROXY=http://172.30.208.1:7890".to_string()));
-        assert!(argv.contains(&"/home/me/s.jsonl".to_string()));
-
-        // One placeholder per value, in order: the environment assignments,
-        // then `pi`, then Pi's own arguments.
-        let placeholders = argv[5].matches("\"$").count();
-        let values = &argv[6..];
-        assert_eq!(placeholders, environment.len() + 2);
-        assert_eq!(values.len(), environment.len() + 3);
-        assert!(argv[5].ends_with(&format!(
-            " pi \"${}\" \"${}\"",
-            environment.len() + 1,
-            environment.len() + 2
-        )));
-    }
-
-    #[test]
-    fn the_launch_command_works_without_a_proxy() {
-        let argv = build_pi_launch_argv("Ubuntu-22.04", &BTreeMap::new(), &[])
-            .expect("build launch argv");
-        assert_eq!(argv[5], "exec env pi");
     }
 
     #[test]

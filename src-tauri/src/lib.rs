@@ -1472,6 +1472,13 @@ pub fn run() {
             commands::get_pi_current_state,
             commands::update_pi_provider_usage_script,
             commands::get_pi_session_discovery,
+            // Pi runtime (local / WSL)
+            commands::get_pi_runtime_status,
+            commands::list_pi_wsl_distros,
+            commands::set_pi_runtime,
+            commands::sync_pi_wsl_sessions,
+            commands::get_pi_proxy_plan,
+            commands::test_pi_proxy,
             // Profile management (项目配置方案)
             commands::list_profiles,
             commands::create_profile,

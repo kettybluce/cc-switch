@@ -129,13 +129,6 @@ pub enum PiRuntimeTarget {
 }
 
 impl PiRuntimeTarget {
-    pub fn kind(&self) -> PiRuntimeKind {
-        match self {
-            Self::Local => PiRuntimeKind::Local,
-            Self::Wsl { .. } => PiRuntimeKind::Wsl,
-        }
-    }
-
     pub fn is_wsl(&self) -> bool {
         matches!(self, Self::Wsl { .. })
     }
@@ -153,16 +146,6 @@ impl PiRuntimeTarget {
             Self::Local => None,
             Self::Wsl { agent_dir, .. } => Some(agent_dir),
         }
-    }
-
-    pub fn models_path(&self) -> Option<String> {
-        self.agent_dir()
-            .map(|dir| format!("{dir}/models.json"))
-    }
-
-    pub fn settings_path(&self) -> Option<String> {
-        self.agent_dir()
-            .map(|dir| format!("{dir}/settings.json"))
     }
 
     pub fn sessions_path(&self) -> Option<String> {
@@ -513,14 +496,12 @@ mod tests {
         };
 
         assert_eq!(
-            target.models_path().as_deref(),
-            Some("/home/tfdx8045/.pi/agent/models.json")
-        );
-        assert_eq!(
             target.sessions_path().as_deref(),
             Some("/home/tfdx8045/.pi/agent/sessions")
         );
-        assert_eq!(PiRuntimeTarget::Local.models_path(), None);
+        assert_eq!(target.distro(), Some("Ubuntu-22.04"));
+        assert_eq!(PiRuntimeTarget::Local.sessions_path(), None);
+        assert_eq!(PiRuntimeTarget::Local.distro(), None);
     }
 
     #[test]
