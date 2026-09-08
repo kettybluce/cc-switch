@@ -186,4 +186,13 @@ describe("Pi WSL Linux harness fixtures", () => {
     const onlyAgent = read("cases/only-agent/agent/models.json");
     expect(onlyAgent.providers["cc-switch-harness"]).toBeTruthy();
   });
+
+  it("never ships UNC wsl.localhost paths in harness fixtures", () => {
+    const raw = readFileSync(
+      path.join(FIXTURES, "cases/identical/agent/models.json"),
+      "utf8",
+    );
+    expect(raw).not.toMatch(/\\\\wsl(\.localhost|\$)/);
+    expect(raw).not.toContain("wsl.localhost");
+  });
 });

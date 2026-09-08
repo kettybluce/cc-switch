@@ -1277,8 +1277,11 @@ impl LiveSnapshot {
 pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
     match app_type {
         AppType::Claude => {
-            let path = get_claude_settings_path();
             let settings = sanitize_claude_settings_for_live(&provider.settings_config);
+            if crate::wsl_cli::write_claude_settings(&settings)? {
+                return Ok(());
+            }
+            let path = get_claude_settings_path();
             write_json_file(&path, &settings)?;
         }
         AppType::ClaudeDesktop => {

@@ -8,7 +8,6 @@
 //! ~/.claude/projects/*/*.jsonl → 增量解析 → 去重 → 费用计算 → proxy_request_logs 表
 //! ```
 
-use crate::config::get_claude_config_dir;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
@@ -164,8 +163,40 @@ pub struct DataSourceSummary {
     pub total_cost_usd: String,
 }
 
-/// 从 JSONL 中解析出的 assistant 消息使用数据
-#[derive(Debug)]
+fn session_model_name(message: &serde_json::Value) -> String {
+    message
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn normalize_cost_state_model(key: &str) -> Option<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_suffix = trimmed
+        .trim_end_matches("[1m]")
+        .trim_end_matches("[1M]")
+        .trim();
+    (!without_suffix.is_empty()).then(|| without_suffix.to_string())
+}
+
+fn cost_state_model_hints(value: &serde_json::Value) -> Option<Vec<String>> {
+    if value.get("type").and_then(|value| value.as_str()) != Some("cost-state") {
+        return None;
+    }
+    let usage = value.get("modelUsage").and_then(|value| value.as_object())?;
+    let hints: Vec<String> = usage
+        .keys()
+        .filter_map(|key| normalize_cost_state_model(key))
+        .collect();
+    (!hints.is_empty()).then_some(hints)
+}
+
 struct ParsedAssistantUsage {
     message_id: String,
     model: String,
@@ -180,7 +211,17 @@ struct ParsedAssistantUsage {
 
 /// 同步 Claude Code 会话日志到使用统计数据库
 pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppError> {
-    let projects_dir = get_claude_config_dir().join("projects");
+    let Some(projects_dir) = crate::wsl_cli::claude_projects_dir() else {
+        log::info!("[SESSION-SYNC] skipping Claude usage scan: WSL UNC path is not walked");
+        return Ok(SessionSyncResult {
+            imported: 0,
+            skipped: 0,
+            files_scanned: 0,
+            suspected_duplicates: 0,
+            deferred_files: 0,
+            errors: vec![],
+        });
+    };
     if !projects_dir.exists() {
         return Ok(SessionSyncResult {
             imported: 0,
@@ -502,6 +543,7 @@ fn sync_single_file(
     let mut read_error: Option<String> = None;
     let mut messages: HashMap<String, ParsedAssistantUsage> = HashMap::new();
     let mut current_session_id: Option<String> = None;
+    let mut model_hints: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         buf.clear();
@@ -539,6 +581,12 @@ fn sync_single_file(
             }
         }
 
+        if let Some(model) = cost_state_model_hints(&value) {
+            for name in model {
+                model_hints.insert(name);
+            }
+        }
+
         // 只处理 assistant 类型的消息
         if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
             continue;
@@ -561,11 +609,7 @@ fn sync_single_file(
 
         let parsed = ParsedAssistantUsage {
             message_id: msg_id.clone(),
-            model: message
-                .get("model")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string(),
+            model: session_model_name(message),
             input_tokens: usage
                 .get("input_tokens")
                 .and_then(|v| v.as_u64())
@@ -610,8 +654,22 @@ fn sync_single_file(
             }
         };
 
+        if parsed.model != "unknown" {
+            model_hints.insert(parsed.model.clone());
+        }
+
         if should_replace {
             messages.insert(msg_id, parsed);
+        }
+    }
+
+    if model_hints.len() == 1 {
+        if let Some(recovered) = model_hints.iter().next().cloned() {
+            for msg in messages.values_mut() {
+                if msg.model == "unknown" {
+                    msg.model = recovered.clone();
+                }
+            }
         }
     }
 
@@ -1543,5 +1601,46 @@ mod tests {
 
         fs::remove_dir_all(&tmp).ok();
         Ok(())
+    }
+
+    #[test]
+    fn test_sync_recovers_model_from_empty_gateway_echo() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = std::env::temp_dir().join(format!("cc-switch-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("empty-model.jsonl");
+        let cost_state = r#"{"type":"cost-state","modelUsage":{"glm-5.3[1m]":{"inputTokens":10}}}"#;
+        let empty_model = r#"{"type":"assistant","message":{"id":"msg_blank","model":"","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"timestamp":"2026-09-06T13:01:23Z","sessionId":"session-blank"}"#;
+        fs::write(&file, format!("{cost_state}\n{empty_model}\n")).unwrap();
+
+        let file_sync = sync_single_file(&db, &file, None)?;
+        assert_eq!(file_sync.imported, 1);
+
+        let conn = lock_conn!(db.conn);
+        let model: String = conn.query_row(
+            "SELECT model FROM proxy_request_logs WHERE request_id = 'session:msg_blank'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(model, "glm-5.3");
+        drop(conn);
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn session_model_name_treats_blank_as_unknown() {
+        assert_eq!(
+            session_model_name(&serde_json::json!({"model": ""})),
+            "unknown"
+        );
+        assert_eq!(
+            session_model_name(&serde_json::json!({"model": "  "})),
+            "unknown"
+        );
+        assert_eq!(
+            session_model_name(&serde_json::json!({"model": "glm-5.3"})),
+            "glm-5.3"
+        );
     }
 }

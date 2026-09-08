@@ -41,11 +41,7 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
 }
 
 pub fn session_roots() -> Vec<PathBuf> {
-    let config_dir = get_codex_config_dir();
-    vec![
-        config_dir.join("sessions"),
-        config_dir.join("archived_sessions"),
-    ]
+    crate::wsl_cli::codex_session_roots()
 }
 
 fn scan_sessions_in_roots(roots: &[PathBuf]) -> Vec<SessionMeta> {

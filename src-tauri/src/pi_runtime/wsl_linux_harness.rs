@@ -598,3 +598,58 @@ fn mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead() {
         Some("http://172.30.208.1:15721")
     );
 }
+
+#[test]
+#[serial]
+fn claude_and_codex_live_writes_use_wsl_runner_never_unc() {
+    let harness = WslHarness::install("identical");
+    let settings = json!({
+        "env": {
+            "ANTHROPIC_BASE_URL": PROXY_ORIGIN,
+            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+        }
+    });
+    assert!(
+        crate::wsl_cli::write_claude_settings(&settings).expect("write claude"),
+        "WSL runtime must handle the Claude write"
+    );
+    let claude_path = harness.wsl_home.join(".claude/settings.json");
+    let written = read_text(&claude_path);
+    assert!(written.contains(PROXY_ORIGIN));
+    assert!(!written.contains(r"\\wsl"));
+
+    let auth = json!({ "OPENAI_API_KEY": "PROXY_MANAGED" });
+    let config = r#"
+model_provider = "custom"
+model = "glm-5.2"
+
+[model_providers.custom]
+name = "Custom"
+base_url = "http://172.30.208.1:15721/v1"
+wire_api = "responses"
+transport_kind = "responses_http"
+"#;
+    assert!(
+        crate::wsl_cli::write_codex_live(Some(&auth), Some(config)).expect("write codex"),
+        "WSL runtime must handle the Codex write"
+    );
+    let auth_path = harness.wsl_home.join(".codex/auth.json");
+    let toml_path = harness.wsl_home.join(".codex/config.toml");
+    assert!(read_text(&auth_path).contains("PROXY_MANAGED"));
+    let toml = read_text(&toml_path);
+    assert!(toml.contains("transport_kind = \"responses_http\""));
+    assert!(toml.contains("172.30.208.1:15721"));
+    assert!(!toml.contains(r"\\wsl"));
+    assert!(!auth_path.to_string_lossy().contains(r"\\wsl"));
+}
+
+#[test]
+fn wsl_cli_rejects_unc_overrides_in_harness() {
+    assert!(crate::wsl_cli::is_wsl_unc_str(
+        r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude"
+    ));
+    assert!(crate::wsl_cli::reject_unc_override(Some(
+        r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.codex"
+    ))
+    .is_none());
+}

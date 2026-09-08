@@ -247,18 +247,29 @@ pub fn sync(target: &PiRuntimeTarget) -> PiResult<SessionSyncOutcome> {
     }
 
     let cache = cache_root(&distro).join("sessions");
-    fs::create_dir_all(&cache).map_err(|error| {
+    sync_tree(&distro, &sessions_root, &cache)
+}
+
+/// Mirror any WSL JSONL tree into `cache` through `wsl.exe` (never UNC).
+pub fn sync_tree(distro: &str, linux_root: &str, cache: &Path) -> PiResult<SessionSyncOutcome> {
+    if !wsl::is_valid_linux_path(linux_root) {
+        return Err(PiRuntimeError::invalid_input(format!(
+            "unusable WSL session root '{linux_root}'"
+        )));
+    }
+    fs::create_dir_all(cache).map_err(|error| {
         PiRuntimeError::session_read(format!(
-            "cannot create the Pi session cache {}: {error}",
+            "cannot create the WSL session cache {}: {error}",
             cache.display()
         ))
     })?;
 
-    let remote = read_manifest(&distro, &sessions_root)?;
+    let remote = read_manifest(distro, linux_root)?;
     let (remote, truncated) = cap_manifest(remote);
 
-    let previous = load_cache_manifest(&distro, &sessions_root, &cache);
-    let plan = plan_sync(&previous, &remote, &cache, flags.session_incremental);
+    let previous = load_cache_manifest(distro, linux_root, cache);
+    let incremental = super::settings().flags.session_incremental;
+    let plan = plan_sync(&previous, &remote, cache, incremental);
 
     let mut outcome = SessionSyncOutcome {
         unchanged: remote.len().saturating_sub(plan.fetch.len()),
@@ -279,7 +290,7 @@ pub fn sync(target: &PiRuntimeTarget) -> PiResult<SessionSyncOutcome> {
     }
 
     for batch in batches(&plan.fetch) {
-        match fetch_batch(&distro, &sessions_root, batch, &cache) {
+        match fetch_batch(distro, linux_root, batch, cache) {
             Ok((fetched, bytes)) => {
                 outcome.fetched += fetched;
                 outcome.bytes += bytes;
@@ -289,16 +300,16 @@ pub fn sync(target: &PiRuntimeTarget) -> PiResult<SessionSyncOutcome> {
     }
 
     store_cache_manifest(
-        &cache,
+        cache,
         &CacheManifest {
-            distro: distro.clone(),
-            sessions_root: sessions_root.clone(),
+            distro: distro.to_string(),
+            sessions_root: linux_root.to_string(),
             entries: remote,
         },
     );
 
     log::info!(
-        "[PiSession] mirrored WSL '{distro}': {} fetched, {} unchanged, {} removed, {} bytes",
+        "[WslSession] mirrored WSL '{distro}' {linux_root}: {} fetched, {} unchanged, {} removed, {} bytes",
         outcome.fetched,
         outcome.unchanged,
         outcome.removed,

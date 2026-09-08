@@ -40,6 +40,7 @@ mod store;
 mod tray;
 mod usage_events;
 mod usage_script;
+mod wsl_cli;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use codex_config::{

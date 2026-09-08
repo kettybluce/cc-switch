@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::config::get_claude_config_dir;
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
@@ -15,7 +14,9 @@ use super::utils::{
 const PROVIDER_ID: &str = "claude";
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let root = get_claude_config_dir().join("projects");
+    let Some(root) = crate::wsl_cli::claude_projects_dir() else {
+        return Vec::new();
+    };
     let mut files = Vec::new();
     collect_jsonl_files(&root, &mut files);
 

@@ -791,7 +791,7 @@
       "syncSessions": "重新整理工作階段",
       "testProxy": "檢測代理",
       "takeover": "Pi 接管",
-      "takeoverDescription": "與 Claude 同一套開關。開啟後自動啟動本機代理，並把已管理供應商在 ~/.pi/agent/models.json 的 baseUrl 改寫到 /pi/<id>；關閉後恢復真實上游位址。不使用故障轉移。",
+      "takeoverDescription": "與 Claude 同一套開關。開啟後自動啟動本機代理，並把已管理 Pi 供應商在 ~/.pi/agent/models.json 的 baseUrl 改寫到 /pi/<id>；關閉後恢復真實上游位址。不使用故障轉移。",
       "takeoverOn": "接管已開啟。目前 models.json 指向本機代理。",
       "takeoverOff": "接管已關閉。Pi 使用真實上游位址。",
       "takeoverPending": "接管已開啟，但 models.json 尚未投影。請確認代理已啟動，或檢查 WSL 可達性（NAT 需監聽 0.0.0.0）。",
@@ -823,7 +823,8 @@
       "proxyTestFailed": "檢測代理失敗：{{error}}"
     },
     "configDirectoryOverride": "設定目錄覆寫（進階）",
-    "configDirectoryDescription": "在 WSL 等環境使用 Claude Code 或 Codex 的時候，可手動指定為 WSL 裡的設定目錄，供應商資料與主環境保持一致。",
+    "configDirectoryDescription": "這裡只覆蓋本機 Windows/macOS/Linux 目錄。Claude、Codex、Pi 若跑在 WSL 內，請用「設定 → Pi 執行位置」（走 wsl.exe）。不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 會喚醒 WSL 並可能占滿一個 CPU 核。",
+    "wslUncRejected": "不允許使用 WSL UNC 路徑（\\\\wsl.localhost / \\\\wsl$）。請在「設定 → Pi 執行位置」選擇發行版，讓 Claude、Codex、Pi 都透過 wsl.exe 存取。",
     "appConfigDir": "CC Switch 設定目錄",
     "appConfigDirDescription": "自訂 CC Switch 的設定儲存位置（指定至雲端同步資料夾即可雲端同步設定）",
     "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",

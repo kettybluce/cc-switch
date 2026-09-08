@@ -791,7 +791,7 @@
       "syncSessions": "セッションを更新",
       "testProxy": "プロキシを確認",
       "takeover": "Pi の接管",
-      "takeoverDescription": "Claude と同じオン/オフです。オンにするとローカルプロキシを起動し、管理中プロバイダーの ~/.pi/agent/models.json baseUrl を /pi/<id> に書き換えます。オフにすると上流 URL を復元します。フェイルオーバーは使いません。",
+      "takeoverDescription": "Claude と同じオン/オフです。オンにするとローカルプロキシを起動し、管理中の Pi プロバイダーの ~/.pi/agent/models.json baseUrl を /pi/<id> に書き換えます。オフにすると上流 URL を復元します。フェイルオーバーは使いません。",
       "takeoverOn": "接管はオンです。現在の models.json はローカルプロキシを指しています。",
       "takeoverOff": "接管はオフです。Pi は実際の上流 URL を使います。",
       "takeoverPending": "接管はオンですが、models.json はまだ投影されていません。プロキシの起動と WSL からの到達性を確認してください（NAT では待ち受けを 0.0.0.0 に）。",
@@ -823,7 +823,8 @@
       "proxyTestFailed": "プロキシを確認できませんでした: {{error}}"
     },
     "configDirectoryOverride": "設定ディレクトリの上書き（詳細）",
-    "configDirectoryDescription": "WSL などで Claude Code や Codex を使う場合、ここで設定ディレクトリを WSL 側に合わせるとデータを揃えられます。",
+    "configDirectoryDescription": "ここで上書きできるのはローカルの Windows/macOS/Linux ホームだけです。WSL 内の Claude / Codex / Pi は「設定 → Pi 実行位置」（wsl.exe）を使ってください。\\\\wsl.localhost や \\\\wsl$ は指定しないでください。UNC は WSL を起こし、CPU を占有することがあります。",
+    "wslUncRejected": "WSL UNC パス（\\\\wsl.localhost / \\\\wsl$）は使えません。「設定 → Pi 実行位置」でディストリビューションを選び、Claude / Codex / Pi を wsl.exe 経由にしてください。",
     "appConfigDir": "CC Switch 設定ディレクトリ",
     "appConfigDirDescription": "CC Switch の保存場所をカスタマイズします（クラウド同期フォルダを指定すると設定を同期できます）",
     "browsePlaceholderApp": "例: C:\\\\Users\\\\Administrator\\\\.cc-switch",

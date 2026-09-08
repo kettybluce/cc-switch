@@ -194,6 +194,8 @@ fn sync_single_gemini_file(
         let model = msg
             .get("model")
             .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
             .unwrap_or("unknown");
         let timestamp = msg.get("timestamp").and_then(|v| v.as_str());
 

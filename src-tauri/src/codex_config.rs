@@ -1042,6 +1042,10 @@ pub fn write_codex_live_atomic(
         toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
     }
 
+    if crate::wsl_cli::write_codex_live(Some(auth), Some(&cfg_text))? {
+        return Ok(());
+    }
+
     // 第一步：写 auth.json
     write_json_file(&auth_path, auth)?;
 
@@ -1117,6 +1121,10 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
 
     if !cfg_text.trim().is_empty() {
         toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
+    }
+
+    if crate::wsl_cli::write_codex_live(None, Some(&cfg_text))? {
+        return Ok(());
     }
 
     write_text_file(&config_path, &cfg_text)
@@ -3478,6 +3486,9 @@ fn codex_official_provider_table(
     table["requires_openai_auth"] = toml_edit::value(true);
     table["supports_websockets"] = toml_edit::value(supports_websockets);
     table["wire_api"] = toml_edit::value("responses");
+    if !supports_websockets {
+        table["transport_kind"] = toml_edit::value("responses_http");
+    }
     if let Some(base_url) = base_url {
         table["base_url"] = toml_edit::value(base_url.trim_end_matches('/'));
     }
@@ -4115,7 +4126,7 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
     let trimmed = value.trim();
 
     match field {
-        "base_url" | "wire_api" => {
+        "base_url" | "wire_api" | "transport_kind" => {
             let model_provider = doc
                 .get("model_provider")
                 .and_then(|item| item.as_str())
@@ -4523,6 +4534,12 @@ command = "example"
                 .get("supports_websockets")
                 .and_then(toml::Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            provider
+                .get("transport_kind")
+                .and_then(toml::Value::as_str),
+            Some("responses_http")
         );
         assert!(codex_config_has_official_proxy_route(&output));
     }

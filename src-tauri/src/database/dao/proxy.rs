@@ -494,6 +494,25 @@ impl Database {
         }
     }
 
+    /// Persist only the shared listen endpoint. Per-app retries/timeouts stay
+    /// untouched (#7204).
+    pub async fn update_proxy_listen_endpoint(
+        &self,
+        listen_address: &str,
+        listen_port: u16,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "UPDATE proxy_config SET
+                listen_address = ?1,
+                listen_port = ?2,
+                updated_at = datetime('now')",
+            rusqlite::params![listen_address, listen_port as i32],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     /// 更新代理配置（兼容旧接口，更新所有三行的公共字段）
     pub async fn update_proxy_config(&self, config: ProxyConfig) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
@@ -1030,6 +1049,27 @@ mod tests {
             }
         ));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn listen_endpoint_update_does_not_overwrite_per_app_retries() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let mut claude = db.get_proxy_config_for_app("claude").await?;
+        let mut codex = db.get_proxy_config_for_app("codex").await?;
+        claude.max_retries = 6;
+        codex.max_retries = 0;
+        db.update_proxy_config_for_app(claude).await?;
+        db.update_proxy_config_for_app(codex).await?;
+
+        db.update_proxy_listen_endpoint("127.0.0.1", 15799).await?;
+
+        let claude = db.get_proxy_config_for_app("claude").await?;
+        let codex = db.get_proxy_config_for_app("codex").await?;
+        assert_eq!(claude.max_retries, 6);
+        assert_eq!(codex.max_retries, 0);
+        let shared = db.get_proxy_config().await?;
+        assert_eq!(shared.listen_port, 15799);
         Ok(())
     }
 }

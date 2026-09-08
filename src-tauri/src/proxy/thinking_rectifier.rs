@@ -101,7 +101,13 @@ pub fn should_rectify_thinking_signature(
     if lower.contains("非法请求")
         || lower.contains("illegal request")
         || lower.contains("invalid request")
+        || lower.contains("invalid_request_error")
     {
+        return true;
+    }
+
+    // #7226: failover stripped thinking but left thinking mode on
+    if lower.contains("thinking") && lower.contains("must be passed back") {
         return true;
     }
 
@@ -178,7 +184,17 @@ pub fn rectify_anthropic_request(body: &mut Value) -> RectifyResult {
         .map(|a| a.to_vec())
         .unwrap_or_default();
 
-    if should_remove_top_level_thinking(body, &messages_snapshot) {
+    // #7226: after failover strips thinking blocks, leaving type=enabled
+    // causes HTTP 400 "must be passed back". Adaptive thinking stays.
+    let stripped_thinking_blocks =
+        result.removed_thinking_blocks > 0 || result.removed_redacted_thinking_blocks > 0;
+    let thinking_type = body
+        .get("thinking")
+        .and_then(|value| value.get("type"))
+        .and_then(|value| value.as_str());
+    if should_remove_top_level_thinking(body, &messages_snapshot)
+        || (stripped_thinking_blocks && thinking_type == Some("enabled"))
+    {
         if let Some(obj) = body.as_object_mut() {
             obj.remove("thinking");
             result.applied = true;
@@ -348,6 +364,18 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_thinking_must_be_passed_back() {
+        assert!(should_rectify_thinking_signature(
+            Some("The `content[].thinking` in the thinking mode must be passed back to the API."),
+            &enabled_config()
+        ));
+        assert!(should_rectify_thinking_signature(
+            Some(r#"{"error":{"type":"invalid_request_error"}}"#),
+            &enabled_config()
+        ));
+    }
+
+    #[test]
     fn test_no_trigger_for_unrelated_error() {
         assert!(!should_rectify_thinking_signature(
             Some("Request timeout"),
@@ -423,6 +451,25 @@ mod tests {
         assert!(content[0].get("signature").is_none());
         assert_eq!(content[1]["type"], "tool_use");
         assert!(content[1].get("signature").is_none());
+    }
+
+    #[test]
+    fn test_rectify_disables_thinking_after_stripping_blocks() {
+        let mut body = json!({
+            "thinking": { "type": "enabled" },
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    { "type": "thinking", "thinking": "old model" },
+                    { "type": "text", "text": "hello" }
+                ]
+            }]
+        });
+
+        let result = rectify_anthropic_request(&mut body);
+        assert!(result.applied);
+        assert_eq!(result.removed_thinking_blocks, 1);
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]

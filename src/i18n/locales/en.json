@@ -823,7 +823,8 @@
       "proxyTestFailed": "Could not test the proxy: {{error}}"
     },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
-    "configDirectoryDescription": "When using Claude Code or Codex in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
+    "configDirectoryDescription": "Override local Windows/macOS/Linux homes only. For Claude, Codex, or Pi inside WSL, use Settings → Pi runtime (wsl.exe). Do not point these fields at \\\\wsl.localhost or \\\\wsl$ — UNC wakes WSL and can pin a CPU core.",
+    "wslUncRejected": "WSL UNC paths (\\\\wsl.localhost / \\\\wsl$) are not allowed. Select Settings → Pi runtime so Claude, Codex, and Pi are reached through wsl.exe.",
     "appConfigDir": "CC Switch Configuration Directory",
     "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
     "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",

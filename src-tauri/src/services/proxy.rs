@@ -122,11 +122,11 @@ impl CodexAuthFileTransaction {
             };
         };
 
-        // The no-clobber install/rollback protocol below requires hard links.
-        // Probe before moving the live credentials so unsupported custom Codex
-        // directories fail closed with auth.json still in place.
+        // Probe hard-link support. WSL 9P and some network volumes return
+        // ERROR_NOT_SUPPORTED (50). Those filesystems still accept create_new
+        // + copy, so fail closed only when neither strategy works.
         let probe = Self::unique_sibling_path(&path, "restore-probe")?;
-        match std::fs::hard_link(&path, &probe) {
+        match Self::link_or_copy(&path, &probe) {
             Ok(()) => {
                 std::fs::remove_file(&probe).map_err(|error| {
                     format!(
@@ -218,7 +218,7 @@ impl CodexAuthFileTransaction {
                 })?;
             drop(file);
 
-            match std::fs::hard_link(&temporary, &self.path) {
+            match Self::link_or_copy(&temporary, &self.path) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     Err(Self::changed_error())
@@ -313,7 +313,7 @@ impl CodexAuthFileTransaction {
         source: &std::path::Path,
         destination: &std::path::Path,
     ) -> Result<(), String> {
-        match std::fs::hard_link(source, destination) {
+        match Self::link_or_copy(source, destination) {
             Ok(()) => {
                 std::fs::remove_file(source).map_err(|error| {
                     format!(
@@ -350,6 +350,35 @@ impl CodexAuthFileTransaction {
                     path.display()
                 );
             }
+        }
+    }
+
+    fn hard_link_unsupported(error: &std::io::Error) -> bool {
+        matches!(
+            error.raw_os_error(),
+            Some(50) // ERROR_NOT_SUPPORTED / WSL 9P
+        ) || error.kind() == std::io::ErrorKind::Unsupported
+    }
+
+    fn link_or_copy(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+        match std::fs::hard_link(source, destination) {
+            Ok(()) => Ok(()),
+            Err(error) if Self::hard_link_unsupported(&error) => {
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options.open(destination)?;
+                let mut from = std::fs::File::open(source)?;
+                std::io::copy(&mut from, &mut file)?;
+                use std::io::Write;
+                file.flush()?;
+                Ok(())
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -1001,10 +1030,8 @@ impl ProxyService {
             return Ok(());
         }
 
-        let mut resolved_config = config.clone();
-        resolved_config.listen_port = actual_port;
         self.db
-            .update_proxy_config(resolved_config)
+            .update_proxy_listen_endpoint(&config.listen_address, actual_port)
             .await
             .map_err(|e| format!("保存动态代理端口失败: {e}"))
     }
@@ -1913,12 +1940,10 @@ impl ProxyService {
         // 2. 恢复原始 Live 配置
         self.restore_live_configs().await?;
 
-        // 3. 更新 proxy_config 表中的 live_takeover_active 标志（兼容旧版）
-        //    注意：保留 proxy_config.enabled 状态，下次启动时自动恢复
-        if let Ok(mut config) = self.db.get_proxy_config().await {
-            config.live_takeover_active = false;
-            let _ = self.db.update_proxy_config(config).await;
-        }
+        // 3. Do not call the legacy global update_proxy_config() here.
+        //    It reads Claude's row and writes max_retries/timeouts onto every
+        //    app (#7204). live_takeover_active is unused; enabled is kept so
+        //    the next launch can restore takeover.
 
         // 4. 删除备份（Live 配置已恢复，备份不再需要）
         self.db
@@ -2069,6 +2094,8 @@ impl ProxyService {
         }
 
         let proxy_origin = format!("http://{}:{}", connect_host_for_url, listen_port);
+        let proxy_origin = crate::wsl_cli::rewrite_proxy_origin(&proxy_origin, listen_port)
+            .unwrap_or(proxy_origin);
         let proxy_url = proxy_origin.clone();
         let proxy_codex_base_url = format!("{}/v1", proxy_origin.trim_end_matches('/'));
 
@@ -3587,6 +3614,12 @@ impl ProxyService {
         let mut updated =
             crate::codex_config::update_codex_toml_field(&updated, "wire_api", "responses")
                 .map_err(|e| format!("更新 Codex wire_api 失败: {e}"))?;
+        updated = crate::codex_config::update_codex_toml_field(
+            &updated,
+            "transport_kind",
+            "responses_http",
+        )
+        .map_err(|e| format!("更新 Codex transport_kind 失败: {e}"))?;
 
         if let Some(upstream_model) =
             provider.and_then(crate::proxy::providers::codex_provider_upstream_model)
@@ -3686,8 +3719,13 @@ impl ProxyService {
     }
 
     fn write_claude_live(&self, config: &Value) -> Result<(), String> {
-        let path = get_claude_settings_path();
         let settings = crate::services::provider::sanitize_claude_settings_for_live(config);
+        if crate::wsl_cli::write_claude_settings(&settings)
+            .map_err(|e| format!("写入 WSL Claude 配置失败: {e}"))?
+        {
+            return Ok(());
+        }
+        let path = get_claude_settings_path();
         write_json_file(&path, &settings).map_err(|e| format!("写入 Claude 配置失败: {e}"))
     }
 
@@ -3969,6 +4007,22 @@ impl ProxyService {
                 return Err(error);
             }
         };
+
+        if crate::wsl_cli::is_wsl_runtime() {
+            let auth_value = auth.filter(|value| !value.as_object().is_some_and(Map::is_empty));
+            let write_result = crate::wsl_cli::write_codex_live(auth_value, prepared_cfg.as_deref())
+                .map(|_| ())
+                .map_err(|e| format!("写入 WSL Codex 配置失败: {e}"));
+            if let Err(error) = write_result {
+                if let Some(snapshot) = catalog_snapshot.as_ref() {
+                    snapshot.restore().map_err(|rollback_error| {
+                        format!("{error}; 回滚 Codex 模型目录失败: {rollback_error}")
+                    })?;
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
 
         let write_result = if let (Some(expected_auth), Some(auth)) = (expected_auth, auth) {
             (|| -> Result<(), String> {
@@ -7284,6 +7338,10 @@ wire_api = "chat"
             provider.get("wire_api").and_then(|v| v.as_str()),
             Some("responses")
         );
+        assert_eq!(
+            provider.get("transport_kind").and_then(|v| v.as_str()),
+            Some("responses_http")
+        );
     }
 
     #[test]
@@ -7310,6 +7368,8 @@ wire_api = "chat"
         assert_eq!(parsed["model_provider"].as_str(), Some(route_id));
         assert_eq!(route["base_url"].as_str(), Some(proxy_url));
         assert_eq!(route["requires_openai_auth"].as_bool(), Some(true));
+        assert_eq!(route["supports_websockets"].as_bool(), Some(false));
+        assert_eq!(route["transport_kind"].as_str(), Some("responses_http"));
         assert!(parsed.get("experimental_bearer_token").is_none());
     }
 

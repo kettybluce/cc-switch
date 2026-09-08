@@ -58,10 +58,20 @@ const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
   pi: "piConfigDir",
 };
 
+export function isWslUncPath(value: string): boolean {
+  const normalized = value.trim().replace(/\//g, "\\").toLowerCase();
+  return (
+    normalized.startsWith("\\\\wsl.localhost") ||
+    normalized.startsWith("\\\\wsl$")
+  );
+}
+
 const sanitizeDir = (value?: string | null): string | undefined => {
   if (!value) return undefined;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  if (!trimmed) return undefined;
+  if (isWslUncPath(trimmed)) return undefined;
+  return trimmed;
 };
 
 const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
@@ -256,6 +266,9 @@ export function useDirectorySettings({
 
   const updateDirectoryState = useCallback(
     (key: DirectoryKey, value?: string) => {
+      if (value && isWslUncPath(value)) {
+        toast.error(t("settings.wslUncRejected"));
+      }
       const sanitized = sanitizeDir(value);
       if (key === "appConfig") {
         setAppConfigDir(sanitized);
@@ -273,7 +286,7 @@ export function useDirectorySettings({
         return { ...prev, [key]: next };
       });
     },
-    [onUpdateSettings],
+    [onUpdateSettings, t],
   );
 
   const updateAppConfigDir = useCallback(
@@ -299,6 +312,10 @@ export function useDirectorySettings({
 
       try {
         const picked = await settingsApi.selectConfigDirectory(currentValue);
+        if (picked && isWslUncPath(picked)) {
+          toast.error(t("settings.wslUncRejected"));
+          return;
+        }
         const sanitized = sanitizeDir(picked ?? undefined);
         if (!sanitized) return;
         updateDirectoryState(key, sanitized);

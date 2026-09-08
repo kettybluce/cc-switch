@@ -267,4 +267,23 @@ describe("useDirectorySettings", () => {
     expect(result.current.resolvedDirs.opencode).toBe("/server/opencode");
     expect(result.current.resolvedDirs.openclaw).toBe("/server/openclaw");
   });
+
+  it("rejects WSL UNC overrides instead of storing them", async () => {
+    const { result } = renderHook(() =>
+      useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.updateDirectory(
+        "claude",
+        "\\\\wsl.localhost\\Ubuntu\\home\\chen\\.claude",
+      );
+    });
+
+    expect(toastErrorMock).toHaveBeenCalledWith("settings.wslUncRejected");
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      claudeConfigDir: undefined,
+    });
+  });
 });

@@ -15,8 +15,10 @@ use crate::services::usage_stats::find_model_pricing;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -180,9 +182,10 @@ fn sync_pi_files(db: &Database, files: &[PathBuf]) -> SessionSyncResult {
             return result;
         }
     };
+    let proxy_routed = gateway_routed_models_by_provider(db);
 
     for file_path in files {
-        match sync_single_pi_file(db, file_path, &cursors) {
+        match sync_single_pi_file(db, file_path, &cursors, &proxy_routed) {
             Ok(file_result) => result.merge(file_result),
             Err(error) => {
                 let message = format!("{}: {error}", file_path.display());
@@ -207,6 +210,7 @@ fn sync_single_pi_file(
     db: &Database,
     file_path: &Path,
     cursors: &std::collections::HashMap<String, crate::services::session_usage::SyncCursor>,
+    proxy_routed: &HashMap<String, GatewayRoutedModels>,
 ) -> Result<SessionSyncResult, AppError> {
     let metadata = fs::symlink_metadata(file_path)
         .map_err(|error| AppError::Config(format!("无法读取 Pi 会话文件元数据: {error}")))?;
@@ -259,6 +263,10 @@ fn sync_single_pi_file(
         .map_err(|error| AppError::Database(format!("启动 Pi 用量导入事务失败: {error}")))?;
     let mut result = SessionSyncResult::default();
     for record in &parsed.records {
+        if is_gateway_routed_record(record, proxy_routed) {
+            result.skipped = result.skipped.saturating_add(1);
+            continue;
+        }
         if insert_pi_record(&tx, record)? {
             result.imported = result.imported.saturating_add(1);
         } else {
@@ -640,6 +648,144 @@ fn nonempty_string(value: Option<&Value>) -> Option<&str> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+#[derive(Debug, Default)]
+struct GatewayRoutedModels {
+    all_models: bool,
+    models: HashSet<String>,
+}
+
+impl GatewayRoutedModels {
+    fn covers(&self, request_model: &str) -> bool {
+        self.all_models || self.models.contains(request_model)
+    }
+}
+
+fn is_gateway_routed_record(
+    record: &PiUsageRecord,
+    proxy_routed: &HashMap<String, GatewayRoutedModels>,
+) -> bool {
+    proxy_routed
+        .get(record.provider_id.as_str())
+        .is_some_and(|routed| routed.covers(&record.request_model))
+}
+
+fn gateway_routed_models_by_provider(db: &Database) -> HashMap<String, GatewayRoutedModels> {
+    let Ok(conn) = db.conn.lock() else {
+        return HashMap::new();
+    };
+    let row = conn.query_row(
+        "SELECT listen_address, listen_port, enable_logging
+         FROM proxy_config WHERE app_type = 'claude'",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        },
+    );
+    let Ok((listen_address, listen_port, enable_logging)) = row else {
+        return HashMap::new();
+    };
+    if enable_logging == 0 {
+        return HashMap::new();
+    }
+    let Ok(port) = u16::try_from(listen_port) else {
+        return HashMap::new();
+    };
+    let Ok(providers) = crate::pi_config::read_pi_native_providers() else {
+        return HashMap::new();
+    };
+    let mut routed = HashMap::new();
+    for (id, config) in providers {
+        let mut entry = GatewayRoutedModels::default();
+        if config
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .is_some_and(|url| base_url_points_at_gateway(url, &listen_address, port))
+        {
+            entry.all_models = true;
+        }
+        if let Some(models) = config.get("models").and_then(Value::as_array) {
+            for model in models {
+                let Some(model_id) = nonempty_string(model.get("id")) else {
+                    continue;
+                };
+                if model
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| base_url_points_at_gateway(url, &listen_address, port))
+                {
+                    entry.models.insert(model_id.to_string());
+                }
+            }
+        }
+        if entry.all_models || !entry.models.is_empty() {
+            routed.insert(id, entry);
+        }
+    }
+    routed
+}
+
+fn base_url_points_at_gateway(raw: &str, listen_address: &str, listen_port: u16) -> bool {
+    if crate::pi_runtime::rewrite::is_pi_proxy_base_url(raw) {
+        return true;
+    }
+    let candidate = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("http://{raw}")
+    };
+    let Ok(url) = url::Url::parse(&candidate) else {
+        return false;
+    };
+    let port = url.port().unwrap_or_else(|| match url.scheme() {
+        "https" => 443,
+        _ => 80,
+    });
+    if port != listen_port {
+        return false;
+    }
+    host_points_at_gateway(url.host_str().unwrap_or_default(), listen_address)
+}
+
+fn host_points_at_gateway(host: &str, listen_address: &str) -> bool {
+    let host = strip_ipv6_brackets(host);
+    let listen = strip_ipv6_brackets(listen_address);
+    if host.eq_ignore_ascii_case(listen) {
+        return true;
+    }
+    if listen == "0.0.0.0" {
+        return is_loopback_host_of_family(host, false);
+    }
+    if listen == "::" {
+        return is_loopback_host_of_family(host, true);
+    }
+    if listen.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
+        return host.eq_ignore_ascii_case("localhost");
+    }
+    false
+}
+
+fn strip_ipv6_brackets(value: &str) -> &str {
+    value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(value)
+}
+
+fn is_loopback_host_of_family(host: &str, ipv6: bool) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(addr)) if !ipv6 => addr.is_loopback(),
+        Ok(IpAddr::V6(addr)) if ipv6 => addr.is_loopback(),
+        _ => false,
+    }
 }
 
 fn bounded_label(value: Option<&Value>, fallback: &str) -> String {
@@ -1856,6 +2002,120 @@ mod tests {
         assert_eq!(result.files_scanned, 1);
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].contains("安全上限"));
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_base_url_matching_distinguishes_local_routes() {
+        assert!(base_url_points_at_gateway(
+            "http://127.0.0.1:15721/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(base_url_points_at_gateway(
+            "http://127.0.0.1:15721/pi/openai/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(base_url_points_at_gateway(
+            "127.0.0.1:15721/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(base_url_points_at_gateway(
+            "http://localhost:15721/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(!base_url_points_at_gateway(
+            "http://127.0.0.5:15721/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(!base_url_points_at_gateway(
+            "http://127.0.0.1:15722/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(!base_url_points_at_gateway(
+            "https://api.example.com/v1",
+            "127.0.0.1",
+            15721
+        ));
+        assert!(base_url_points_at_gateway(
+            "http://10.0.0.8:15721/v1",
+            "10.0.0.8",
+            15721
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn gateway_routed_provider_usage_is_not_imported() -> Result<(), AppError> {
+        // Unique provider ids + listen port so this TestAgentDir cannot
+        // make parallel `fixture-provider` imports look gateway-routed.
+        const GATEWAY_PORT: i32 = 15997;
+        let dir = tempfile::tempdir().expect("pi home");
+        let agent_dir = dir.path().join("agent");
+        fs::create_dir_all(&agent_dir).expect("agent dir");
+        fs::write(
+            agent_dir.join("models.json"),
+            format!(
+                r#"{{
+              "providers": {{
+                "ccs-gateway": {{
+                  "baseUrl": "http://127.0.0.1:{GATEWAY_PORT}/v1",
+                  "api": "openai-completions",
+                  "models": [{{"id": "fixture-model"}}]
+                }},
+                "direct-only": {{
+                  "baseUrl": "https://api.example.com/v1",
+                  "api": "openai-completions",
+                  "models": [{{"id": "fixture-model"}}]
+                }}
+              }}
+            }}"#
+            ),
+        )
+        .expect("models.json");
+        let _agent = crate::pi_config::test_support::TestAgentDir::at(&agent_dir);
+
+        let temp = tempfile::tempdir().expect("sessions");
+        let path = session_path(temp.path(), "mixed");
+        let gateway = assistant_line("gw", "2023-11-14T22:13:21Z", 10)
+            .replace("fixture-provider", "ccs-gateway");
+        let direct = assistant_line("direct", "2023-11-14T22:13:22Z", 11)
+            .replace("fixture-provider", "direct-only");
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-mixed","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                &gateway,
+                &direct,
+            ],
+        );
+
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "UPDATE proxy_config SET listen_address = '127.0.0.1', listen_port = ?1, enable_logging = 1",
+                [GATEWAY_PORT],
+            )?;
+        }
+        let result = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!((result.imported, result.skipped), (1, 1));
+        let providers: Vec<String> = {
+            let conn = lock_conn!(db.conn);
+            let mut stmt = conn.prepare(
+                "SELECT provider_id FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            )?;
+            let providers = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            providers
+        };
+        assert_eq!(providers, vec!["direct-only".to_string()]);
         Ok(())
     }
 }
