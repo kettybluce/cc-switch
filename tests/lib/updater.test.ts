@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/plugin-updater", () => ({
 }));
 
 vi.mock("@tauri-apps/api/app", () => ({
-  getVersion: vi.fn().mockResolvedValue("3.20.2"),
+  getVersion: vi.fn().mockResolvedValue("0.1.0"),
 }));
 
 describe("fork updater", () => {
