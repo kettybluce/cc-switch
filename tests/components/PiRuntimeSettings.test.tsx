@@ -156,10 +156,10 @@ describe("PiRuntimeSettings", () => {
     expect(
       screen.getByText("settings.piRuntime.useProxyDescription"),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("switch"),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText("settings.piRuntime.testProxy")).toBeInTheDocument();
+      screen.getByText("settings.piRuntime.testProxy"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText("settings.piRuntime.proxyStopped"),
     ).toBeInTheDocument();

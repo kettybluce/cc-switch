@@ -791,7 +791,7 @@
       "syncSessions": "重新整理工作階段",
       "testProxy": "檢測代理",
       "useProxy": "Pi 跟隨 CC Switch 本機代理",
-      "useProxyDescription": "開啟本機代理後，CC Switch 會把已管理供應商在 models.json 中的 baseUrl 改寫為代理位址——與 Claude / Codex 用同一個開關。真實上游位址只保存在 CC Switch。不會修改發行版的全域網路設定。",
+      "useProxyDescription": "開啟本機代理後，CC Switch 會把 Pi 已管理供應商在 models.json 中的 baseUrl 改寫為代理位址——與 Claude / Codex 用同一個開關。真實上游位址只保存在 CC Switch。不會修改發行版的全域網路設定。",
       "proxyStopped": "本機代理未開啟。到「設定 → 代理」打開後，Pi 會自動經代理存取。",
       "proxyOff": "目前未改寫 models.json（進階退出）。Pi 仍直連上游。",
       "natListenHint": "WSL NAT 模式無法存取只監聽 127.0.0.1 的代理。請把本機代理監聽位址改成 0.0.0.0，發行版才能經閘道連上。",
