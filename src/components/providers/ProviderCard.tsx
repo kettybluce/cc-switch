@@ -237,6 +237,7 @@ export function ProviderCard({
     appId,
     isProxyAppId(appId),
   );
+  const showFailoverUi = isProxyAppId(appId);
 
   const fallbackUrlText = t("provider.notConfigured", {
     defaultValue: "未配置接口地址",
@@ -353,11 +354,12 @@ export function ProviderCard({
       ? Boolean(isDefaultModel)
       : appId === "opencode" || appId === "pi"
         ? false
-        : isAutoFailoverEnabled
+        : showFailoverUi && isAutoFailoverEnabled
           ? activeProviderId === provider.id
           : isCurrent;
 
-  const shouldUseGreen = !isAnyOmo && isProxyTakeover && isActiveProvider;
+  const shouldUseGreen =
+    showFailoverUi && !isAnyOmo && isProxyTakeover && isActiveProvider;
   const hasPersistentConfigHighlight = isAdditiveMode && isInConfig;
   const shouldUseBlue =
     (isAnyOmo && isActiveProvider) ||
@@ -371,7 +373,7 @@ export function ProviderCard({
       className={cn(
         "relative overflow-hidden rounded-xl border border-border p-4 transition-all duration-300",
         "bg-card text-card-foreground group",
-        isAutoFailoverEnabled || isProxyTakeover
+        showFailoverUi && (isAutoFailoverEnabled || isProxyTakeover)
           ? "hover:border-emerald-500/50"
           : "hover:border-border-active",
         shouldUseGreen &&
@@ -482,7 +484,8 @@ export function ProviderCard({
                 />
               )}
 
-              {isProxyRunning &&
+              {showFailoverUi &&
+                isProxyRunning &&
                 !supportsOfficialRouting &&
                 isInFailoverQueue &&
                 health && (
@@ -492,7 +495,8 @@ export function ProviderCard({
                   />
                 )}
 
-              {isAutoFailoverEnabled &&
+              {showFailoverUi &&
+                isAutoFailoverEnabled &&
                 !supportsOfficialRouting &&
                 isInFailoverQueue &&
                 failoverPriority && (
@@ -721,10 +725,12 @@ export function ProviderCard({
               onOpenTerminal={
                 onOpenTerminal ? () => onOpenTerminal(provider) : undefined
               }
-              isAutoFailoverEnabled={isAutoFailoverEnabled}
-              isInFailoverQueue={isInFailoverQueue}
+              isAutoFailoverEnabled={showFailoverUi && isAutoFailoverEnabled}
+              isInFailoverQueue={showFailoverUi && isInFailoverQueue}
               onToggleFailover={
-                supportsOfficialRouting ? undefined : onToggleFailover
+                showFailoverUi && !supportsOfficialRouting
+                  ? onToggleFailover
+                  : undefined
               }
               // OpenClaw: default model
               isDefaultModel={isDefaultModel}

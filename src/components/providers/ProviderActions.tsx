@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { AppId } from "@/lib/api";
-import { isAdditiveAppId } from "@/config/appConfig";
+import { isAdditiveAppId, isProxyAppId } from "@/config/appConfig";
 
 interface OpenClawDefaultModelOption {
   id: string;
@@ -109,9 +109,14 @@ export function ProviderActions({
     Boolean(appId && isAdditiveAppId(appId)) &&
     !(appId === "opencode" && isOmo);
 
-  // 故障转移模式下的按钮逻辑（累加模式和 OMO 应用不支持故障转移）
+  // Failover takeover UX is only for local-gateway apps (PROXY_APP_IDS).
+  // Additive apps such as Pi must keep enable/remove membership even if a
+  // parent accidentally forwards stale failover props.
   const isFailoverMode =
-    !isAdditiveMode && !isOmo && isAutoFailoverEnabled && onToggleFailover;
+    Boolean(appId && isProxyAppId(appId)) &&
+    !isOmo &&
+    isAutoFailoverEnabled &&
+    onToggleFailover;
   const isMembershipMode = isAdditiveMode;
   const piStateChangeHint = t("pi.current.stateUnavailableHint");
 

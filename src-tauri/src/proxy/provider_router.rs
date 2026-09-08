@@ -60,14 +60,18 @@ impl ProviderRouter {
             .transpose()?
             .flatten();
 
-        // 检查该应用的自动故障转移开关是否开启（从 proxy_config 表读取）
-        let auto_failover_enabled = match self.db.get_proxy_config_for_app(app_type).await {
-            Ok(config) => config.auto_failover_enabled,
-            Err(e) => {
-                log::error!("[{app_type}] 读取 proxy_config 失败: {e}，默认禁用故障转移");
+        let auto_failover_enabled =
+            if AppType::from_str(app_type).is_ok_and(|app| app.supports_local_proxy()) {
+                match self.db.get_proxy_config_for_app(app_type).await {
+                    Ok(config) => config.auto_failover_enabled,
+                    Err(e) => {
+                        log::error!("[{app_type}] 读取 proxy_config 失败: {e}，默认禁用故障转移");
+                        false
+                    }
+                }
+            } else {
                 false
-            }
-        };
+            };
 
         if auto_failover_enabled
             && current_provider
@@ -633,5 +637,35 @@ mod tests {
         let third = router.allow_provider_request("a", "claude").await;
         assert!(third.allowed);
         assert!(third.used_half_open_permit);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_ignores_failover_queue_even_if_proxy_config_enables_it() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        let provider_b =
+            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+
+        db.save_provider("pi", &provider_a).unwrap();
+        db.save_provider("pi", &provider_b).unwrap();
+        db.set_current_provider("pi", "a").unwrap();
+        db.add_to_failover_queue("pi", "b").unwrap();
+
+        // Pricing/usage can create a proxy_config row for Pi. That must not
+        // turn on Claude/Codex failover routing for additive Pi projection.
+        db.set_default_cost_multiplier("pi", "1").await.unwrap();
+        let mut config = db.get_proxy_config_for_app("pi").await.unwrap();
+        config.auto_failover_enabled = true;
+        db.update_proxy_config_for_app(config).await.unwrap();
+
+        let router = ProviderRouter::new(db.clone());
+        let providers = router.select_providers("pi").await.unwrap();
+
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "a");
     }
 }

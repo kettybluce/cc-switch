@@ -1348,7 +1348,7 @@ function App() {
                     setCurrentView("settings");
                   }}
                 />
-                {isCurrentAppTakeoverActive && (
+                {isCurrentAppTakeoverActive || activeApp === "pi" ? (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -1363,7 +1363,7 @@ function App() {
                   >
                     <BarChart2 className="w-4 h-4" />
                   </Button>
-                )}
+                ) : null}
               </div>
             )}
           </div>

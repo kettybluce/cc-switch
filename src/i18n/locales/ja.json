@@ -849,6 +849,8 @@
     "browseDirectory": "ディレクトリを選択",
     "resetDefault": "デフォルトに戻す（保存後に反映）",
     "checkForUpdates": "アップデートを確認",
+    "forkUpdatesDisabled": "このフォークではアップデート確認を無効化しています",
+    "forkUpdatesDisabledHint": "ccswitch.io および上流 GitHub の latest.json は確認しません。",
     "updateTo": "v{{version}} に更新",
     "updating": "更新中...",
     "checking": "確認中...",

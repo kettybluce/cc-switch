@@ -12,6 +12,7 @@ mod config;
 mod database;
 mod deeplink;
 mod error;
+mod fork;
 mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
@@ -506,7 +507,11 @@ pub fn run() {
             // 注册 Updater 插件（桌面端）；放在 logger 之后，确保失败可诊断。
             #[cfg(desktop)]
             {
-                if let Err(e) = app
+                if crate::fork::DISABLE_APP_UPDATER {
+                    log::info!(
+                        "Fork updater disabled; skipping Updater plugin and upstream latest.json checks"
+                    );
+                } else if let Err(e) = app
                     .handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())
                 {

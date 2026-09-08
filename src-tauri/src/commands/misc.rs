@@ -53,6 +53,10 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
 /// 检查更新
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
+    if crate::fork::DISABLE_APP_UPDATER {
+        return Err(crate::fork::updater_disabled_message().to_string());
+    }
+
     handle
         .opener()
         .open_url(

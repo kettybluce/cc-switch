@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAdditiveAppId } from "@/config/appConfig";
+import { isAdditiveAppId, isProxyAppId, PROXY_APP_IDS } from "@/config/appConfig";
 
 describe("appConfig provider lifecycle", () => {
   it.each(["opencode", "openclaw", "hermes", "pi"])(
@@ -15,4 +15,10 @@ describe("appConfig provider lifecycle", () => {
       expect(isAdditiveAppId(appId)).toBe(false);
     },
   );
+
+  it("keeps Pi out of the local-gateway failover apps", () => {
+    expect(PROXY_APP_IDS).toEqual(["claude", "codex", "gemini", "grokbuild"]);
+    expect(isProxyAppId("pi")).toBe(false);
+    expect(isProxyAppId("claude")).toBe(true);
+  });
 });

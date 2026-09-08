@@ -268,25 +268,24 @@ impl RequestContext {
     /// - 故障转移开启：超时配置正常生效（0 表示禁用超时）
     /// - 故障转移关闭：超时配置不生效（全部传入 0）
     pub fn create_forwarder(&self, state: &ProxyState) -> RequestForwarder {
-        let (non_streaming_timeout, first_byte_timeout, idle_timeout) =
-            if self.app_config.auto_failover_enabled {
-                // 故障转移开启：使用配置的值（0 = 禁用超时）
-                (
-                    self.app_config.non_streaming_timeout as u64,
-                    self.app_config.streaming_first_byte_timeout as u64,
-                    self.app_config.streaming_idle_timeout as u64,
-                )
-            } else {
-                // 故障转移关闭：不启用超时配置
-                log::debug!(
-                    "[{}] Failover disabled, timeout configs are bypassed",
-                    self.tag
-                );
-                (0, 0, 0)
-            };
+        let failover_enabled =
+            self.app_type.supports_local_proxy() && self.app_config.auto_failover_enabled;
+        let (non_streaming_timeout, first_byte_timeout, idle_timeout) = if failover_enabled {
+            (
+                self.app_config.non_streaming_timeout as u64,
+                self.app_config.streaming_first_byte_timeout as u64,
+                self.app_config.streaming_idle_timeout as u64,
+            )
+        } else {
+            log::debug!(
+                "[{}] Failover disabled, timeout configs are bypassed",
+                self.tag
+            );
+            (0, 0, 0)
+        };
 
         // 故障转移关闭时强制 max_retries=0（仅尝试 1 个 provider），与「不超时 + 不切换」语义一致。
-        let max_retries = if self.app_config.auto_failover_enabled {
+        let max_retries = if failover_enabled {
             self.app_config.max_retries
         } else {
             0
@@ -333,7 +332,7 @@ impl RequestContext {
     /// - 故障转移关闭：返回 0（禁用超时检查）
     #[inline]
     pub fn streaming_timeout_config(&self) -> StreamingTimeoutConfig {
-        if self.app_config.auto_failover_enabled {
+        if self.app_type.supports_local_proxy() && self.app_config.auto_failover_enabled {
             // 故障转移开启：使用配置的值（0 = 禁用超时）
             StreamingTimeoutConfig {
                 first_byte_timeout: self.app_config.streaming_first_byte_timeout as u64,

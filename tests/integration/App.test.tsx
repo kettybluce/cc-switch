@@ -175,6 +175,12 @@ vi.mock("@/components/UpdateBadge", () => ({
   ),
 }));
 
+vi.mock("@/components/settings/SettingsPage", () => ({
+  SettingsPage: ({ defaultTab }: { defaultTab?: string }) => (
+    <div data-testid="settings-page">{defaultTab}</div>
+  ),
+}));
+
 vi.mock("@/components/mcp/McpPanel", () => ({
   default: ({ open, onOpenChange }: any) =>
     open ? (
@@ -347,6 +353,39 @@ describe("App integration with MSW", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalledWith(
       expect.stringContaining("Provider key is required for openclaw"),
+    );
+  });
+
+  it("opens usage statistics from the Pi providers header", async () => {
+    localStorage.setItem("cc-switch-last-app", "pi");
+    setProviders("pi", {
+      custom: {
+        id: "custom",
+        name: "Custom Pi",
+        settingsConfig: {
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "test-key",
+          api: "openai-completions",
+          models: [{ id: "model-a" }],
+        },
+        category: "custom",
+        sortIndex: 0,
+        createdAt: Date.now(),
+      },
+    });
+
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "Custom Pi",
+      ),
+    );
+
+    fireEvent.click(screen.getByTitle("使用统计"));
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-page")).toHaveTextContent("usage"),
     );
   });
 

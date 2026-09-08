@@ -849,6 +849,8 @@
     "browseDirectory": "浏览目录",
     "resetDefault": "恢复默认目录（需保存后生效）",
     "checkForUpdates": "检查更新",
+    "forkUpdatesDisabled": "此分支版本已禁用应用更新",
+    "forkUpdatesDisabledHint": "不会请求 ccswitch.io 或上游 GitHub latest.json。",
     "updateTo": "更新到 v{{version}}",
     "updating": "更新中...",
     "checking": "检查中...",

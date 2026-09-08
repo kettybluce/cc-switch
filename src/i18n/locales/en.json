@@ -849,6 +849,8 @@
     "browseDirectory": "Browse Directory",
     "resetDefault": "Reset to default directory (takes effect after saving)",
     "checkForUpdates": "Check for Updates",
+    "forkUpdatesDisabled": "Updates disabled in this fork",
+    "forkUpdatesDisabledHint": "This build does not check ccswitch.io or upstream GitHub latest.json.",
     "updateTo": "Update to v{{version}}",
     "updating": "Updating...",
     "checking": "Checking...",
