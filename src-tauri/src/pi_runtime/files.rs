@@ -247,7 +247,9 @@ fn read_wsl(
                 file.label()
             ))
         })?;
-    let status = String::from_utf8_lossy(&payload[..newline]).trim().to_string();
+    let status = String::from_utf8_lossy(&payload[..newline])
+        .trim()
+        .to_string();
     let body = &payload[newline + 1..];
 
     let mut fields = status.split_whitespace();
@@ -291,19 +293,12 @@ fn read_wsl(
     }
 }
 
-fn write_local(
-    file: PiFile,
-    path: &Path,
-    bytes: &[u8],
-    expected_revision: &str,
-) -> PiResult<()> {
+fn write_local(file: PiFile, path: &Path, bytes: &[u8], expected_revision: &str) -> PiResult<()> {
     ensure_private_parent(path)?;
 
     let actual_revision = match fs::read(path) {
         Ok(current) => revision(&current),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            MISSING_REVISION.to_string()
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => MISSING_REVISION.to_string(),
         Err(error) => {
             return Err(PiRuntimeError::config_not_found(format!(
                 "cannot read {} before writing ({}): {error}",
@@ -396,10 +391,7 @@ fn ensure_private_parent(path: &Path) -> PiResult<()> {
     })?;
     let created = !parent.exists();
     fs::create_dir_all(parent).map_err(|error| {
-        PiRuntimeError::command_failed(format!(
-            "cannot create {}: {error}",
-            parent.display()
-        ))
+        PiRuntimeError::command_failed(format!("cannot create {}: {error}", parent.display()))
     })?;
 
     #[cfg(not(unix))]
@@ -409,10 +401,7 @@ fn ensure_private_parent(path: &Path) -> PiResult<()> {
     if created {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|error| {
-            PiRuntimeError::command_failed(format!(
-                "cannot restrict {}: {error}",
-                parent.display()
-            ))
+            PiRuntimeError::command_failed(format!("cannot restrict {}: {error}", parent.display()))
         })?;
     }
     Ok(())
@@ -460,7 +449,7 @@ mod tests {
         let _fixture = wsl_fixture();
 
         let read = read(PiFile::Models, LIMIT).expect("read models");
-        assert!(!read.bytes.is_some());
+        assert!(read.bytes.is_none());
         assert_eq!(read.revision, MISSING_REVISION);
     }
 
@@ -492,7 +481,10 @@ mod tests {
         let error = write(PiFile::Models, b"{}\n", &revision(original))
             .expect_err("a stale write must be refused");
 
-        assert_eq!(error.code, crate::pi_runtime::error::PiRuntimeErrorCode::PiConfigConflict);
+        assert_eq!(
+            error.code,
+            crate::pi_runtime::error::PiRuntimeErrorCode::PiConfigConflict
+        );
         assert_eq!(
             fs::read(fixture.agent_dir.join("models.json")).expect("read models"),
             external
@@ -511,7 +503,12 @@ mod tests {
         let leftovers: Vec<_> = fs::read_dir(&fixture.agent_dir)
             .expect("read agent dir")
             .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".cc-switch"))
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".cc-switch")
+            })
             .collect();
         assert!(leftovers.is_empty(), "temporary files were left behind");
     }
@@ -545,8 +542,12 @@ mod tests {
     fn settings_and_models_resolve_to_distinct_files() {
         let _fixture = wsl_fixture();
 
-        write(PiFile::Settings, b"{\"defaultModel\":\"x\"}\n", MISSING_REVISION)
-            .expect("write settings");
+        write(
+            PiFile::Settings,
+            b"{\"defaultModel\":\"x\"}\n",
+            MISSING_REVISION,
+        )
+        .expect("write settings");
 
         assert!(read(PiFile::Models, LIMIT)
             .expect("read models")
@@ -573,9 +574,11 @@ mod tests {
         let _agent = crate::pi_config::test_support::TestAgentDir::new();
         let _target = TestTarget::install(PiRuntimeTarget::Local);
 
-        assert!(!read(PiFile::Models, LIMIT).expect("read models").bytes.is_some());
-        write(PiFile::Models, b"{\"providers\":{}}\n", MISSING_REVISION)
-            .expect("write models");
+        assert!(read(PiFile::Models, LIMIT)
+            .expect("read models")
+            .bytes
+            .is_none());
+        write(PiFile::Models, b"{\"providers\":{}}\n", MISSING_REVISION).expect("write models");
 
         let read_back = read(PiFile::Models, LIMIT).expect("read models");
         assert_eq!(
@@ -593,6 +596,9 @@ mod tests {
 
         let error =
             write(PiFile::Models, b"{\"a\":1}\n", MISSING_REVISION).expect_err("stale write");
-        assert_eq!(error.code, crate::pi_runtime::error::PiRuntimeErrorCode::PiConfigConflict);
+        assert_eq!(
+            error.code,
+            crate::pi_runtime::error::PiRuntimeErrorCode::PiConfigConflict
+        );
     }
 }

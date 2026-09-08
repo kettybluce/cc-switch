@@ -388,7 +388,6 @@ fn write_models_document(
     Ok(())
 }
 
-
 fn optional_string(
     object: &Map<String, Value>,
     key: &str,

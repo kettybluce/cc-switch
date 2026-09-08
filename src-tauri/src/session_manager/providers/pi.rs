@@ -163,9 +163,7 @@ fn resolve_session_root() -> SessionRootResolution {
     }
 }
 
-fn resolve_wsl_session_root(
-    target: &crate::pi_runtime::PiRuntimeTarget,
-) -> SessionRootResolution {
+fn resolve_wsl_session_root(target: &crate::pi_runtime::PiRuntimeTarget) -> SessionRootResolution {
     let Some(root) = crate::pi_runtime::sessions::local_sessions_root(target) else {
         return SessionRootResolution::Unavailable {
             reason: "Pi WSL runtime has no session cache location".to_string(),
@@ -921,7 +919,10 @@ mod wsl_tests {
             .expect("a resume command");
 
         assert!(resume.starts_with("wsl.exe -d Ubuntu-22.04 --"), "{resume}");
-        assert!(resume.contains(".pi/agent/sessions/work/abc.jsonl"), "{resume}");
+        assert!(
+            resume.contains(".pi/agent/sessions/work/abc.jsonl"),
+            "{resume}"
+        );
         // The mirrored copy must never be what Pi is pointed at.
         assert!(!resume.contains("pi-wsl-sessions"), "{resume}");
     }

@@ -1161,8 +1161,8 @@ mod tests {
         entry["timestamp"] = Value::from(i64::MIN);
         entry["message"]["timestamp"] = Value::from(i64::MAX);
 
-        let record =
-            parse_usage_record(&entry, "session", Some(1_700_000_000), 0, None).expect("usage record");
+        let record = parse_usage_record(&entry, "session", Some(1_700_000_000), 0, None)
+            .expect("usage record");
         assert_eq!(record.created_at, 1_700_000_000);
     }
 
@@ -1321,7 +1321,10 @@ mod tests {
             derive_latency_ms(Some(0), Some(MAX_DERIVED_LATENCY_MS)),
             MAX_DERIVED_LATENCY_MS
         );
-        assert_eq!(derive_latency_ms(Some(0), Some(MAX_DERIVED_LATENCY_MS + 1)), 0);
+        assert_eq!(
+            derive_latency_ms(Some(0), Some(MAX_DERIVED_LATENCY_MS + 1)),
+            0
+        );
     }
 
     #[test]

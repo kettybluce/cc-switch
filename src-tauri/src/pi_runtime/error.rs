@@ -138,7 +138,8 @@ mod tests {
 
     #[test]
     fn conflicts_map_to_conflict_app_errors() {
-        let app_error: AppError = PiRuntimeError::config_conflict("changed outside CC Switch").into();
+        let app_error: AppError =
+            PiRuntimeError::config_conflict("changed outside CC Switch").into();
         assert!(matches!(app_error, AppError::Conflict(_)));
     }
 

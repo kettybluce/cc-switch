@@ -85,9 +85,7 @@ pub(crate) fn sync_pi_wsl_sessions() -> Result<SessionSyncOutcome, String> {
 /// Proxy plan for the Pi process: how WSL reaches CC Switch, which upstream
 /// proxy Pi should use, and the environment that would be applied.
 #[tauri::command]
-pub(crate) async fn get_pi_proxy_plan(
-    state: State<'_, AppState>,
-) -> Result<PiProxyPlan, String> {
+pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiProxyPlan, String> {
     let target = crate::pi_runtime::target();
     let flags = crate::pi_runtime::settings().flags;
     let port = state

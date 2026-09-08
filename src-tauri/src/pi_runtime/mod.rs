@@ -510,7 +510,10 @@ mod tests {
             redact(r#"{"apiKey": "sk-ant-api03-abcdefghijklmnop"}"#),
             r#"{"apiKey": "***"}"#
         );
-        assert_eq!(redact("Authorization: Bearer abcdef123456"), "Authorization: ***");
+        assert_eq!(
+            redact("Authorization: Bearer abcdef123456"),
+            "Authorization: ***"
+        );
         assert_eq!(
             redact("HTTPS_PROXY=http://host:7890 token=abc123def456"),
             "HTTPS_PROXY=http://host:7890 token=***"
@@ -530,7 +533,8 @@ mod tests {
 
     #[test]
     fn redaction_leaves_ordinary_diagnostics_untouched() {
-        let message = "Pi provider 'anthropic' changed outside CC Switch: /home/me/.pi/agent/models.json";
+        let message =
+            "Pi provider 'anthropic' changed outside CC Switch: /home/me/.pi/agent/models.json";
         assert_eq!(redact(message), message);
     }
 }

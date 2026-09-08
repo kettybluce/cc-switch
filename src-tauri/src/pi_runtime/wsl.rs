@@ -471,9 +471,7 @@ fn decode_utf16le(bytes: &[u8]) -> String {
 }
 
 pub fn first_line(text: &str) -> Option<&str> {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
+    text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 /// Test double that runs scripts through the local `bash`, which lets the
@@ -565,8 +563,7 @@ mod tests {
     #[test]
     fn argv_passes_user_values_as_positional_parameters() {
         let argv = build_wsl_argv(
-            &WslRequest::new("Ubuntu-22.04", "cat -- \"$1\"")
-                .arg("/home/me/.pi/agent/models.json"),
+            &WslRequest::new("Ubuntu-22.04", "cat -- \"$1\"").arg("/home/me/.pi/agent/models.json"),
         )
         .expect("build argv");
 
@@ -650,10 +647,8 @@ mod tests {
 
         // If the value were concatenated into the script, the subshell would
         // run and stdout would contain "pwned".
-        let result = run(
-            &WslRequest::new("Ubuntu-22.04", "printf '%s' \"$1\"")
-                .arg("$(echo pwned); `echo pwned`; 'quoted'"),
-        )
+        let result = run(&WslRequest::new("Ubuntu-22.04", "printf '%s' \"$1\"")
+            .arg("$(echo pwned); `echo pwned`; 'quoted'"))
         .expect("run script");
 
         assert!(result.succeeded());
@@ -702,10 +697,9 @@ mod tests {
             runner.path().to_path_buf(),
         )));
 
-        let error = run(
-            &WslRequest::new("Ubuntu-22.04", "sleep 30").timeout(Duration::from_millis(300)),
-        )
-        .expect_err("expected a timeout");
+        let error =
+            run(&WslRequest::new("Ubuntu-22.04", "sleep 30").timeout(Duration::from_millis(300)))
+                .expect_err("expected a timeout");
 
         assert!(error.to_string().contains("timed out"));
     }
@@ -727,7 +721,10 @@ mod tests {
 
     #[test]
     fn utf8_console_output_is_left_alone() {
-        assert_eq!(decode_console_output("Ubuntu 中文\n".as_bytes()), "Ubuntu 中文\n");
+        assert_eq!(
+            decode_console_output("Ubuntu 中文\n".as_bytes()),
+            "Ubuntu 中文\n"
+        );
         assert_eq!(decode_console_output(b""), "");
     }
 

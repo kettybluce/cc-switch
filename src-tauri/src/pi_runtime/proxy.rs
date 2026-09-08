@@ -292,9 +292,7 @@ pub fn plan(
     let Some(distro) = target.distro() else {
         return Ok(PiProxyPlan {
             enabled: false,
-            gateway: ProxyHealth::unreachable(
-                "the proxy plan only applies to the WSL runtime",
-            ),
+            gateway: ProxyHealth::unreachable("the proxy plan only applies to the WSL runtime"),
             forward_proxy: None,
             forward_proxy_health: None,
             environment: BTreeMap::new(),
@@ -327,10 +325,7 @@ pub fn plan(
 }
 
 /// Verify the configured proxy from inside the distribution.
-pub fn verify(
-    target: &super::PiRuntimeTarget,
-    configured: Option<&str>,
-) -> PiResult<ProxyHealth> {
+pub fn verify(target: &super::PiRuntimeTarget, configured: Option<&str>) -> PiResult<ProxyHealth> {
     let Some(distro) = target.distro() else {
         return Ok(ProxyHealth::unreachable(
             "proxy verification only applies to the WSL runtime",
@@ -385,9 +380,7 @@ pub fn parse_resolv_nameserver(output: &str) -> Option<Ipv4Addr> {
 
 /// Candidate host addresses for the Windows side, in probe order.
 pub fn host_candidates(distro: &str) -> PiResult<Vec<HostCandidate>> {
-    let output = wsl::run(
-        &WslRequest::guarded(distro, HOST_SCRIPT).timeout(wsl::PROBE_TIMEOUT),
-    )?;
+    let output = wsl::run(&WslRequest::guarded(distro, HOST_SCRIPT).timeout(wsl::PROBE_TIMEOUT))?;
     output.require_success("resolving the WSL host address")?;
 
     let payload = output.payload_lossy();
@@ -403,10 +396,7 @@ pub fn host_candidates(distro: &str) -> PiResult<Vec<HostCandidate>> {
     Ok(build_candidates(gateway, nameserver))
 }
 
-fn build_candidates(
-    gateway: Option<Ipv4Addr>,
-    nameserver: Option<Ipv4Addr>,
-) -> Vec<HostCandidate> {
+fn build_candidates(gateway: Option<Ipv4Addr>, nameserver: Option<Ipv4Addr>) -> Vec<HostCandidate> {
     let mut candidates = vec![HostCandidate {
         host: "127.0.0.1".to_string(),
         strategy: HostStrategy::MirroredLoopback,
@@ -724,7 +714,7 @@ mod tests {
             environment.get("ALL_PROXY").map(String::as_str),
             Some("http://172.30.208.1:7890")
         );
-        assert!(environment.get("NO_PROXY").is_some());
+        assert!(environment.contains_key("NO_PROXY"));
     }
 
     #[test]

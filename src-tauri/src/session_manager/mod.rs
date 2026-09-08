@@ -56,7 +56,11 @@ impl SessionMeta {
         };
         let last_event = self.last_active_at.unwrap_or(start);
         let active = last_event <= now_ms && now_ms - last_event <= ACTIVE_WINDOW_MS;
-        let end = if active { now_ms.max(last_event) } else { last_event };
+        let end = if active {
+            now_ms.max(last_event)
+        } else {
+            last_event
+        };
         // Clock skew or a rewritten log can put the end before the start; a
         // negative duration is never meaningful, so clamp instead.
         self.duration_ms = Some((end - start).max(0));

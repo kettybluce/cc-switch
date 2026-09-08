@@ -153,10 +153,7 @@ pub fn invalidate_sync_throttle() {
 pub fn wsl_resume_command(distro: &str, linux_path: &str) -> String {
     format!(
         "wsl.exe -d {distro} -- bash -lic {}",
-        shell_single_quote(&format!(
-            "pi --session {}",
-            shell_single_quote(linux_path)
-        ))
+        shell_single_quote(&format!("pi --session {}", shell_single_quote(linux_path)))
     )
 }
 
@@ -175,7 +172,9 @@ pub fn cache_root(distro: &str) -> PathBuf {
 ///
 /// `None` for the local runtime, which reads Pi's real directory directly.
 pub fn local_sessions_root(target: &PiRuntimeTarget) -> Option<PathBuf> {
-    target.distro().map(|distro| cache_root(distro).join("sessions"))
+    target
+        .distro()
+        .map(|distro| cache_root(distro).join("sessions"))
 }
 
 /// Translate a mirrored file back to its path inside WSL, so resume commands
@@ -373,7 +372,7 @@ fn cap_manifest(mut entries: Vec<SessionManifestEntry>) -> (Vec<SessionManifestE
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
         return (entries, false);
     }
-    entries.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.mtime_ms));
     entries.truncate(MAX_TRACKED_SESSIONS);
     entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     (entries, true)
@@ -470,17 +469,11 @@ fn fetch_batch(
         let destination = cache.join(&rel_path);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).map_err(|error| {
-                PiRuntimeError::session_read(format!(
-                    "cannot create {}: {error}",
-                    parent.display()
-                ))
+                PiRuntimeError::session_read(format!("cannot create {}: {error}", parent.display()))
             })?;
         }
         fs::write(&destination, &contents).map_err(|error| {
-            PiRuntimeError::session_read(format!(
-                "cannot write {}: {error}",
-                destination.display()
-            ))
+            PiRuntimeError::session_read(format!("cannot write {}: {error}", destination.display()))
         })?;
         fetched += 1;
         bytes += contents.len() as u64;
@@ -536,10 +529,7 @@ fn parse_frames<R: Read>(reader: &mut R) -> PiResult<Vec<(String, Vec<u8>)>> {
                 "Pi session transfer was truncated inside {rel_path}"
             )));
         }
-        files.push((
-            rel_path.to_string(),
-            stream[cursor..cursor + size].to_vec(),
-        ));
+        files.push((rel_path.to_string(), stream[cursor..cursor + size].to_vec()));
         cursor += size;
     }
 }
@@ -642,7 +632,10 @@ mod tests {
         );
 
         assert_eq!(
-            entries.iter().map(|e| e.rel_path.as_str()).collect::<Vec<_>>(),
+            entries
+                .iter()
+                .map(|e| e.rel_path.as_str())
+                .collect::<Vec<_>>(),
             vec!["ok.jsonl"]
         );
     }
@@ -658,7 +651,10 @@ mod tests {
         let plan = plan_sync(&previous, &remote, cache.path(), true);
 
         assert_eq!(
-            plan.fetch.iter().map(|e| e.rel_path.as_str()).collect::<Vec<_>>(),
+            plan.fetch
+                .iter()
+                .map(|e| e.rel_path.as_str())
+                .collect::<Vec<_>>(),
             vec!["b.jsonl"]
         );
         assert_eq!(plan.remove, vec!["gone.jsonl"]);
