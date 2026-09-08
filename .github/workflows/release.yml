@@ -4,18 +4,33 @@ on:
   push:
     tags:
       - 'v*'
+  # Rebuild/publish an existing tag from this workflow revision without moving
+  # the tag (e.g. after a fork-only workflow fix). Asset names still use the
+  # tag, not the branch name.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish (e.g. v0.1.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   release:
     runs-on: ${{ matrix.os }}
     environment: release
+    # This fork has no Apple signing secrets. A macOS failure must not block
+    # publishing Windows/Linux assets from the other matrix legs.
+    continue-on-error: ${{ matrix.os == 'macos-14' }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,15 +44,31 @@ jobs:
           - os: macos-14
 
     steps:
+      - name: Check Apple signing secrets
+        if: runner.os == 'macOS'
+        id: apple
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "APPLE_CERTIFICATE is not configured; skipping the macOS build so Windows/Linux can still publish."
+          fi
+
       - name: Checkout
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: actions/checkout@v6
 
       - name: Setup Node.js
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: '20'
 
       - name: Setup Rust
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add Windows ARM64 target
@@ -46,7 +77,7 @@ jobs:
         run: rustup target add aarch64-pc-windows-msvc
 
       - name: Add macOS targets
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
@@ -83,6 +114,7 @@ jobs:
             || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
 
       - name: Setup pnpm
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         run: |
@@ -92,13 +124,13 @@ jobs:
           pnpm --version
 
       - name: Get pnpm store directory
-        if: runner.os != 'Windows' || matrix.arch != 'arm64'
+        if: (runner.os != 'macOS' || steps.apple.outputs.enabled == 'true') && (runner.os != 'Windows' || matrix.arch != 'arm64')
         id: pnpm-store
         shell: bash
         run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
 
       - name: Setup pnpm cache
-        if: runner.os != 'Windows' || matrix.arch != 'arm64'
+        if: (runner.os != 'macOS' || steps.apple.outputs.enabled == 'true') && (runner.os != 'Windows' || matrix.arch != 'arm64')
         uses: actions/cache@v5
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
@@ -120,9 +152,11 @@ jobs:
           $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install frontend deps
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Prepare Tauri signing key
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         shell: bash
         run: |
           # 调试：检查 Secret 是否存在
@@ -179,7 +213,7 @@ jobs:
           echo "✅ Tauri signing key prepared"
 
       - name: Import Apple signing certificate
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -221,7 +255,7 @@ jobs:
           rm -f "$CERT_PATH"
 
       - name: Build Tauri App (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
         shell: bash
         timeout-minutes: 60
         env:
@@ -267,12 +301,12 @@ jobs:
         run: pnpm tauri build --bundles appimage,deb,rpm
 
       - name: Prepare macOS Assets
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p release-assets
-          VERSION="${GITHUB_REF_NAME}"  # e.g., v3.5.0
+          VERSION="${RELEASE_TAG}"  # e.g., v3.5.0
 
           # Locate bundle artifacts
           TAR_GZ=""; APP_PATH=""
@@ -342,7 +376,7 @@ jobs:
           echo "✅ Styled DMG created: $NEW_DMG"
 
       - name: Notarize macOS DMG
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
         shell: bash
         timeout-minutes: 30
         env:
@@ -384,7 +418,7 @@ jobs:
           done
 
       - name: Verify macOS code signing and notarization
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -436,7 +470,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          $VERSION = $env:GITHUB_REF_NAME  # e.g., v3.5.0
+          $VERSION = $env:RELEASE_TAG  # e.g., v3.5.0
           $isArm64 = $env:WINDOWS_RELEASE_ARCH -eq 'arm64'
           $targetRoot = if ($isArm64) { 'src-tauri/target/aarch64-pc-windows-msvc/release' } else { 'src-tauri/target/release' }
           $assetSuffix = if ($isArm64) { '-arm64' } else { '' }
@@ -510,7 +544,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p release-assets
-          VERSION="${GITHUB_REF_NAME}"  # e.g., v3.5.0
+          VERSION="${RELEASE_TAG}"  # e.g., v3.5.0
           ARCH="${{ matrix.arch || 'x86_64' }}"
           # Updater artifact: AppImage（含对应 .sig）
           APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" | head -1 || true)
@@ -552,6 +586,7 @@ jobs:
           ls -la release-assets/*.sig || echo "No signatures found"
 
       - name: Upload release artifacts to workflow
+        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ runner.os }}-${{ matrix.arch || runner.arch }}
@@ -580,6 +615,9 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-22.04
     needs: release
+    # Matrix legs use fail-fast: false. Publish whatever platforms succeeded
+    # (Windows/Linux) even when macOS signing fails or is skipped.
+    if: ${{ always() && !cancelled() }}
     permissions:
       contents: write
     steps:
@@ -590,37 +628,58 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: List downloaded release artifacts
+      - name: Require at least one platform artifact
         shell: bash
         run: |
           set -euo pipefail
+          if [ ! -d release-assets ] || [ -z "$(ls -A release-assets 2>/dev/null || true)" ]; then
+            echo "No platform artifacts were uploaded; refusing to publish an empty release." >&2
+            exit 1
+          fi
           ls -la release-assets
+
+      - name: Compose release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          {
+            echo "## CC Switch ${TAG}"
+            echo
+            echo "Independent fork build. App updater remains disabled."
+            echo
+            echo "### Download"
+            echo
+            if ls release-assets/CC-Switch-"${TAG}"-Windows.msi >/dev/null 2>&1; then
+              echo "- **Windows (x86_64)**: \`CC-Switch-${TAG}-Windows.msi\` (installer) or \`CC-Switch-${TAG}-Windows-Portable.zip\`"
+            fi
+            if ls release-assets/CC-Switch-"${TAG}"-Windows-arm64.msi >/dev/null 2>&1; then
+              echo "- **Windows (ARM64)**: \`CC-Switch-${TAG}-Windows-arm64.msi\` or \`CC-Switch-${TAG}-Windows-arm64-Portable.zip\`"
+            fi
+            if ls release-assets/CC-Switch-"${TAG}"-Linux-x86_64.AppImage >/dev/null 2>&1; then
+              echo "- **Linux (x86_64)**: \`CC-Switch-${TAG}-Linux-x86_64.AppImage\` / \`.deb\` / \`.rpm\`"
+            fi
+            if ls release-assets/CC-Switch-"${TAG}"-Linux-arm64.AppImage >/dev/null 2>&1; then
+              echo "- **Linux (ARM64)**: \`CC-Switch-${TAG}-Linux-arm64.AppImage\` / \`.deb\` / \`.rpm\`"
+            fi
+            if ls release-assets/CC-Switch-"${TAG}"-macOS.dmg >/dev/null 2>&1; then
+              echo "- **macOS**: \`CC-Switch-${TAG}-macOS.dmg\` or \`CC-Switch-${TAG}-macOS.zip\`"
+              echo
+              echo "macOS assets in this build were Apple-signed and notarized."
+            else
+              echo
+              echo "macOS assets were not published (Apple signing certificate is not configured, or the macOS job did not succeed)."
+            fi
+          } > release-notes.md
+          cat release-notes.md
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          name: CC Switch ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: CC Switch ${{ env.RELEASE_TAG }}
           prerelease: true
-          body: |
-            ## CC Switch ${{ github.ref_name }}
-
-            🌐 **Only Official Website / 唯一官方网站 / 唯一の公式サイト**: [ccswitch.io](https://ccswitch.io)
-
-            Claude Code 供应商切换工具
-
-            ### 下载
-
-            - **macOS**: `CC-Switch-${{ github.ref_name }}-macOS.dmg`（推荐）或 `CC-Switch-${{ github.ref_name }}-macOS.zip`（解压即用）
-            - **Windows (x86_64)**: `CC-Switch-${{ github.ref_name }}-Windows.msi`（安装版）或 `CC-Switch-${{ github.ref_name }}-Windows-Portable.zip`（绿色版）
-            - **Windows (ARM64)**: `CC-Switch-${{ github.ref_name }}-Windows-arm64.msi`（安装版）或 `CC-Switch-${{ github.ref_name }}-Windows-arm64-Portable.zip`（绿色版）
-            - **Linux (x86_64)**: `CC-Switch-${{ github.ref_name }}-Linux-x86_64.AppImage` / `.deb` / `.rpm`
-            - **Linux (ARM64)**: `CC-Switch-${{ github.ref_name }}-Linux-arm64.AppImage` / `.deb` / `.rpm`
-
-            > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
-
-            ---
-            macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。
+          body_path: release-notes.md
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -629,6 +688,7 @@ jobs:
     name: Assemble latest.json
     runs-on: ubuntu-22.04
     needs: publish-release
+    if: ${{ success() }}
     permissions:
       contents: write
     steps:
@@ -642,14 +702,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           mkdir -p dl
           gh release download "$TAG" --dir dl --repo "$GITHUB_REPOSITORY"
           ls -la dl || true
       - name: Generate latest.json
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
@@ -728,4 +788,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
