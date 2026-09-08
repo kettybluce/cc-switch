@@ -276,7 +276,7 @@ fn jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json() {
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(result.imported, 2, "parent assistant + task assistant");
 
-    let conn = crate::database::lock_conn!(db.conn);
+    let conn = db.conn.lock().expect("lock usage db");
     let parent: String = conn
         .query_row(
             "SELECT total_cost_usd FROM proxy_request_logs

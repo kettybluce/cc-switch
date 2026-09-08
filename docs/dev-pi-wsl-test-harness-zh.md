@@ -21,13 +21,13 @@ Ubuntu-22.04  ~/.pi/agent/                ▼
 
 位置：[`tests/fixtures/pi-wsl/`](../tests/fixtures/pi-wsl/)。
 
-| 路径 | 用途 |
-| --- | --- |
-| `cases/identical/{models.json,agent/models.json}` | 两份文件字节级相同（健康同步的稳态） |
-| `cases/diverge/` | agent 为规范上游；顶层残留 `/pi/<id>` 代理 URL（接管恢复后分叉） |
-| `cases/only-agent/` | 只有 `agent/models.json`（顶层镜像尚未写出） |
-| `sessions/--home-tfdx8045-code-agent--/*.jsonl` | cwd 组会话：`session`、`model_change`、带 `usage.cost.total = 0` 的 assistant |
-| `sessions/--home-tfdx8045-code-agent--/<id>/tasks/*.jsonl` | 任务子会话（相对 `sessions/` 深度正好为 4） |
+| 路径                                                       | 用途                                                                          |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `cases/identical/{models.json,agent/models.json}`          | 两份文件字节级相同（健康同步的稳态）                                          |
+| `cases/diverge/`                                           | agent 为规范上游；顶层残留 `/pi/<id>` 代理 URL（接管恢复后分叉）              |
+| `cases/only-agent/`                                        | 只有 `agent/models.json`（顶层镜像尚未写出）                                  |
+| `sessions/--home-tfdx8045-code-agent--/*.jsonl`            | cwd 组会话：`session`、`model_change`、带 `usage.cost.total = 0` 的 assistant |
+| `sessions/--home-tfdx8045-code-agent--/<id>/tasks/*.jsonl` | 任务子会话（相对 `sessions/` 深度正好为 4）                                   |
 
 cwd 编码与 Pi 一致：`/home/tfdx8045/code/agent` → `--home-tfdx8045-code-agent--`。会话 header 里的 `cwd` 才是权威路径；目录名只用于分组。
 
@@ -47,14 +47,14 @@ Rust：`src-tauri/src/pi_runtime/wsl_linux_harness.rs`（`cargo test --lib wsl_l
 
 ## 明确不覆盖（真 Windows + WSL GUI）
 
-| 能力 | 为何不在 Linux 云上做 |
-| --- | --- |
-| `wsl.exe` 启动/停止发行版、UTF-16 `wsl -l -q` | 没有 Windows 主机；UTF-16 列表另有单元测试 |
-| NAT vs 镜像网络、探测网关 / `resolv.conf`、把 `127.0.0.1` 写入发行版 | 需要真 WSL 网卡；代理探测是 `pi_runtime::proxy` |
-| 登录壳 `~/.bashrc` / nvm 把 `pi` 放进 PATH | 替身去掉了 `PI_CODING_AGENT_DIR`，但不会跑用户的 profile |
-| 设置页「Pi 接管」开关、托盘、会话列表 GUI | 无 Windows GUI；前端有 `PiRuntimeSettings` 等组件测试 |
-| UNC `\\wsl.localhost\…` 写盘 | 产品禁止这条路径；Windows CI 另有原子写契约 |
-| 用户本机 `machineId`、真实 Ubuntu-22.04 家目录 | 约束：不得访问 |
+| 能力                                                                 | 为何不在 Linux 云上做                                    |
+| -------------------------------------------------------------------- | -------------------------------------------------------- |
+| `wsl.exe` 启动/停止发行版、UTF-16 `wsl -l -q`                        | 没有 Windows 主机；UTF-16 列表另有单元测试               |
+| NAT vs 镜像网络、探测网关 / `resolv.conf`、把 `127.0.0.1` 写入发行版 | 需要真 WSL 网卡；代理探测是 `pi_runtime::proxy`          |
+| 登录壳 `~/.bashrc` / nvm 把 `pi` 放进 PATH                           | 替身去掉了 `PI_CODING_AGENT_DIR`，但不会跑用户的 profile |
+| 设置页「Pi 接管」开关、托盘、会话列表 GUI                            | 无 Windows GUI；前端有 `PiRuntimeSettings` 等组件测试    |
+| UNC `\\wsl.localhost\…` 写盘                                         | 产品禁止这条路径；Windows CI 另有原子写契约              |
+| 用户本机 `machineId`、真实 Ubuntu-22.04 家目录                       | 约束：不得访问                                           |
 
 真机验收（Windows MSI）仍按产品清单：打开 Pi 接管后两份 `models.json` 都变成 `/pi/<id>`；关掉后都恢复上游 URL。
 
