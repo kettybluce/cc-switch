@@ -124,7 +124,7 @@ impl Database {
 
         // 8. Proxy Config 表（三行结构，app_type 主键）
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -558,6 +558,11 @@ impl Database {
                         Self::migrate_v17_to_v18(conn)?;
                         Self::set_user_version(conn, 18)?;
                     }
+                    18 => {
+                        log::info!("迁移数据库从 v18 到 v19（添加 Pi 代理接管配置）");
+                        Self::migrate_v18_to_v19(conn)?;
+                        Self::set_user_version(conn, 19)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -884,12 +889,25 @@ impl Database {
                 old_cb.3,
                 old_cb.4,
             ),
+            (
+                "pi",
+                false,
+                false,
+                3,
+                old_config.4,
+                old_config.5,
+                old_cb.0,
+                old_cb.1,
+                old_cb.2,
+                old_cb.3,
+                old_cb.4,
+            ),
         ];
 
         // 创建新表
         conn.execute("DROP TABLE IF EXISTS proxy_config_new", [])?;
         conn.execute("CREATE TABLE proxy_config_new (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -1451,7 +1469,7 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
             "CREATE TABLE proxy_config_v14 (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
                 proxy_enabled INTEGER NOT NULL DEFAULT 0,
                 listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
                 listen_port INTEGER NOT NULL DEFAULT 15721,
@@ -1605,6 +1623,114 @@ impl Database {
                 "INTEGER",
             )?;
         }
+        Ok(())
+    }
+
+    /// v18 -> v19: allow Pi to own a takeover row. Existing v18 tables still
+    /// CHECK app_type against Claude/Codex/Gemini/Grok only, so INSERT OR IGNORE
+    /// for `pi` is dropped silently until the constraint is rebuilt.
+    fn migrate_v18_to_v19(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "proxy_config")? {
+            return Ok(());
+        }
+
+        conn.execute("DROP TABLE IF EXISTS proxy_config_v19", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "CREATE TABLE proxy_config_v19 (
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
+                proxy_enabled INTEGER NOT NULL DEFAULT 0,
+                listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                listen_port INTEGER NOT NULL DEFAULT 15721,
+                enable_logging INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
+                non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4,
+                circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+                circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                live_takeover_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let copied_columns = [
+            ("app_type", "'claude'"),
+            ("proxy_enabled", "0"),
+            ("listen_address", "'127.0.0.1'"),
+            ("listen_port", "15721"),
+            ("enable_logging", "1"),
+            ("enabled", "0"),
+            ("auto_failover_enabled", "0"),
+            ("max_retries", "3"),
+            ("streaming_first_byte_timeout", "60"),
+            ("streaming_idle_timeout", "120"),
+            ("non_streaming_timeout", "600"),
+            ("circuit_failure_threshold", "4"),
+            ("circuit_success_threshold", "2"),
+            ("circuit_timeout_seconds", "60"),
+            ("circuit_error_rate_threshold", "0.6"),
+            ("circuit_min_requests", "10"),
+            ("default_cost_multiplier", "'1'"),
+            ("pricing_model_source", "'response'"),
+            ("live_takeover_active", "0"),
+            ("created_at", "datetime('now')"),
+            ("updated_at", "datetime('now')"),
+        ]
+        .into_iter()
+        .map(|(column, fallback)| {
+            Self::has_column(conn, "proxy_config", column).map(|exists| {
+                if exists {
+                    format!("\"{column}\"")
+                } else {
+                    fallback.into()
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?
+        .join(", ");
+
+        let copy_sql = format!(
+            "INSERT INTO proxy_config_v19 (
+                app_type, proxy_enabled, listen_address, listen_port, enable_logging,
+                enabled, auto_failover_enabled, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests,
+                default_cost_multiplier, pricing_model_source, live_takeover_active,
+                created_at, updated_at
+            )
+            SELECT {copied_columns} FROM proxy_config
+            WHERE app_type IN ('claude','codex','gemini','grokbuild','pi')"
+        );
+        conn.execute(&copy_sql, [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        conn.execute("DROP TABLE proxy_config", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("ALTER TABLE proxy_config_v19 RENAME TO proxy_config", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO proxy_config (
+                app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests
+            ) VALUES ('pi', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         Ok(())
     }
 
@@ -3718,6 +3844,45 @@ mod tests {
         )?;
         assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
         assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v18_to_v19_adds_pi_proxy_row_and_preserves_values() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute(
+            "CREATE TABLE proxy_config (
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3
+            )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO proxy_config (app_type, enabled, max_retries)
+             VALUES ('claude', 0, 6), ('codex', 1, 9), ('gemini', 0, 5), ('grokbuild', 0, 3)",
+            [],
+        )?;
+        Database::set_user_version(&conn, 18)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        let pi_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(pi_rows, 1);
+        let codex_values: (i64, i64) = conn.query_row(
+            "SELECT enabled, max_retries FROM proxy_config WHERE app_type = 'codex'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(codex_values, (1, 9));
+        conn.execute("INSERT INTO proxy_config (app_type) VALUES ('pi')", [])
+            .expect_err("duplicate Pi row must still be rejected");
+
         Ok(())
     }
 }

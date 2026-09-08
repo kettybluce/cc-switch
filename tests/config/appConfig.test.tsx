@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isAdditiveAppId, isProxyAppId, isTakeoverAppId, PROXY_APP_IDS, TAKEOVER_APP_IDS } from "@/config/appConfig";
+import {
+  isAdditiveAppId,
+  isProxyAppId,
+  isTakeoverAppId,
+  PROXY_APP_IDS,
+  TAKEOVER_APP_IDS,
+} from "@/config/appConfig";
 
 describe("appConfig provider lifecycle", () => {
   it.each(["opencode", "openclaw", "hermes", "pi"])(

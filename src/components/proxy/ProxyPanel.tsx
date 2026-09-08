@@ -32,7 +32,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import {
   getAppLabel,
-  PROXY_APP_IDS,
   TAKEOVER_APP_IDS,
   type ProxyAppId,
 } from "@/config/appConfig";

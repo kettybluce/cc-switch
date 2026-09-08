@@ -19,6 +19,8 @@ pub(crate) const MAX_SESSION_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionLayout {
+    /// Legacy `sessions/*.jsonl` layout, kept for tests and mixed trees.
+    #[allow(dead_code)]
     Flat,
     ProjectDirectories,
 }
@@ -700,6 +702,7 @@ fn first_user_title_text(content: Option<&Value>) -> Option<String> {
 
 /// Pi encodes a session's launch cwd as a directory name under `sessions/`:
 /// `/home/tfdx8045/code/agent` → `--home-tfdx8045-code-agent--`.
+#[cfg(test)]
 pub(crate) fn encode_session_cwd(cwd: &str) -> String {
     let trimmed = cwd.trim();
     let without_root = trimmed.trim_start_matches('/');

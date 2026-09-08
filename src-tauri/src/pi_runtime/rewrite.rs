@@ -800,12 +800,16 @@ mod tests {
             "contract must keep the no-global-WSL-env boundary"
         );
         assert!(
-            contract.contains("同一开关"),
-            "contract must tie Pi projection to the existing local-proxy control"
+            contract.contains("接管 + 本地代理"),
+            "contract must document Pi takeover plus local proxy as the product path"
         );
         assert!(
-            contract.contains("没有单独的 Pi 代理开关"),
-            "contract must not treat a Pi-only toggle as the primary UX"
+            contract.contains("Option B"),
+            "contract must record that auto Option B projection is demoted"
+        );
+        assert!(
+            !contract.contains("没有单独的 Pi 代理开关"),
+            "contract must not still describe Option B as the primary UX"
         );
         assert!(
             contract.contains("azure-openai-responses"),

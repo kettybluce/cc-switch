@@ -54,9 +54,7 @@ pub fn wsl_proxy_allowed() -> bool {
 }
 
 fn pi_takeover_enabled(db: &Database) -> bool {
-    futures::executor::block_on(db.get_proxy_config_for_app(PI_APP))
-        .map(|config| config.enabled)
-        .unwrap_or(false)
+    db.is_app_proxy_enabled_sync(PI_APP)
 }
 
 /// Restore the previous runtime's live `models.json` when the user switches
