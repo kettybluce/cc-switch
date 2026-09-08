@@ -37,6 +37,9 @@ describe("Pi WSL Linux harness fixtures", () => {
     expect(encodeSessionCwd(CWD)).toBe(
       path.basename(path.join(FIXTURES, "sessions", CWD_GROUP)),
     );
+    expect(decodeSessionCwd(encodeSessionCwd("/home/my-project"))).not.toBe(
+      "/home/my-project",
+    );
   });
 
   it("keeps session JSONL under the encoded cwd group, not a flat glob", () => {
@@ -108,6 +111,49 @@ describe("Pi WSL Linux harness fixtures", () => {
     expect(usage.cost.total).toBe(0);
   });
 
+  it("includes a depth-5 tasks/group JSONL beyond the old find maxdepth 4", () => {
+    const deepFile = path.join(
+      FIXTURES,
+      "sessions",
+      CWD_GROUP,
+      "2026-03-14T10-32-00_abc",
+      "tasks",
+      "group",
+      "deep-task.jsonl",
+    );
+    const lines = parseJsonl(deepFile);
+    expect(lines[0]).toMatchObject({
+      type: "session",
+      id: "sess-deep-task",
+      parentSession: "sess-parent-abc123",
+      cwd: CWD,
+    });
+  });
+
+  it("includes a requested≠served model session priced from models.json", () => {
+    const file = path.join(
+      FIXTURES,
+      "sessions",
+      CWD_GROUP,
+      "2026-03-14T11-00-00_map.jsonl",
+    );
+    const lines = parseJsonl(file);
+    expect(lines[0]).toMatchObject({
+      type: "session",
+      id: "sess-mapped-model",
+      cwd: CWD,
+    });
+    const assistant = lines[3]?.message as {
+      model: string;
+      responseModel: string;
+      usage: { input: number; cost: { total: number } };
+    };
+    expect(assistant.model).toBe("gpt-4.1-mini");
+    expect(assistant.responseModel).toBe("gpt-4.1-mini-served");
+    expect(assistant.usage.input).toBe(1_000_000);
+    expect(assistant.usage.cost.total).toBe(0);
+  });
+
   it("ships identical / diverge / only-agent models.json sync cases", () => {
     const read = (rel: string) =>
       JSON.parse(readFileSync(path.join(FIXTURES, rel), "utf8")) as {
@@ -120,6 +166,15 @@ describe("Pi WSL Linux harness fixtures", () => {
     expect(identicalAgent.providers["cc-switch-harness"]?.baseUrl).toBe(
       "https://api.example.com/v1",
     );
+    const models = identicalAgent.providers["cc-switch-harness"] as {
+      models: { id: string; cost: { input: number } }[];
+    };
+    expect(models.models.map((entry) => entry.id)).toEqual([
+      "gpt-4.1-mini",
+      "gpt-4.1-mini-served",
+    ]);
+    expect(models.models[0]?.cost.input).toBe(0.4);
+    expect(models.models[1]?.cost.input).toBe(8);
 
     const divergeAgent = read("cases/diverge/agent/models.json");
     const divergeTop = read("cases/diverge/models.json");

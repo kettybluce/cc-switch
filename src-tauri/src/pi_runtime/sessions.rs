@@ -24,17 +24,56 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::error::{PiResult, PiRuntimeError};
+use super::session_jsonl_maxdepth_str;
 use super::wsl::{self, WslRequest};
 use super::PiRuntimeTarget;
 
 /// `$1` sessions root.
-const MANIFEST_SCRIPT: &str = r#"
+///
+/// GNU `find -printf` is preferred. If that predicate is missing (BSD find),
+/// fall back to portable `find -print` + `stat` rather than swallowing stderr
+/// into a silent empty manifest (`fetched = 0`). A listing tool that cannot
+/// run at all fails the script so [`read_manifest`] surfaces a hard error.
+const MANIFEST_SCRIPT: &str = concat!(
+    r#"
 set -u
 root="$1"
 if [ ! -d "$root" ]; then printf 'missing\n'; exit 0; fi
+
+# Probe GNU -printf on the sessions root itself. Do not hide later listing
+# errors: an empty payload after a failed -printf looks like "no sessions".
+if find "$root" -maxdepth 0 -printf '%P' >/dev/null 2>&1; then
+  printf 'ok\n'
+  find "$root" -maxdepth "#,
+    session_jsonl_maxdepth_str!(),
+    r#" -type f -name '*.jsonl' -printf '%s\t%T@\t%P\n'
+  exit $?
+fi
+
 printf 'ok\n'
-find "$root" -maxdepth 4 -type f -name '*.jsonl' -printf '%s\t%T@\t%P\n' 2>/dev/null
-"#;
+tmp=$(mktemp) || { printf 'mktemp-failed\n' >&2; exit 1; }
+trap 'rm -f -- "$tmp"' EXIT
+if ! find "$root" -maxdepth "#,
+    session_jsonl_maxdepth_str!(),
+    r#" -type f -name '*.jsonl' -print >"$tmp"; then
+  printf 'find-failed\n' >&2
+  exit 1
+fi
+while IFS= read -r file; do
+  rel="${file#"$root"/}"
+  size=$(wc -c < "$file" | tr -d ' \t\r')
+  if mtime=$(stat -c '%Y' "$file" 2>/dev/null); then
+    :
+  elif mtime=$(stat -f '%m' "$file" 2>/dev/null); then
+    :
+  else
+    printf 'stat-failed %s\n' "$rel" >&2
+    exit 1
+  fi
+  printf '%s\t%s\t%s\n' "$size" "$mtime" "$rel"
+done <"$tmp"
+"#
+);
 
 /// `$1` sessions root; relative paths arrive on stdin, one per line.
 ///
@@ -600,6 +639,20 @@ mod tests {
     }
 
     #[test]
+    fn manifest_and_probe_scripts_share_the_session_jsonl_maxdepth() {
+        let needle = format!("-maxdepth {}", super::super::SESSION_JSONL_MAXDEPTH);
+        assert_eq!(
+            MANIFEST_SCRIPT.matches(&needle).count(),
+            2,
+            "GNU -printf and portable find must both use SESSION_JSONL_MAXDEPTH"
+        );
+        assert!(
+            !MANIFEST_SCRIPT.contains("2>/dev/null"),
+            "manifest listing must not swallow find stderr into fetched=0"
+        );
+    }
+
+    #[test]
     fn manifest_lines_are_parsed_into_entries() {
         let entries = parse_manifest(
             [
@@ -802,6 +855,109 @@ mod tests {
         assert!(!cache_root("Ubuntu-22.04")
             .join("sessions/project-a/two.jsonl")
             .exists());
+    }
+
+    #[cfg(unix)]
+    fn write_path_stub(dir: &Path, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::create_dir_all(dir).expect("stub bin");
+        let path = dir.join(name);
+        fs::write(&path, body).expect("write stub");
+        let mut perms = fs::metadata(&path).expect("stub meta").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod stub");
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn a_non_gnu_find_uses_the_portable_listing_instead_of_fetched_zero() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let config = tempfile::tempdir().expect("tempdir");
+        let stubs = tempfile::tempdir().expect("stub bin");
+        let _home_guard = TestHome::install(config.path());
+        let sessions = home.path().join(".pi/agent/sessions/project-a");
+        fs::create_dir_all(&sessions).expect("create sessions");
+        fs::write(sessions.join("one.jsonl"), "{\"type\":\"session\"}\n").expect("write session");
+
+        let real_find = which_find();
+        write_path_stub(
+            stubs.path(),
+            "find",
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    -printf)\n      echo 'find: unknown predicate `-printf'\\'' >&2\n      exit 1\n      ;;\n  esac\ndone\nexec {real_find} \"$@\"\n"
+            ),
+        );
+
+        let _runner = RunnerGuard::install(Arc::new(
+            LocalBashRunner::new("Ubuntu-22.04", home.path().to_path_buf())
+                .with_path_prepend(stubs.path().to_path_buf()),
+        ));
+        let target = PiRuntimeTarget::Wsl {
+            distro: "Ubuntu-22.04".to_string(),
+            home: home.path().to_string_lossy().into_owned(),
+            agent_dir: format!("{}/.pi/agent", home.path().to_string_lossy()),
+        };
+
+        let outcome = sync(&target).expect("portable find listing");
+        assert!(
+            outcome.errors.is_empty(),
+            "portable listing errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.fetched, 1,
+            "BSD find must not collapse to fetched=0"
+        );
+        assert!(cache_root("Ubuntu-22.04")
+            .join("sessions/project-a/one.jsonl")
+            .is_file());
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn an_unusable_find_is_a_hard_error_not_a_silent_empty_manifest() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let config = tempfile::tempdir().expect("tempdir");
+        let stubs = tempfile::tempdir().expect("stub bin");
+        let _home_guard = TestHome::install(config.path());
+        let sessions = home.path().join(".pi/agent/sessions/project-a");
+        fs::create_dir_all(&sessions).expect("create sessions");
+        fs::write(sessions.join("one.jsonl"), "{}\n").expect("write session");
+
+        write_path_stub(
+            stubs.path(),
+            "find",
+            "#!/bin/sh\necho 'find: broken listing tool' >&2\nexit 1\n",
+        );
+
+        let _runner = RunnerGuard::install(Arc::new(
+            LocalBashRunner::new("Ubuntu-22.04", home.path().to_path_buf())
+                .with_path_prepend(stubs.path().to_path_buf()),
+        ));
+        let target = PiRuntimeTarget::Wsl {
+            distro: "Ubuntu-22.04".to_string(),
+            home: home.path().to_string_lossy().into_owned(),
+            agent_dir: format!("{}/.pi/agent", home.path().to_string_lossy()),
+        };
+
+        let error = sync(&target).expect_err("unusable find must fail the sync");
+        let message = error.to_string();
+        assert!(
+            message.contains("listing Pi sessions") || message.contains("find"),
+            "expected a clear listing failure, got: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn which_find() -> String {
+        ["/usr/bin/find", "/bin/find"]
+            .iter()
+            .copied()
+            .find(|path| Path::new(path).is_file())
+            .unwrap_or("/usr/bin/find")
+            .to_string()
     }
 
     #[test]

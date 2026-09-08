@@ -21,26 +21,30 @@ Ubuntu-22.04  ~/.pi/agent/                ▼
 
 位置：[`tests/fixtures/pi-wsl/`](../tests/fixtures/pi-wsl/)。
 
-| 路径                                                       | 用途                                                                          |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `cases/identical/{models.json,agent/models.json}`          | 两份文件字节级相同（健康同步的稳态）                                          |
-| `cases/diverge/`                                           | agent 为规范上游；顶层残留 `/pi/<id>` 代理 URL（接管恢复后分叉）              |
-| `cases/only-agent/`                                        | 只有 `agent/models.json`（顶层镜像尚未写出）                                  |
-| `sessions/--home-tfdx8045-code-agent--/*.jsonl`            | cwd 组会话：`session`、`model_change`、带 `usage.cost.total = 0` 的 assistant |
-| `sessions/--home-tfdx8045-code-agent--/<id>/tasks/*.jsonl` | 任务子会话（相对 `sessions/` 深度正好为 4）                                   |
+| 路径                                                                | 用途                                                                          |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `cases/identical/{models.json,agent/models.json}`                   | 两份文件字节级相同（健康同步的稳态）；含 requested / served 两套单价          |
+| `cases/diverge/`                                                    | agent 为规范上游；顶层残留 `/pi/<id>` 代理 URL（接管恢复后分叉）              |
+| `cases/only-agent/`                                                 | 只有 `agent/models.json`（顶层镜像尚未写出）                                  |
+| `sessions/--home-tfdx8045-code-agent--/*.jsonl`                     | cwd 组会话：`session`、`model_change`、带 `usage.cost.total = 0` 的 assistant |
+| `sessions/…/<id>/tasks/*.jsonl`                                     | 任务子会话（相对 `sessions/` 深度 4）                                         |
+| `sessions/…/<id>/tasks/group/*.jsonl`                               | 更深一层（深度 5）。旧 `find -maxdepth 4` 会漏掉；现共享 `SESSION_JSONL_MAXDEPTH = 8` |
+| `sessions/…/2026-03-14T11-00-00_map.jsonl`                          | `model` ≠ `responseModel`：计价必须用 served 模型的 `models.json` 单价        |
 
-cwd 编码与 Pi 一致：`/home/tfdx8045/code/agent` → `--home-tfdx8045-code-agent--`。会话 header 里的 `cwd` 才是权威路径；目录名只用于分组。
+cwd 编码与 Pi 一致：`/home/tfdx8045/code/agent` → `--home-tfdx8045-code-agent--`。会话 header 里的 `cwd` 才是权威路径；`decode_session_cwd` **仅测试使用**，目录名不能当 cwd 神谕（带连字符的路径无法往返）。
 
-`models.json` 里 `gpt-4.1-mini` 的 `cost` 是 **美元 / 百万 token**。JSONL 里嵌入的 `cost.total` 故意为 0，导入时必须用单价 × 令牌，不能信 JSONL。
+`models.json` 里 `gpt-4.1-mini` 的 `cost` 是 **美元 / 百万 token**（0.4）；`gpt-4.1-mini-served` 为 8。JSONL 里嵌入的 `cost.total` 故意为 0，导入时必须用单价 × 令牌，不能信 JSONL。requested ≠ served 时以 **served**（`responseModel`）为准。
 
 ## 覆盖范围（本 harness）
 
 通过 `pi_runtime` 公共 API，**假装目标是 WSL**：
 
-1. **嵌套会话发现**：`find -maxdepth 4`（manifest / probe），而不是 `sessions/*.jsonl` 扁平 glob。cwd 组文件和 `tasks/*.jsonl` 都会被镜像，再交给现有扫描器。
-2. **逐行解析 JSONL**：抽出 `message.usage`；`cost.total == 0` 时按 `models.json` 单价计费。
-3. **双写 / 同步**：`read` 时 heal（identical / diverge / only-agent）；`sync_live_providers` 投影与 restore 后 `~/.pi/agent/models.json` 与 `~/.pi/models.json` 必须一致。
-4. **cwd 编解码**：`--…--` 与 `/home/tfdx8045/code/agent` 往返。
+1. **嵌套会话发现**：probe 的 `sessionCount` 与 session sync 的 manifest **共用** `SESSION_JSONL_MAXDEPTH`（当前 8），而不是 `sessions/*.jsonl` 扁平 glob。cwd 组、`tasks/*.jsonl`、以及旧 maxdepth 4 会丢掉的 `tasks/group/*.jsonl` 都会被镜像。
+2. **逐行解析 JSONL**：抽出 `message.usage`；`cost.total == 0` 时按 `models.json` 单价计费；requested ≠ served 时按 served 模型计价。
+3. **双写 / 同步**（默认 `cargo test` 路径，不藏在 feature flag 后）：`read` 时 heal（identical / diverge / only-agent）；`sync_live_providers` 投影与 restore：only-agent 会补写顶层镜像，diverge 会覆盖 stale top。
+4. **cwd 编解码**：`--…--` 与 `/home/tfdx8045/code/agent` 往返；并断言带连字符路径不可往返。生产 `project_dir` 来自 JSONL `cwd`。
+5. **代理主机候选（无真 WSL）**：用 canned `WslRunner` 回放 `HOST_SCRIPT` / 健康探测。镜像网络下 loopback 先应答；NAT 下 loopback `000` 时回落到网关 `172.30.208.1`。
+6. **非 GNU find**：stub `find` 拒绝 `-printf` 时走 portable `find -print` + `stat`，不得静默 `fetched=0`；完全不可用的 `find` 必须硬失败。
 
 Rust：`src-tauri/src/pi_runtime/wsl_linux_harness.rs`（`cargo test --lib wsl_linux_harness`）。  
 前端契约：`tests/pi-wsl-harness.test.ts`（解析同一套 JSONL / cwd 目录名）。
@@ -50,7 +54,7 @@ Rust：`src-tauri/src/pi_runtime/wsl_linux_harness.rs`（`cargo test --lib wsl_l
 | 能力                                                                 | 为何不在 Linux 云上做                                    |
 | -------------------------------------------------------------------- | -------------------------------------------------------- |
 | `wsl.exe` 启动/停止发行版、UTF-16 `wsl -l -q`                        | 没有 Windows 主机；UTF-16 列表另有单元测试               |
-| NAT vs 镜像网络、探测网关 / `resolv.conf`、把 `127.0.0.1` 写入发行版 | 需要真 WSL 网卡；代理探测是 `pi_runtime::proxy`          |
+| 真网卡上的 NAT vs 镜像网络、改写发行版 `resolv.conf`                 | 需要真 WSL 网卡；候选顺序与探测结果由 canned runner 覆盖 |
 | 登录壳 `~/.bashrc` / nvm 把 `pi` 放进 PATH                           | 替身去掉了 `PI_CODING_AGENT_DIR`，但不会跑用户的 profile |
 | 设置页「Pi 接管」开关、托盘、会话列表 GUI                            | 无 Windows GUI；前端有 `PiRuntimeSettings` 等组件测试    |
 | UNC `\\wsl.localhost\…` 写盘                                         | 产品禁止这条路径；Windows CI 另有原子写契约              |
@@ -60,7 +64,7 @@ Rust：`src-tauri/src/pi_runtime/wsl_linux_harness.rs`（`cargo test --lib wsl_l
 
 ## 依赖（Linux）
 
-`bash`、GNU `find`（`-printf`）、`gzip`、`sha256sum`。这是发行版内脚本已经在用的工具。macOS 的 BSD `find` 没有 `-printf`，本 harness 以 Linux CI / 云代理为准。
+`bash`、`find`、`gzip`、`sha256sum`。发行版内脚本 **优先** GNU `find -printf`；若 `-printf` 不可用（BSD find），改为 `find -print` + `stat -c` / `stat -f`，并在 listing 工具完全不可用时失败，而不是把 stderr 吞掉装成 0 个会话。本 harness 以 Linux CI / 云代理为准。
 
 ## 本地重跑（Linux）
 

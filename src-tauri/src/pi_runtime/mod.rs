@@ -33,6 +33,27 @@ use serde::{Deserialize, Serialize};
 pub use detect::WslPiProbe;
 pub use error::{PiResult, PiRuntimeError};
 
+/// Shared `find -maxdepth` for Pi session JSONL discovery.
+///
+/// Used by both the WSL probe `sessionCount` listing and the session-sync
+/// manifest so the two cannot drift. Depth 4 is exact for
+/// `cwd-group/<session>/tasks/*.jsonl` and silently dropped one extra
+/// directory; 8 covers deeper task groups without walking the whole home.
+pub const SESSION_JSONL_MAXDEPTH: u32 = 8;
+const _: () = assert!(
+    SESSION_JSONL_MAXDEPTH > 4,
+    "maxdepth 4 dropped cwd-group/<id>/tasks/group/*.jsonl (depth 5)"
+);
+
+/// String form of [`SESSION_JSONL_MAXDEPTH`] for compile-time bash `concat!`.
+/// Must stay in lockstep with the numeric constant (enforced by a unit test).
+macro_rules! session_jsonl_maxdepth_str {
+    () => {
+        "8"
+    };
+}
+pub(crate) use session_jsonl_maxdepth_str;
+
 /// Which runtime hosts Pi.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -547,5 +568,18 @@ mod tests {
         let message =
             "Pi provider 'anthropic' changed outside CC Switch: /home/me/.pi/agent/models.json";
         assert_eq!(redact(message), message);
+    }
+
+    #[test]
+    fn session_jsonl_maxdepth_string_matches_the_numeric_constant() {
+        assert_eq!(
+            session_jsonl_maxdepth_str!(),
+            SESSION_JSONL_MAXDEPTH.to_string(),
+            "update session_jsonl_maxdepth_str! when changing SESSION_JSONL_MAXDEPTH"
+        );
+        assert!(
+            SESSION_JSONL_MAXDEPTH > 4,
+            "maxdepth 4 dropped cwd-group/<id>/tasks/group/*.jsonl (depth 5)"
+        );
     }
 }

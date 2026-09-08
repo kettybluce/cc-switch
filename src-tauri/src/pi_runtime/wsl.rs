@@ -488,6 +488,9 @@ pub mod test_support {
     pub struct LocalBashRunner {
         pub known_distros: HashSet<String>,
         pub home: PathBuf,
+        /// Prepended to `PATH` for the inner bash, so tests can inject a stub
+        /// `find` without touching a real WSL distro.
+        pub path_prepend: Option<PathBuf>,
     }
 
     impl LocalBashRunner {
@@ -495,7 +498,13 @@ pub mod test_support {
             Self {
                 known_distros: HashSet::from([distro.to_string()]),
                 home,
+                path_prepend: None,
             }
+        }
+
+        pub fn with_path_prepend(mut self, path: PathBuf) -> Self {
+            self.path_prepend = Some(path);
+            self
         }
     }
 
@@ -526,6 +535,16 @@ pub mod test_support {
                 })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
+            if let Some(prepend) = &self.path_prepend {
+                let rest = std::env::var("PATH").unwrap_or_default();
+                let sep = if cfg!(windows) { ';' } else { ':' };
+                let joined = if rest.is_empty() {
+                    prepend.display().to_string()
+                } else {
+                    format!("{}{sep}{rest}", prepend.display())
+                };
+                command.env("PATH", joined);
+            }
             spawn_and_wait(command, request)
         }
 

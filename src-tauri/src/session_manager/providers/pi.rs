@@ -709,7 +709,10 @@ pub(crate) fn encode_session_cwd(cwd: &str) -> String {
     format!("--{}--", without_root.replace('/', "-"))
 }
 
-#[allow(dead_code)]
+/// Lossy inverse of [`encode_session_cwd`]. Hyphenated path components
+/// (`/home/my-project`) cannot round-trip. Production `project_dir` comes
+/// from the JSONL `cwd` header, never from this helper.
+#[cfg(test)]
 pub(crate) fn decode_session_cwd(encoded: &str) -> String {
     let inner = encoded
         .strip_prefix("--")
@@ -1388,6 +1391,11 @@ mod tests {
         assert_eq!(
             decode_session_cwd("--home-tfdx8045-code-agent--"),
             "/home/tfdx8045/code/agent"
+        );
+        assert_ne!(
+            decode_session_cwd(&encode_session_cwd("/home/my-project")),
+            "/home/my-project",
+            "directory names are not a cwd oracle; JSONL header is"
         );
     }
 

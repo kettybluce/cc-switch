@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use super::error::{PiResult, PiRuntimeError};
+use super::session_jsonl_maxdepth_str;
 use super::wsl::{self, WslRequest};
 
 /// One round trip that collects everything the Runtime panel renders.
@@ -15,7 +16,12 @@ use super::wsl::{self, WslRequest};
 /// `PI_CODING_AGENT_DIR` is honoured because that is how Pi itself resolves
 /// its agent directory, so a user who exports it in their shell profile keeps
 /// a consistent view between Pi and CC Switch.
-const PROBE_SCRIPT: &str = r#"
+///
+/// `sessionCount` uses the same [`super::SESSION_JSONL_MAXDEPTH`] as the
+/// session-sync manifest. Stderr is not swallowed when the sessions directory
+/// exists: a broken `find` must not look like "zero sessions".
+const PROBE_SCRIPT: &str = concat!(
+    r#"
 set -u
 printf 'home=%s\n' "$HOME"
 if command -v pi >/dev/null 2>&1; then
@@ -26,8 +32,15 @@ agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 printf 'agentDir=%s\n' "$agent_dir"
 if [ -f "$agent_dir/models.json" ]; then printf 'models=1\n'; else printf 'models=0\n'; fi
 if [ -d "$agent_dir/sessions" ]; then printf 'sessions=1\n'; else printf 'sessions=0\n'; fi
-printf 'sessionCount=%s\n' "$(find "$agent_dir/sessions" -maxdepth 4 -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' \r')"
-"#;
+if [ -d "$agent_dir/sessions" ]; then
+  printf 'sessionCount=%s\n' "$(find "$agent_dir/sessions" -maxdepth "#,
+    session_jsonl_maxdepth_str!(),
+    r#" -type f -name '*.jsonl' | wc -l | tr -d ' \r')"
+else
+  printf 'sessionCount=0\n'
+fi
+"#
+);
 
 /// What a discovered runtime target can actually do.
 ///
@@ -286,6 +299,19 @@ mod tests {
         assert!(probe.has_models);
         assert!(probe.has_sessions);
         assert_eq!(probe.session_count, 2);
+    }
+
+    #[test]
+    fn probe_script_uses_the_shared_session_jsonl_maxdepth() {
+        let needle = format!("-maxdepth {}", crate::pi_runtime::SESSION_JSONL_MAXDEPTH);
+        assert!(
+            PROBE_SCRIPT.contains(&needle),
+            "probe sessionCount must share SESSION_JSONL_MAXDEPTH"
+        );
+        assert!(
+            !PROBE_SCRIPT.contains("2>/dev/null | wc -l"),
+            "sessionCount must not swallow find stderr into a silent zero"
+        );
     }
 
     #[test]

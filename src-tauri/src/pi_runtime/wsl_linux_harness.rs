@@ -6,17 +6,22 @@
 //! `tests/fixtures/pi-wsl/`.
 //!
 //! Covered here: nested session discovery through the runner `find` (not a
-//! flat glob), JSONL usage with `cost: 0` priced from `models.json`, dual
-//! `models.json` heal/project/restore, and cwd `--…--` encode/decode.
+//! flat glob), JSONL usage with `cost: 0` priced from `models.json` (including
+//! requested ≠ served), dual `models.json` heal/project/restore, cwd `--…--`
+//! encode/decode (test-only), and mocked proxy host candidates.
 
 #![cfg(test)]
 
 use super::detect;
 use super::files::{self, PiFile, PiFileLocation};
+use super::proxy::{self, HostStrategy};
+use super::session_jsonl_maxdepth_str;
 use super::sessions;
 use super::test_support::TestTarget;
 use super::wsl::test_support::{LocalBashRunner, RunnerGuard};
+use super::wsl::{WslExecResult, WslRunner};
 use super::PiRuntimeTarget;
+use super::SESSION_JSONL_MAXDEPTH;
 use crate::database::Database;
 use crate::provider::Provider;
 use crate::services::session_usage_pi::sync_pi_usage;
@@ -36,6 +41,9 @@ const CWD: &str = "/home/tfdx8045/code/agent";
 const CWD_GROUP: &str = "--home-tfdx8045-code-agent--";
 const PARENT_SESSION: &str = "sess-parent-abc123";
 const TASK_SESSION: &str = "sess-task-1";
+const DEEP_SESSION: &str = "sess-deep-task";
+const MAPPED_SESSION: &str = "sess-mapped-model";
+const EXPECTED_JSONL: usize = 4;
 const PROVIDER_ID: &str = "cc-switch-harness";
 const UPSTREAM: &str = "https://api.example.com/v1";
 const PROXY_ORIGIN: &str = "http://172.30.208.1:15721";
@@ -199,6 +207,23 @@ fn cwd_encode_decode_round_trips_the_documented_pi_layout() {
         encode_session_cwd("/home/tfdx8045/code/agent"),
         "--home-tfdx8045-code-agent--"
     );
+    assert_ne!(
+        decode_session_cwd(&encode_session_cwd("/home/my-project")),
+        "/home/my-project",
+        "decode_session_cwd is lossy; production cwd is the JSONL header"
+    );
+}
+
+#[test]
+fn probe_and_manifest_share_one_session_jsonl_maxdepth() {
+    assert_eq!(
+        session_jsonl_maxdepth_str!(),
+        SESSION_JSONL_MAXDEPTH.to_string()
+    );
+    assert!(
+        SESSION_JSONL_MAXDEPTH > 4,
+        "old maxdepth 4 dropped cwd-group/<id>/tasks/group/*.jsonl"
+    );
 }
 
 #[test]
@@ -221,10 +246,10 @@ fn runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses()
         outcome.errors
     );
     assert_eq!(
-        outcome.fetched, 2,
-        "parent JSONL plus tasks/*.jsonl (find -maxdepth 4)"
+        outcome.fetched, EXPECTED_JSONL,
+        "parent, mapped, tasks/*.jsonl, and tasks/group/*.jsonl (depth 5 > old maxdepth 4)"
     );
-    assert_eq!(outcome.total, 2);
+    assert_eq!(outcome.total, EXPECTED_JSONL);
 
     let mirrored = sessions::cache_root(DISTRO)
         .join("sessions")
@@ -237,7 +262,17 @@ fn runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses()
         mirrored
             .join("2026-03-14T10-32-00_abc/tasks/task-1.jsonl")
             .is_file(),
-        "task session should be mirrored at depth 4, the find maxdepth limit"
+        "task session should be mirrored at depth 4"
+    );
+    assert!(
+        mirrored
+            .join("2026-03-14T10-32-00_abc/tasks/group/deep-task.jsonl")
+            .is_file(),
+        "depth-5 tasks/group JSONL must not be dropped by the old maxdepth 4"
+    );
+    assert!(
+        mirrored.join("2026-03-14T11-00-00_map.jsonl").is_file(),
+        "cwd-group mapped-model JSONL should be mirrored"
     );
 
     let discovered = scan_sessions();
@@ -246,10 +281,16 @@ fn runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses()
         .map(|session| session.session_id.as_str())
         .collect();
     ids.sort_unstable();
-    assert_eq!(ids, vec![PARENT_SESSION, TASK_SESSION]);
-    assert!(discovered
-        .iter()
-        .all(|session| session.project_dir.as_deref() == Some(CWD)));
+    assert_eq!(
+        ids,
+        vec![DEEP_SESSION, MAPPED_SESSION, PARENT_SESSION, TASK_SESSION]
+    );
+    assert!(
+        discovered
+            .iter()
+            .all(|session| session.project_dir.as_deref() == Some(CWD)),
+        "project_dir must come from the JSONL cwd header, not decode_session_cwd"
+    );
 }
 
 #[test]
@@ -260,8 +301,8 @@ fn probe_session_count_includes_nested_jsonl_not_just_the_sessions_root() {
     assert!(probe.has_models);
     assert!(probe.has_sessions);
     assert_eq!(
-        probe.session_count, 2,
-        "probe find -maxdepth 4 must see cwd-group and tasks JSONL"
+        probe.session_count, EXPECTED_JSONL as u32,
+        "probe must share SESSION_JSONL_MAXDEPTH and see depth-5 JSONL"
     );
 }
 
@@ -274,7 +315,10 @@ fn jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json() {
     let db = Database::memory().expect("memory db");
     let result = sync_pi_usage(&db).expect("import usage from mirrored sessions");
     assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert_eq!(result.imported, 2, "parent assistant + task assistant");
+    assert_eq!(
+        result.imported, EXPECTED_JSONL as u32,
+        "parent + task + deep-task + mapped-model assistants"
+    );
 
     let conn = db.conn.lock().expect("lock usage db");
     let parent: String = conn
@@ -303,6 +347,22 @@ fn jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json() {
     assert_eq!(
         Decimal::from_str(&task).expect("task decimal"),
         Decimal::from_str("0.000072").expect("0.000072")
+    );
+
+    let mapped: (String, String, String) = conn
+        .query_row(
+            "SELECT model, request_model, total_cost_usd FROM proxy_request_logs
+             WHERE data_source = 'pi_session' AND session_id = ?1",
+            rusqlite::params![MAPPED_SESSION],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("mapped cost");
+    assert_eq!(mapped.0, "gpt-4.1-mini-served");
+    assert_eq!(mapped.1, "gpt-4.1-mini");
+    // Served model is $8 / million input; requested gpt-4.1-mini is $0.4.
+    assert_eq!(
+        Decimal::from_str(&mapped.2).expect("mapped decimal"),
+        Decimal::from_str("8").expect("8")
     );
 }
 
@@ -400,4 +460,141 @@ fn project_and_restore_dual_write_wsl_agent_and_top_level_models() {
         .expect("top-level location")
         .expect("mirror is distinct from agent");
     assert_eq!(location_path(&top_loc), harness.top_models());
+}
+
+#[test]
+#[serial]
+fn project_from_only_agent_creates_the_top_mirror_and_restore_keeps_lockstep() {
+    let harness = WslHarness::install("only-agent");
+    assert!(!harness.top_models().exists());
+
+    let db = Database::memory().expect("memory db");
+    db.save_provider("pi", &harness_card())
+        .expect("store upstream card");
+
+    let projected = crate::services::pi_proxy::sync_live_providers(&db, Some(PROXY_ORIGIN))
+        .expect("project from only-agent");
+    assert_eq!(projected, 1);
+    assert!(
+        harness.top_models().is_file(),
+        "project must dual-write a missing top-level models.json"
+    );
+    let agent = read_text(&harness.agent_models());
+    let top = read_text(&harness.top_models());
+    assert_eq!(agent, top);
+    assert!(agent.contains(&format!("{PROXY_ORIGIN}/pi/{PROVIDER_ID}/v1")));
+
+    let restored = crate::services::pi_proxy::restore_live_providers(&db).expect("restore");
+    assert_eq!(restored, 1);
+    let agent = read_text(&harness.agent_models());
+    let top = read_text(&harness.top_models());
+    assert_eq!(agent, top);
+    assert!(agent.contains(UPSTREAM));
+    assert!(!agent.contains("/pi/"));
+}
+
+#[test]
+#[serial]
+fn project_from_diverge_replaces_stale_top_proxy_then_restore_dual_writes() {
+    let harness = WslHarness::install("diverge");
+    assert!(read_text(&harness.top_models()).contains("stale-proxy"));
+
+    let db = Database::memory().expect("memory db");
+    db.save_provider("pi", &harness_card())
+        .expect("store upstream card");
+
+    let projected = crate::services::pi_proxy::sync_live_providers(&db, Some(PROXY_ORIGIN))
+        .expect("project from diverge");
+    assert_eq!(projected, 1);
+    let agent = read_text(&harness.agent_models());
+    let top = read_text(&harness.top_models());
+    assert_eq!(agent, top, "stale top must be overwritten, not left behind");
+    assert!(agent.contains(&format!("{PROXY_ORIGIN}/pi/{PROVIDER_ID}/v1")));
+    assert!(!top.contains("stale-proxy"));
+    assert!(!top.contains("127.0.0.1:15721"));
+
+    let restored = crate::services::pi_proxy::restore_live_providers(&db).expect("restore");
+    assert_eq!(restored, 1);
+    let agent = read_text(&harness.agent_models());
+    let top = read_text(&harness.top_models());
+    assert_eq!(agent, top);
+    assert!(agent.contains(UPSTREAM));
+    assert!(!agent.contains("/pi/"));
+}
+
+#[derive(Debug)]
+struct CannedProxyRunner {
+    inner: LocalBashRunner,
+    host_payload: String,
+    probe_payload: String,
+}
+
+impl WslRunner for CannedProxyRunner {
+    fn run(
+        &self,
+        request: &crate::pi_runtime::wsl::WslRequest,
+    ) -> crate::pi_runtime::PiResult<WslExecResult> {
+        let script = &request.script;
+        if script.contains("ip route show default") {
+            return Ok(canned_stdout(&self.host_payload));
+        }
+        if script.contains("for host in") && script.contains("/health") {
+            return Ok(canned_stdout(&self.probe_payload));
+        }
+        self.inner.run(request)
+    }
+
+    fn list_distros(&self) -> crate::pi_runtime::PiResult<Vec<String>> {
+        self.inner.list_distros()
+    }
+}
+
+fn canned_stdout(payload: &str) -> WslExecResult {
+    WslExecResult {
+        exit_code: Some(0),
+        stdout: format!("\n{}\n{payload}", crate::pi_runtime::wsl::OUTPUT_SENTINEL).into_bytes(),
+        stderr: String::new(),
+    }
+}
+
+#[test]
+#[serial]
+fn mocked_host_probe_prefers_mirrored_loopback_when_it_answers() {
+    let home = tempfile::tempdir().expect("home");
+    let inner = LocalBashRunner::new(DISTRO, home.path().to_path_buf());
+    let _runner = RunnerGuard::install(Arc::new(CannedProxyRunner {
+        inner,
+        host_payload: "gateway=172.30.208.1\nnameserver=10.255.255.254\n".to_string(),
+        probe_payload: "host=127.0.0.1 code=200 latency=4\nhost=172.30.208.1 code=200 latency=12\n"
+            .to_string(),
+    }));
+
+    let health = proxy::resolve_gateway(DISTRO, 15721).expect("resolve");
+    assert!(health.reachable);
+    assert_eq!(health.host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(health.strategy, Some(HostStrategy::MirroredLoopback));
+    assert_eq!(health.endpoint.as_deref(), Some("http://127.0.0.1:15721"));
+}
+
+#[test]
+#[serial]
+fn mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead() {
+    let home = tempfile::tempdir().expect("home");
+    let inner = LocalBashRunner::new(DISTRO, home.path().to_path_buf());
+    let _runner = RunnerGuard::install(Arc::new(CannedProxyRunner {
+        inner,
+        host_payload: "gateway=172.30.208.1\nnameserver=10.255.255.254\n".to_string(),
+        probe_payload:
+            "host=127.0.0.1 code=000 latency=3005\nhost=172.30.208.1 code=200 latency=12\n"
+                .to_string(),
+    }));
+
+    let health = proxy::resolve_gateway(DISTRO, 15721).expect("resolve");
+    assert!(health.reachable);
+    assert_eq!(health.host.as_deref(), Some("172.30.208.1"));
+    assert_eq!(health.strategy, Some(HostStrategy::DefaultGateway));
+    assert_eq!(
+        health.endpoint.as_deref(),
+        Some("http://172.30.208.1:15721")
+    );
 }
