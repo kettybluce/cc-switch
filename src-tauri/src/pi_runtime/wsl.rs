@@ -492,6 +492,24 @@ pub fn first_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
+/// Single-quote `value` for a POSIX `set --` argument list.
+pub fn sh_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// Restore `$1…` when `wsl.exe` drops positional args (v4.1.3 production
+/// failure). The 3.0.1 write contract — stdin → stage → sha256 → `mv` —
+/// then still runs. Defaults must already be validated (absolute path /
+/// hex digest / `missing`).
+pub fn with_dropped_arg_fallback(script: &str, defaults: &[&str]) -> String {
+    let quoted = defaults
+        .iter()
+        .map(|value| sh_single_quote(value))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("if [ -z \"${{1:-}}\" ]; then\n  set -- {quoted}\nfi\n{script}")
+}
+
 /// Test double that runs scripts through the local `bash`, which lets the
 /// runtime's shell scripts be verified on Linux CI instead of being asserted
 /// only as strings.
@@ -617,6 +635,19 @@ mod tests {
                 "/home/me/.pi/agent/models.json",
             ]
         );
+    }
+
+    #[test]
+    fn dropped_arg_fallback_restores_positional_parameters() {
+        assert_eq!(
+            sh_single_quote("/home/me/.pi/agent/models.json"),
+            "'/home/me/.pi/agent/models.json'"
+        );
+        assert_eq!(sh_single_quote("it's"), "'it'\"'\"'s'");
+        let script =
+            with_dropped_arg_fallback("printf '%s' \"$1\"", &["/tmp/cc-switch-models.json"]);
+        assert!(script.contains("set -- '/tmp/cc-switch-models.json'"));
+        assert!(is_usable_wsl_script(&script));
     }
 
     #[test]

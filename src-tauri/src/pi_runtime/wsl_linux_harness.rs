@@ -522,6 +522,38 @@ fn project_from_diverge_replaces_stale_top_proxy_then_restore_dual_writes() {
     assert!(!agent.contains("/pi/"));
 }
 
+/// Simulates the v4.1.3 production failure: `wsl.exe` runs bash `-c` but
+/// drops every positional argument. Writes must still succeed via the
+/// embedded `set --` fallback — never `bash -c ''`.
+#[derive(Debug)]
+struct DroppedArgvRunner {
+    inner: LocalBashRunner,
+}
+
+impl WslRunner for DroppedArgvRunner {
+    fn run(
+        &self,
+        request: &crate::pi_runtime::wsl::WslRequest,
+    ) -> crate::pi_runtime::PiResult<WslExecResult> {
+        assert!(
+            crate::pi_runtime::wsl::is_usable_wsl_script(&request.script),
+            "Pi models.json write must never invoke empty bash: {:?}",
+            request.script
+        );
+        assert!(
+            !request.script.trim().is_empty() && request.script.trim() != "''",
+            "script collapsed to empty quotes"
+        );
+        let mut stripped = request.clone();
+        stripped.args.clear();
+        self.inner.run(&stripped)
+    }
+
+    fn list_distros(&self) -> crate::pi_runtime::PiResult<Vec<String>> {
+        self.inner.list_distros()
+    }
+}
+
 #[derive(Debug)]
 struct CannedProxyRunner {
     inner: LocalBashRunner,
@@ -692,6 +724,51 @@ fn mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead() {
         health.endpoint.as_deref(),
         Some("http://172.30.208.1:15721")
     );
+}
+
+#[test]
+#[serial]
+fn models_json_write_survives_wsl_dropping_positional_args() {
+    let harness = WslHarness::install("identical");
+    let _dropped = RunnerGuard::install(Arc::new(DroppedArgvRunner {
+        inner: LocalBashRunner::new(DISTRO, harness.wsl_home.clone()),
+    }));
+    let document = br#"{"providers":{"baisheng":{"name":"BaiSheng"}}}"#;
+    files::write(
+        PiFile::Models,
+        document,
+        &files::revision(&fs::read(harness.agent_models()).expect("current agent")),
+    )
+    .expect("models.json write must work when WSL drops $1 (never empty bash)");
+    assert_eq!(fs::read(harness.agent_models()).expect("agent"), document);
+    assert_eq!(fs::read(harness.top_models()).expect("top"), document);
+    assert!(
+        files::ATOMIC_STAGE_SNIPPET.contains("mktemp /tmp/cc-switch-XXXXXX")
+            || files::ATOMIC_STAGE_SNIPPET.contains("mktemp -p")
+    );
+}
+
+#[test]
+#[serial]
+fn detect_treats_localhost_http_404_as_success_like_the_toast() {
+    let home = tempfile::tempdir().expect("home");
+    let inner = LocalBashRunner::new(DISTRO, home.path().to_path_buf());
+    let _runner = RunnerGuard::install(Arc::new(CannedProxyRunner {
+        inner,
+        host_payload: "gateway=172.30.213.1\nnameserver=10.255.255.254\n".to_string(),
+        probe_payload: "host=127.0.0.1 code=404 latency=12\n".to_string(),
+    }));
+    let health = proxy::resolve_gateway(DISTRO, 15721).expect("resolve");
+    assert!(
+        health.reachable,
+        "detect-proxy toast must match probe: HTTP 404 on 127.0.0.1 is success"
+    );
+    assert!(!proxy::looks_like_proxy_off(
+        health.error.as_deref().unwrap_or("")
+    ));
+    assert!(proxy::looks_like_proxy_off(
+        r#"Get "http://127.0.0.1:15721/ping": connection refused"#
+    ));
 }
 
 #[test]

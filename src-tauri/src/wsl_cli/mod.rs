@@ -155,8 +155,9 @@ fn overwrite_linux_file(distro: &str, linux_path: &str, bytes: &[u8]) -> Result<
         )));
     }
     let digest = files::revision(bytes);
+    let script = wsl::with_dropped_arg_fallback(OVERWRITE_SCRIPT, &[linux_path, &digest]);
     let output = wsl::run(
-        &WslRequest::guarded(distro, OVERWRITE_SCRIPT)
+        &WslRequest::guarded(distro, &script)
             .arg(linux_path)
             .arg(&digest)
             .stdin(bytes.to_vec())

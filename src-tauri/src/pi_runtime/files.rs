@@ -571,8 +571,15 @@ fn write_wsl(
     expected_revision: &str,
 ) -> PiResult<()> {
     let payload_revision = revision(bytes);
+    if !wsl::is_valid_linux_path(path) {
+        return Err(PiRuntimeError::invalid_input(format!(
+            "unusable Pi write path in WSL '{distro}'"
+        )));
+    }
+    let script =
+        wsl::with_dropped_arg_fallback(WRITE_SCRIPT, &[path, expected_revision, &payload_revision]);
     let output = wsl::run(
-        &WslRequest::guarded(distro, WRITE_SCRIPT)
+        &WslRequest::guarded(distro, &script)
             .arg(path)
             .arg(expected_revision)
             .arg(&payload_revision)
@@ -611,8 +618,14 @@ fn write_wsl(
 
 fn overwrite_wsl(file: PiFile, distro: &str, path: &str, bytes: &[u8]) -> PiResult<()> {
     let payload_revision = revision(bytes);
+    if !wsl::is_valid_linux_path(path) {
+        return Err(PiRuntimeError::invalid_input(format!(
+            "unusable Pi overwrite path in WSL '{distro}'"
+        )));
+    }
+    let script = wsl::with_dropped_arg_fallback(OVERWRITE_SCRIPT, &[path, &payload_revision]);
     let output = wsl::run(
-        &WslRequest::guarded(distro, OVERWRITE_SCRIPT)
+        &WslRequest::guarded(distro, &script)
             .arg(path)
             .arg(&payload_revision)
             .stdin(bytes.to_vec())
