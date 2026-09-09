@@ -214,7 +214,7 @@ export function SettingsPage({
   const isBusy = useMemo(() => isLoading && !settings, [isLoading, settings]);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden px-6">
+    <div className="flex h-full flex-col overflow-hidden px-6 pb-2">
       {isBusy ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -225,7 +225,7 @@ export function SettingsPage({
           onValueChange={setActiveTab}
           className="flex flex-col h-full"
         >
-          <TabsList className="grid w-full grid-cols-6 mb-6 glass rounded-lg">
+          <TabsList className="mb-6 grid h-auto w-full grid-cols-6 rounded-xl bg-muted/80 p-1">
             <TabsTrigger value="general">
               {t("settings.tabGeneral")}
             </TabsTrigger>
@@ -245,13 +245,13 @@ export function SettingsPage({
               ref={tabScrollContainerRef}
               className="flex-1 overflow-y-auto overflow-x-hidden pr-2"
             >
-              <TabsContent value="general" className="space-y-6 mt-0">
+              <TabsContent value="general" className="mt-0 space-y-6">
                 {settings ? (
                   <motion.div
-                    initial={{ opacity: 0, y: 10 }}
+                    initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className="space-y-6"
+                    transition={{ duration: 0.25 }}
+                    className="settings-stack"
                   >
                     <LanguageSettings
                       value={settings.language}
@@ -531,7 +531,7 @@ export function SettingsPage({
 
             {activeTab === "advanced" && settings && (
               <div
-                className="flex-shrink-0 pt-4 border-t border-border-default"
+                className="flex-shrink-0 border-t border-border/70 bg-background/90 pt-4 backdrop-blur-sm"
                 style={{ backgroundColor: "hsl(var(--background))" }}
               >
                 <div className="px-6 flex items-center justify-end gap-3">

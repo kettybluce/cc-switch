@@ -371,25 +371,25 @@ export function ProviderCard({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-xl border border-border p-4 transition-all duration-300",
-        "bg-card text-card-foreground group",
+        "relative overflow-hidden rounded-xl border border-border/80 p-5 transition-all duration-200",
+        "bg-card text-card-foreground shadow-card group",
         showFailoverUi && (isAutoFailoverEnabled || isProxyTakeover)
-          ? "hover:border-emerald-500/50"
-          : "hover:border-border-active",
+          ? "hover:border-emerald-500/45"
+          : "hover:border-border/40 hover:shadow-md",
         shouldUseGreen &&
-          "border-emerald-500/60 shadow-sm shadow-emerald-500/10",
-        shouldUseBlue && "border-blue-500/60 shadow-sm shadow-blue-500/10",
-        !hasStateHighlight && "hover:shadow-sm",
+          "border-emerald-500/50 bg-emerald-500/[0.03] shadow-sm shadow-emerald-500/10",
+        shouldUseBlue &&
+          "border-blue-500/50 bg-blue-500/[0.03] shadow-sm shadow-blue-500/10",
         dragHandleProps?.isDragging &&
-          "cursor-grabbing border-primary shadow-lg scale-105 z-10",
+          "cursor-grabbing border-primary shadow-float scale-[1.01] z-10",
       )}
     >
       <div
         className={cn(
           "absolute inset-0 bg-gradient-to-r to-transparent transition-opacity duration-500 pointer-events-none",
-          shouldUseGreen && "from-emerald-500/10",
-          shouldUseBlue && "from-blue-500/10",
-          !hasStateHighlight && "from-primary/10",
+          shouldUseGreen && "from-emerald-500/8",
+          shouldUseBlue && "from-blue-500/8",
+          !hasStateHighlight && "from-primary/5",
           hasStateHighlight ? "opacity-100" : "opacity-0",
         )}
       />
@@ -411,7 +411,7 @@ export function ProviderCard({
             </button>
           )}
 
-          <div className="h-8 w-8 flex-shrink-0 rounded-lg bg-muted flex items-center justify-center border border-border group-hover:scale-105 transition-transform duration-300">
+          <div className="h-9 w-9 flex-shrink-0 rounded-xl bg-muted/80 flex items-center justify-center border border-border/70 group-hover:scale-105 transition-transform duration-300">
             <ProviderIcon
               icon={resolveProviderIcon(
                 appId,
@@ -424,11 +424,11 @@ export function ProviderCard({
             />
           </div>
 
-          <div className="min-w-0 flex-1 space-y-1">
+          <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex flex-wrap items-center gap-2 min-h-7">
               <h3
                 className={cn(
-                  "text-base font-semibold leading-none",
+                  "text-[15px] font-semibold leading-none tracking-tight",
                   codexOfficialIdentity && "min-w-0 flex-1 truncate",
                 )}
                 title={codexOfficialIdentity ? provider.name : undefined}

@@ -49,10 +49,10 @@ export function SessionItem({
   return (
     <div
       className={cn(
-        "flex items-start gap-2 rounded-lg px-3 py-2.5 transition-all group",
+        "flex items-start gap-2.5 rounded-xl px-3 py-3 transition-all group",
         isSelected
-          ? "bg-primary/10 border border-primary/30"
-          : "hover:bg-muted/60 border border-transparent",
+          ? "border border-primary/20 bg-primary/[0.07] shadow-sm"
+          : "border border-transparent hover:bg-muted/50",
       )}
     >
       {selectionMode && (
@@ -87,7 +87,7 @@ export function SessionItem({
               {getProviderLabel(session.providerId, t)}
             </TooltipContent>
           </Tooltip>
-          <span className="text-sm font-medium line-clamp-2 flex-1">
+          <span className="text-sm font-medium tracking-tight line-clamp-2 flex-1">
             {searchQuery ? highlightText(title, searchQuery) : title}
           </span>
           <ChevronRight

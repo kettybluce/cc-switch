@@ -1091,8 +1091,8 @@ function App() {
           return <AgentsDefaultsPanel />;
         default:
           return (
-            <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
-              <div className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6">
+              <div className="flex-1 overflow-x-hidden overflow-y-auto px-1 pb-10">
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={activeApp}
@@ -1181,7 +1181,7 @@ function App() {
 
   return (
     <div
-      className="flex flex-col h-screen overflow-hidden bg-background text-foreground selection:bg-primary/30 pb-4"
+      className="flex flex-col h-screen overflow-hidden bg-background text-foreground selection:bg-primary/20 pb-5"
       style={{ overflowX: "hidden", paddingTop: contentTopOffset }}
     >
       {(dragBarHeight > 0 || useAppWindowControls) && (
@@ -1260,7 +1260,7 @@ function App() {
       )}
 
       <header
-        className="fixed z-50 w-full transition-all duration-300 bg-background/80 backdrop-blur-md"
+        className="fixed z-50 w-full border-b border-border/70 bg-background/80 backdrop-blur-xl transition-all duration-300"
         {...DRAG_REGION_ATTR}
         style={
           {
@@ -1300,7 +1300,7 @@ function App() {
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </Button>
-                <h1 className="text-lg font-semibold">
+                <h1 className="page-title">
                   {currentView === "settings" && t("settings.title")}
                   {currentView === "prompts" &&
                     t("prompts.title", {
@@ -1565,7 +1565,7 @@ function App() {
                 )}
                 {currentView === "providers" && (
                   <>
-                    <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
+                    <div className="segmented-control">
                       <AnimatePresence mode="wait">
                         <motion.div
                           key={

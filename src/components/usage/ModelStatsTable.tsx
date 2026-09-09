@@ -36,11 +36,13 @@ export function ModelStatsTable({
   );
 
   if (isLoading) {
-    return <div className="h-[400px] animate-pulse rounded bg-gray-100" />;
+    return (
+      <div className="h-[400px] animate-pulse rounded-xl bg-muted/50" />
+    );
   }
 
   return (
-    <div className="rounded-lg border border-border/50 bg-card/40 backdrop-blur-sm overflow-hidden">
+    <div className="surface-table">
       <Table>
         <TableHeader>
           <TableRow>
@@ -64,7 +66,7 @@ export function ModelStatsTable({
             <TableRow>
               <TableCell
                 colSpan={5}
-                className="text-center text-muted-foreground"
+                className="py-12 text-center text-muted-foreground"
               >
                 {t("usage.noData", "暂无数据")}
               </TableCell>

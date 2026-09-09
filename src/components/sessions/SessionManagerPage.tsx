@@ -803,7 +803,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   return (
     <TooltipProvider>
       <div
-        className="mx-auto px-4 sm:px-6 flex flex-col h-full min-h-0"
+        className="mx-auto flex h-full min-h-0 flex-col px-4 pb-2 sm:px-6"
         onWheel={(e) => e.stopPropagation()}
       >
         <div className="flex-1 overflow-hidden flex flex-col gap-4">
@@ -811,7 +811,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
             piSessionDiscovery.data?.status === "requires_project_context" && (
               <div
                 role="status"
-                className="flex shrink-0 items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200"
+                className="flex shrink-0 items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-800 dark:text-amber-200"
               >
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
@@ -825,7 +825,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
               piSessionDiscovery.isError) && (
               <div
                 role="alert"
-                className="flex shrink-0 items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-200"
+                className="flex shrink-0 items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-sm text-red-800 dark:text-red-200"
               >
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
@@ -842,7 +842,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
           <div className="flex-1 overflow-hidden grid gap-4 md:grid-cols-[320px_1fr]">
             {/* 左侧会话列表 */}
             <Card className="flex flex-col flex-1 min-h-0 overflow-hidden">
-              <CardHeader className="py-2 px-3 border-b">
+              <CardHeader className="border-b border-border/70 px-3.5 py-3">
                 {isSearchOpen ? (
                   <div className="flex items-center gap-2">
                     <div className="relative flex-1">
@@ -1275,9 +1275,11 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                         <RefreshCw className="size-5 animate-spin text-muted-foreground" />
                       </div>
                     ) : filteredSessions.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-12 text-center">
-                        <MessageSquare className="size-8 text-muted-foreground/50 mb-2" />
-                        <p className="text-sm text-muted-foreground">
+                      <div className="flex flex-col items-center justify-center px-4 py-14 text-center">
+                        <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-muted/70 ring-1 ring-border/70">
+                          <MessageSquare className="size-5 text-muted-foreground" />
+                        </div>
+                        <p className="page-meta">
                           {t("sessionManager.noSessions")}
                         </p>
                       </div>
@@ -1455,14 +1457,16 @@ export function SessionManagerPage({ appId }: { appId: string }) {
               ref={detailRef}
             >
               {!selectedSession ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-8">
-                  <MessageSquare className="size-12 mb-3 opacity-30" />
-                  <p className="text-sm">{t("sessionManager.selectSession")}</p>
+                <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                  <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-muted/70 ring-1 ring-border/70">
+                    <MessageSquare className="size-6 opacity-70" />
+                  </div>
+                  <p className="page-meta">{t("sessionManager.selectSession")}</p>
                 </div>
               ) : (
                 <>
                   {/* 详情头部 */}
-                  <CardHeader className="py-3 px-4 border-b shrink-0">
+                  <CardHeader className="shrink-0 border-b border-border/70 px-4 py-3.5">
                     <div className="flex items-start justify-between gap-4">
                       {/* 左侧：会话信息 */}
                       <div className="min-w-0 flex-1">
@@ -1689,9 +1693,11 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                               <RefreshCw className="size-5 animate-spin text-muted-foreground" />
                             </div>
                           ) : messages.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-12 text-center">
-                              <MessageSquare className="size-8 text-muted-foreground/50 mb-2" />
-                              <p className="text-sm text-muted-foreground">
+                            <div className="flex flex-col items-center justify-center px-4 py-14 text-center">
+                              <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-muted/70 ring-1 ring-border/70">
+                                <MessageSquare className="size-5 text-muted-foreground" />
+                              </div>
+                              <p className="page-meta">
                                 {t("sessionManager.emptySession")}
                               </p>
                             </div>

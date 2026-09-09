@@ -70,21 +70,24 @@ module.exports = {
         },
       },
       boxShadow: {
-        sm: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        md: "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
-        lg: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        sm: "0 1px 2px 0 rgb(15 23 42 / 0.04)",
+        md: "0 4px 14px -4px rgb(15 23 42 / 0.08)",
+        lg: "0 12px 32px -10px rgb(15 23 42 / 0.14)",
+        card: "var(--shadow-card)",
+        float: "var(--shadow-float)",
       },
       borderRadius: {
-        sm: "0.375rem",
-        md: "0.5rem",
+        sm: "0.5rem",
+        md: "0.625rem",
         lg: "0.75rem",
-        xl: "0.875rem",
+        xl: "1rem",
       },
       fontFamily: {
-        // 使用与之前版本保持一致的系统字体栈
         sans: [
           "-apple-system",
           "BlinkMacSystemFont",
+          '"SF Pro Text"',
+          '"Segoe UI Variable"',
           '"Segoe UI"',
           "Roboto",
           '"Helvetica Neue"',

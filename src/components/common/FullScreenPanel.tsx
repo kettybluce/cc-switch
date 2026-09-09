@@ -146,7 +146,7 @@ export const FullScreenPanel: React.FC<FullScreenPanelProps> = ({
 
           {/* Header - match App.tsx */}
           <div
-            className="flex-shrink-0 flex items-center"
+            className="flex flex-shrink-0 items-center border-b border-border/70 bg-background/80 backdrop-blur-xl"
             {...DRAG_REGION_ATTR}
             style={
               {
@@ -172,7 +172,7 @@ export const FullScreenPanel: React.FC<FullScreenPanelProps> = ({
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>
-              <h2 className="text-lg font-semibold text-foreground select-none">
+              <h2 className="page-title select-none">
                 {title}
               </h2>
             </div>
