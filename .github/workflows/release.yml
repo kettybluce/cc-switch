@@ -222,34 +222,28 @@ jobs:
           set -euo pipefail
           TAG="${RELEASE_TAG}"
           NOTES="docs/release-notes/${TAG}.md"
-          {
-            if [ -f "$NOTES" ]; then
-              cat "$NOTES"
-            else
-              echo "## CC Switch ${TAG}"
-              echo
-              echo "## 修复的问题 / Bug fixes"
-              echo
-              echo "- See the pull request for this tag."
-              echo
-              echo "## 优化 / Improvements"
-              echo
-              echo "- See the pull request for this tag."
-              echo
-              echo "## 自测 / Self-test"
-              echo
-              echo "- Cloud harness must cover the user's mirrored+firewall+dnsTunneling topology before this tag."
+          # Never publish the old one-liner ("Independent fork build" + download
+          # list). Users called those Release bodies 全部是空.
+          if [ ! -f "$NOTES" ]; then
+            echo "Refusing to publish ${TAG}: missing ${NOTES} with 修复的问题 / 优化 / 自测." >&2
+            exit 1
+          fi
+          for heading in '修复的问题' '优化' '自测'; do
+            if ! grep -q "$heading" "$NOTES"; then
+              echo "Refusing to publish ${TAG}: ${NOTES} must contain ## ${heading}." >&2
+              exit 1
             fi
-            echo
-            echo "---"
-            echo
-            echo "Independent fork build. App updater remains disabled."
-            echo
-            echo "### Download (Windows x64 only)"
-            echo
-            echo "- **Installer**: \`CC-Switch-${TAG}-Windows.msi\`"
-            echo "- **Portable**: \`CC-Switch-${TAG}-Windows-Portable.zip\`"
-          } > release-notes.md
+          done
+          cp "$NOTES" release-notes.md
+          if ! grep -q '下载' release-notes.md; then
+            {
+              echo
+              echo "## 下载"
+              echo
+              echo "- **Windows x64 安装包**：\`CC-Switch-${TAG}-Windows.msi\`"
+              echo "- **Windows x64 绿色版**：\`CC-Switch-${TAG}-Windows-Portable.zip\`"
+            } >> release-notes.md
+          fi
           cat release-notes.md
 
       - name: Upload Release Assets
