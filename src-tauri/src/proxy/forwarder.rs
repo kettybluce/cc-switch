@@ -2043,6 +2043,7 @@ impl RequestForwarder {
                 key_str,
                 "content-length"
                     | "transfer-encoding"
+                    | "x-cc-switch-app"
                     | "x-forwarded-host"
                     | "x-forwarded-port"
                     | "x-forwarded-proto"

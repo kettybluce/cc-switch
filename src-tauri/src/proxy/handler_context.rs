@@ -166,7 +166,7 @@ impl RequestContext {
             request_model,
             outbound_model: None,
             tag,
-            app_type_str,
+            app_type_str: crate::pi_config::usage_app_type_from_headers(headers, app_type_str),
             app_type,
             session_id,
             session_client_provided: session_result.client_provided,
