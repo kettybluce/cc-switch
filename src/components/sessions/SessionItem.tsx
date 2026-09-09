@@ -49,7 +49,7 @@ export function SessionItem({
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 rounded-xl px-3 py-3 transition-all group",
+        "flex items-start gap-2.5 rounded-xl px-3 py-3 transition-colors group",
         isSelected
           ? "border border-primary/20 bg-primary/[0.07] shadow-sm"
           : "border border-transparent hover:bg-muted/50",

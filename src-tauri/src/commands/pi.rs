@@ -110,11 +110,8 @@ pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiPr
         .map(|status| status.port)
         .unwrap_or_default();
 
-    let mut plan = crate::pi_runtime::proxy::plan(&target, enabled, port, None)
-        .map_err(|error| error.to_string())?;
-    if plan.projected {
-        plan.projected = crate::services::pi_proxy::live_models_are_projected();
-    }
+    let mut plan = crate::pi_runtime::proxy::plan_ui_snapshot(&target, enabled, port);
+    plan.projected = enabled && crate::services::pi_proxy::live_models_are_projected();
     if let Ok(config) = state.db.get_proxy_config().await {
         let listen = config.listen_address.trim();
         if !listen.is_empty() {

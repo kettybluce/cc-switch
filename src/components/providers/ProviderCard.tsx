@@ -411,7 +411,7 @@ export function ProviderCard({
             </button>
           )}
 
-          <div className="h-9 w-9 flex-shrink-0 rounded-xl bg-muted/80 flex items-center justify-center border border-border/70 group-hover:scale-105 transition-transform duration-300">
+          <div className="h-9 w-9 flex-shrink-0 rounded-xl bg-muted/80 flex items-center justify-center border border-border/70">
             <ProviderIcon
               icon={resolveProviderIcon(
                 appId,

@@ -355,6 +355,44 @@ pub fn plan(
     })
 }
 
+/// Settings-panel snapshot. Does **not** curl WSL.
+///
+/// `plan()` / `resolve_gateway()` take 1–9s when the old probe timed out
+/// three hosts. React Query used to re-run that on every window focus, which
+/// felt like a ~1s click delay. Live reachability stays on 「检测代理」 and
+/// on projection (`resolve_origin`).
+pub fn plan_ui_snapshot(
+    target: &super::PiRuntimeTarget,
+    enabled: bool,
+    local_proxy_port: u16,
+) -> PiProxyPlan {
+    let origin = (local_proxy_port != 0).then(|| format!("http://127.0.0.1:{local_proxy_port}"));
+    let gateway = if local_proxy_port == 0 {
+        ProxyHealth::unreachable("the CC Switch local proxy is not running")
+    } else {
+        ProxyHealth {
+            reachable: true,
+            endpoint: origin.clone(),
+            host: Some("127.0.0.1".to_string()),
+            strategy: target.is_wsl().then_some(HostStrategy::MirroredLoopback),
+            latency_ms: None,
+            protocol: Some(ProxyProtocol::Http),
+            error: None,
+        }
+    };
+
+    PiProxyPlan {
+        enabled: enabled && local_proxy_port != 0,
+        projected: enabled && origin.is_some(),
+        gateway,
+        origin,
+        listen_address: None,
+        forward_proxy: None,
+        forward_proxy_health: None,
+        environment: BTreeMap::new(),
+    }
+}
+
 fn local_gateway(target: &super::PiRuntimeTarget, local_proxy_port: u16) -> PiResult<ProxyHealth> {
     if local_proxy_port == 0 {
         return Ok(ProxyHealth::unreachable(
@@ -934,5 +972,19 @@ mod tests {
         assert!(!plan.enabled);
         assert!(!plan.projected);
         assert!(plan.origin.is_none());
+    }
+
+    #[test]
+    fn ui_snapshot_does_not_need_a_wsl_probe() {
+        let wsl = crate::pi_runtime::PiRuntimeTarget::Wsl {
+            distro: "Ubuntu-22.04".into(),
+            home: "/home/tfdx8045".into(),
+            agent_dir: "/home/tfdx8045/.pi/agent".into(),
+        };
+        let plan = plan_ui_snapshot(&wsl, true, 15721);
+        assert_eq!(plan.origin.as_deref(), Some("http://127.0.0.1:15721"));
+        assert_eq!(plan.gateway.host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(plan.gateway.strategy, Some(HostStrategy::MirroredLoopback));
+        assert!(plan.gateway.reachable);
     }
 }

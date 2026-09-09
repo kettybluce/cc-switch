@@ -71,9 +71,7 @@ export function usePiProxyPlan(enabled: boolean) {
     queryKey: piKeys.proxyPlan,
     queryFn: () => piApi.getProxyPlan(),
     enabled,
-    // The plan probes WSL via wsl.exe + curl. Do not re-run on every
-    // click or window focus — that was a ~1s UI stall next to the
-    // false-negative probe.
+    // Snapshot only (no WSL curl). Live probe is 「检测代理」.
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
   });

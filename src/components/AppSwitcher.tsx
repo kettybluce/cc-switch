@@ -171,7 +171,7 @@ export function AppSwitcher({
             title={APP_DISPLAY_NAME[app]}
             aria-label={APP_DISPLAY_NAME[app]}
             className={cn(
-              "group inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium tracking-tight transition-all duration-200",
+              "group inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium tracking-tight transition-colors duration-150",
               isActive
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
@@ -189,7 +189,7 @@ export function AppSwitcher({
               title={t("appSwitcher.more")}
               aria-label={t("appSwitcher.more")}
               className={cn(
-                "inline-flex h-8 items-center rounded-lg px-3 transition-all duration-200",
+                "inline-flex h-8 items-center rounded-lg px-3 transition-colors duration-150",
                 moreOpen
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground hover:bg-background/50",
