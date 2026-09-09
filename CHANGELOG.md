@@ -5,6 +5,19 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.5] - 2026-09-09
+
+Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #29). Request-log 用时/首字 for `pi_session` (and other session JSONL imports without timing) shows an em dash instead of a fake `0.0s`. Latency is not invented from timestamps. `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- **pi_session 用时/首字显示 0.0s**: official Pi session JSONL has tokens/cost only. UI shows `—` when latency/TTFT are unknown or stored as 0; same for Claude `session_log`. Do not invent latency from timestamp diffs.
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+
 ## [3.20.4] - 2026-09-09
 
 Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #27). Fixes the Claude WSL About badge, always-visible Pi Usage Stats, UNC `.pi/agent/sessions`, Pi-filterable proxy logs plus session JSONL, Claude-parity local proxy projection, and documents Portable-first for MSI Error 5. `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
