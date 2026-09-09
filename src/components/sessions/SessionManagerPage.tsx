@@ -193,7 +193,25 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { data, isLoading, refetch } = useSessionsQuery();
+  const [isRefreshingSessions, setIsRefreshingSessions] = useState(false);
   const sessions = data ?? [];
+  const refreshSessions = useCallback(async () => {
+    setIsRefreshingSessions(true);
+    try {
+      // WSL Pi sessions are mirrored through wsl.exe. Do not gate this on
+      // the proxy route probe — a false-negative /health check must not
+      // block 「刷新会话」.
+      await piApi.syncWslSessions();
+    } catch {
+      // Local runtime returns an empty outcome; a hard error still lists
+      // whatever is already cached.
+    }
+    try {
+      await refetch();
+    } finally {
+      setIsRefreshingSessions(false);
+    }
+  }, [refetch]);
   const piSessionDiscovery = useQuery({
     queryKey: piKeys.sessionDiscovery,
     queryFn: () => piApi.getSessionDiscovery(),
@@ -1187,9 +1205,13 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                               variant="ghost"
                               size="icon"
                               className="size-7"
-                              onClick={() => void refetch()}
+                              aria-label={t("common.refresh")}
+                              disabled={isRefreshingSessions}
+                              onClick={() => void refreshSessions()}
                             >
-                              <RefreshCw className="size-3.5" />
+                              <RefreshCw
+                                className={`size-3.5 ${isRefreshingSessions ? "animate-spin" : ""}`}
+                              />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t("common.refresh")}</TooltipContent>

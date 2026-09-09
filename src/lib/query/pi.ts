@@ -118,6 +118,7 @@ export function useSyncPiWslSessions() {
       await queryClient.invalidateQueries({
         queryKey: piKeys.sessionDiscovery,
       });
+      await queryClient.invalidateQueries({ queryKey: piKeys.runtimeStatus });
     },
     onError: (error: unknown) => {
       toast.error(

@@ -32,18 +32,40 @@ printf 'nameserver=%s\n' "$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.con
 
 /// `$1` port, `$2` per-probe timeout in seconds, `$3..` candidate hosts.
 ///
-/// Probing every candidate in one call keeps the whole resolution to a single
-/// `wsl.exe` invocation.
+/// One `wsl.exe` call. `/` is probed first: mirrored WSL often gets HTTP 404
+/// on the root (the listener answered) while `/health` can hang or be
+/// mis-parsed. Any 1xx–5xx is success; `000` is timeout / refused / reset.
+/// The first reachable host (usually `127.0.0.1`) stops the loop so NAT
+/// candidates are not required when localhost already works.
 const PROBE_SCRIPT: &str = r#"
-set -u
+set +e
 port="$1"; timeout="$2"; shift 2
 if ! command -v curl >/dev/null 2>&1; then printf 'no-curl\n'; exit 0; fi
 for host in "$@"; do
-  start=$(date +%s%3N)
-  code=$(curl -s -o /dev/null -m "$timeout" -w '%{http_code}' "http://$host:$port/health" 2>/dev/null || printf '000')
-  end=$(date +%s%3N)
-  printf 'host=%s code=%s latency=%s\n' "$host" "$code" "$((end - start))"
+  code="000"
+  start=$(date +%s 2>/dev/null || printf '0')
+  for path in / /health; do
+    raw=$(curl -sS -o /dev/null -m "$timeout" -w '%{http_code}' "http://$host:$port$path" 2>/dev/null)
+    raw=$(printf '%s' "$raw" | tr -cd '0-9')
+    case "$raw" in
+      [1-5][0-9][0-9]*)
+        code=$(printf '%s' "$raw" | cut -c1-3)
+        break
+        ;;
+    esac
+  done
+  end=$(date +%s 2>/dev/null || printf '0')
+  latency=0
+  if [ -n "$start" ] && [ -n "$end" ]; then
+    latency=$((end - start))
+    latency=$((latency * 1000))
+  fi
+  printf 'host=%s code=%s latency=%s\n' "$host" "$code" "$latency"
+  case "$code" in
+    [1-5][0-9][0-9]) exit 0 ;;
+  esac
 done
+exit 0
 "#;
 
 /// `$1` proxy URL, `$2` target URL, `$3` timeout in seconds.
@@ -493,7 +515,7 @@ fn parse_probe_output(payload: &str) -> Vec<ProbeResult> {
         for field in line.split_whitespace() {
             match field.split_once('=') {
                 Some(("host", value)) => host = Some(value.to_string()),
-                Some(("code", value)) => code = value.parse::<u32>().ok(),
+                Some(("code", value)) => code = parse_http_code(value),
                 Some(("latency", value)) => latency = value.parse::<u32>().ok(),
                 _ => {}
             }
@@ -509,10 +531,29 @@ fn parse_probe_output(payload: &str) -> Vec<ProbeResult> {
     results
 }
 
-/// Any HTTP status means the listener answered; only `000` (curl's "no
-/// response") means unreachable. A 404 still proves the port is ours.
+/// Extract a 1xx–5xx status from curl `-w %{http_code}` output.
+///
+/// The old `code=$(curl … || printf 000)` form could concatenate to
+/// `404000`. Leading 1xx–5xx still means the listener answered.
+fn parse_http_code(raw: &str) -> Option<u32> {
+    let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).take(6).collect();
+    if digits.len() >= 3 {
+        if let Ok(first) = digits[..3].parse::<u32>() {
+            if (100..600).contains(&first) {
+                return Some(first);
+            }
+        }
+    }
+    match digits.parse::<u32>() {
+        Ok(code) => Some(code),
+        Err(_) => None,
+    }
+}
+
+/// HTTP connectivity only. 2xx/3xx/4xx (including 404 on `/`) and 5xx all
+/// prove the port is reachable. `000` is timeout / connection refused / reset.
 fn is_reachable(code: u32) -> bool {
-    code != 0
+    (100..600).contains(&code)
 }
 
 /// Find the address WSL can use to reach CC Switch's local endpoint on `port`.
@@ -536,6 +577,8 @@ pub fn resolve_gateway(distro: &str, port: u16) -> PiResult<ProxyHealth> {
     }
 
     let results = parse_probe_output(&payload);
+    // Candidates are already localhost-first (mirrored loopback → gateway →
+    // resolv). A 404 on 127.0.0.1 is enough; do not require NAT hosts.
     for candidate in &candidates {
         let Some(result) = results
             .iter()
@@ -802,10 +845,19 @@ mod tests {
 
     #[test]
     fn any_http_status_counts_as_reachable() {
-        // A 404 still proves something is listening on the port.
+        // A 404 on `/` still proves something is listening (mirrored WSL).
         assert!(is_reachable(404));
+        assert!(is_reachable(200));
+        assert!(is_reachable(302));
         assert!(is_reachable(500));
         assert!(!is_reachable(0));
+        assert_eq!(parse_http_code("404"), Some(404));
+        assert_eq!(
+            parse_http_code("404000"),
+            Some(404),
+            "old curl||printf 000 concatenation must not hide a 404"
+        );
+        assert_eq!(parse_http_code("000"), Some(0));
     }
 
     #[test]

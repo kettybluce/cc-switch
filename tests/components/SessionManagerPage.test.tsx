@@ -220,6 +220,37 @@ describe("SessionManagerPage", () => {
     };
 
     setSessionFixtures(sessions, messages);
+    vi.spyOn(piApi, "syncWslSessions").mockResolvedValue({
+      fetched: 0,
+      unchanged: 0,
+      removed: 0,
+      total: 0,
+      bytes: 0,
+      truncated: false,
+      errors: [],
+    });
+  });
+
+  it("refreshes sessions via wsl.exe even when the proxy probe failed", async () => {
+    const sync = vi.spyOn(piApi, "syncWslSessions").mockResolvedValue({
+      fetched: 4,
+      unchanged: 0,
+      removed: 0,
+      total: 4,
+      bytes: 128,
+      truncated: false,
+      errors: [],
+    });
+    renderPage("pi");
+    const refresh = await waitFor(() => {
+      const button = Array.from(screen.getAllByRole("button")).find((item) =>
+        item.querySelector(".lucide-refresh-cw"),
+      );
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    fireEvent.click(refresh);
+    await waitFor(() => expect(sync).toHaveBeenCalled());
   });
 
   it("surfaces a relative Pi sessionDir instead of presenting an empty scan as authoritative", async () => {

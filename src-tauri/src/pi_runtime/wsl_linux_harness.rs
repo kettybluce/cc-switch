@@ -559,6 +559,101 @@ fn canned_stdout(payload: &str) -> WslExecResult {
 
 #[test]
 #[serial]
+fn mocked_host_probe_treats_localhost_404_as_success_and_skips_nat_hosts() {
+    let home = tempfile::tempdir().expect("home");
+    let inner = LocalBashRunner::new(DISTRO, home.path().to_path_buf());
+    let _runner = RunnerGuard::install(Arc::new(CannedProxyRunner {
+        inner,
+        host_payload: "gateway=172.30.213.1\nnameserver=10.255.255.254\n".to_string(),
+        // User-verified mirrored WSL: `/` returns 404; NAT IPs are refused.
+        probe_payload: "host=127.0.0.1 code=404 latency=12\n".to_string(),
+    }));
+
+    let health = proxy::resolve_gateway(DISTRO, 15721).expect("resolve");
+    assert!(
+        health.reachable,
+        "HTTP 404 from 127.0.0.1 means the listener answered"
+    );
+    assert_eq!(health.host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(health.strategy, Some(HostStrategy::MirroredLoopback));
+    assert_eq!(health.endpoint.as_deref(), Some("http://127.0.0.1:15721"));
+}
+
+#[test]
+#[serial]
+fn live_curl_404_on_loopback_is_a_reachable_route() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind 404 fixture");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking 404 fixture");
+    let port = listener.local_addr().expect("local addr").port();
+    let server = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while std::time::Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf);
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let home = tempfile::tempdir().expect("home");
+    let _runner = RunnerGuard::install(Arc::new(LocalBashRunner::new(
+        DISTRO,
+        home.path().to_path_buf(),
+    )));
+
+    let health = proxy::resolve_gateway(DISTRO, port).expect("resolve via real curl");
+    let expected = format!("http://127.0.0.1:{port}");
+    assert!(
+        health.reachable,
+        "probe must treat curl 404 on 127.0.0.1 as success, got {health:?}"
+    );
+    assert_eq!(health.host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(health.endpoint.as_deref(), Some(expected.as_str()));
+
+    drop(server);
+}
+
+#[test]
+#[serial]
+fn session_refresh_does_not_depend_on_proxy_probe() {
+    let harness = WslHarness::install("identical");
+    let inner = LocalBashRunner::new(DISTRO, harness.wsl_home.clone());
+    let _proxy = RunnerGuard::install(Arc::new(CannedProxyRunner {
+        inner,
+        host_payload: "gateway=172.30.213.1\nnameserver=10.255.255.254\n".to_string(),
+        probe_payload: "host=127.0.0.1 code=000 latency=3005\nhost=172.30.213.1 code=000 latency=1\nhost=10.255.255.254 code=000 latency=1\n".to_string(),
+    }));
+
+    let health = proxy::resolve_gateway(DISTRO, 15721).expect("resolve");
+    assert!(!health.reachable, "fixture is a failed probe");
+
+    sessions::invalidate_sync_throttle();
+    let outcome = sessions::sync(&harness.target).expect("session sync via wsl.exe");
+    assert!(
+        outcome.errors.is_empty(),
+        "session refresh must not gate on proxy reachability: {:?}",
+        outcome.errors
+    );
+    assert_eq!(outcome.total, EXPECTED_JSONL);
+}
+
+#[test]
+#[serial]
 fn mocked_host_probe_prefers_mirrored_loopback_when_it_answers() {
     let home = tempfile::tempdir().expect("home");
     let inner = LocalBashRunner::new(DISTRO, home.path().to_path_buf());
@@ -648,8 +743,8 @@ fn wsl_cli_rejects_unc_overrides_in_harness() {
     assert!(crate::wsl_cli::is_wsl_unc_str(
         r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude"
     ));
-    assert!(crate::wsl_cli::reject_unc_override(Some(
-        r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.codex"
-    ))
-    .is_none());
+    assert!(
+        crate::wsl_cli::reject_unc_override(Some(r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.codex"))
+            .is_none()
+    );
 }

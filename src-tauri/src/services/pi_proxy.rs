@@ -103,9 +103,8 @@ pub fn resolve_origin(
                     return Ok(Some(endpoint.trim_end_matches('/').to_string()));
                 }
             }
-            // Do not write 127.0.0.1 into WSL models.json: under NAT that
-            // address is the distribution itself, so Pi would miss the proxy.
-            // Test Proxy reports the miss; the live file stays on upstream.
+            // Only skip projection when every candidate failed. A 404 on
+            // mirrored 127.0.0.1 is success and must project that host.
             log::warn!(
                 "[PiProxy] no reachable WSL route to port {local_proxy_port} from '{distro}'; leaving upstream URLs in place"
             );
