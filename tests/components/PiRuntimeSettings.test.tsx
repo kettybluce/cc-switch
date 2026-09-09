@@ -140,6 +140,43 @@ describe("PiRuntimeSettings", () => {
       screen.getByText("settings.piRuntime.sessionCount:137"),
     ).toBeInTheDocument();
     expect(
+      screen.queryByText("settings.piRuntime.natListenHint"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not suggest 0.0.0.0 when mirrored localhost already answered", () => {
+    status = wslStatus;
+    proxyPlan = {
+      enabled: true,
+      projected: true,
+      gateway: {
+        reachable: true,
+        host: "127.0.0.1",
+        strategy: "mirroredLoopback",
+      },
+      origin: "http://127.0.0.1:15721",
+      listenAddress: "127.0.0.1",
+      environment: {},
+    };
+    render(<PiRuntimeSettings />);
+
+    expect(
+      screen.queryByText("settings.piRuntime.natListenHint"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the NAT listen hint only after the localhost probe fails", () => {
+    status = wslStatus;
+    proxyPlan = {
+      enabled: true,
+      projected: false,
+      gateway: { reachable: false, error: "no route" },
+      listenAddress: "127.0.0.1",
+      environment: {},
+    };
+    render(<PiRuntimeSettings />);
+
+    expect(
       screen.getByText("settings.piRuntime.natListenHint"),
     ).toBeInTheDocument();
   });

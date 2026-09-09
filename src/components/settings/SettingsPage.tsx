@@ -42,6 +42,10 @@ import { SkillStorageLocationSettings } from "@/components/settings/SkillStorage
 import { SkillSyncMethodSettings } from "@/components/settings/SkillSyncMethodSettings";
 import { TerminalSettings } from "@/components/settings/TerminalSettings";
 import { PiRuntimeSettings } from "@/components/settings/PiRuntimeSettings";
+import {
+  ClaudeRuntimeSettings,
+  CodexRuntimeSettings,
+} from "@/components/settings/CliRuntimeSettings";
 import { DirectorySettings } from "@/components/settings/DirectorySettings";
 import { ImportExportSection } from "@/components/settings/ImportExportSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
@@ -291,6 +295,8 @@ export function SettingsPage({
                     />
                     {/* Renders nothing unless the platform can host WSL. */}
                     <PiRuntimeSettings />
+                    <ClaudeRuntimeSettings />
+                    <CodexRuntimeSettings />
                   </motion.div>
                 ) : null}
               </TabsContent>

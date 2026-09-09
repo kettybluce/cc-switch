@@ -794,12 +794,12 @@
       "takeoverDescription": "與 Claude 同一套開關。開啟後自動啟動本機代理，並把已管理 Pi 供應商在 ~/.pi/agent/models.json 的 baseUrl 改寫到 /pi/<id>；關閉後恢復真實上游位址。不使用故障轉移。",
       "takeoverOn": "接管已開啟。目前 models.json 指向本機代理。",
       "takeoverOff": "接管已關閉。Pi 使用真實上游位址。",
-      "takeoverPending": "接管已開啟，但 models.json 尚未投影。請確認代理已啟動，或檢查 WSL 可達性（NAT 需監聽 0.0.0.0）。",
+      "takeoverPending": "接管已開啟，但 models.json 尚未投影。鏡像網路下 127.0.0.1 回傳任意 HTTP 狀態（含 404）即表示可達；不要把 172.30.x / 10.255.255.254 拒絕當成失敗。僅在本機回環不通且確為 NAT 時，才需要把監聽改成 0.0.0.0。",
       "useProxy": "Pi 使用 CC Switch 接管 + 本機代理",
       "useProxyDescription": "開啟 Pi 接管，與 Claude / Codex 同一套開關。接著 CC Switch 會改寫 ~/.pi/agent/models.json 裡已管理供應商的 baseUrl，讓 Pi 走本機代理。真實上游位址只保存在 CC Switch。不會改發行版全域網路設定。",
       "proxyStopped": "本機代理未執行。開啟 Pi 接管即可啟動代理並改寫 models.json。",
       "proxyOff": "Pi 接管未開啟，或已使用進階選項退出投影。目前使用真實上游位址。",
-      "natListenHint": "WSL NAT 模式無法存取只監聽 127.0.0.1 的代理。請把本機代理監聽位址改成 0.0.0.0，發行版才能經閘道連上。",
+      "natListenHint": "本機回環探測未通。鏡像網路（含 firewall=true）應能存取 127.0.0.1；172.30.x / 10.255.255.254 在只監聽回環時拒絕是正常的。僅在確認是 NAT 且回環不通時，再把監聽改成 0.0.0.0。",
       "resolvedEndpoint": "端點：{{endpoint}}",
       "proxyHealthOk": "代理可達：{{host}}（{{strategy}}）",
       "localLoopback": "本機回環",
@@ -822,9 +822,30 @@
       "proxyUnreachable": "代理不可用：{{error}}",
       "proxyTestFailed": "檢測代理失敗：{{error}}"
     },
+    "cliRuntime": {
+      "sharedRuntime": "Claude、Codex 與 Pi 共用同一 WSL 發行版，一律走 wsl.exe。",
+      "uncBan": "不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 會喚醒 WSL 並可能占滿一個 CPU 核。",
+      "noDistros": "沒有可用的 WSL 發行版",
+      "claude": {
+        "title": "Claude 執行位置",
+        "description": "選擇 CC Switch 管理本機 Claude，還是 WSL 中的 Claude（與 Pi 同一發行版）。",
+        "location": "Claude 位置",
+        "settingsPath": "settings.json",
+        "takeover": "Claude 接管",
+        "takeoverDescription": "開啟後啟動本機代理，並把 Claude 設定改寫到本機代理。關閉後恢復真實上游。走 wsl.exe，不用 UNC。"
+      },
+      "codex": {
+        "title": "Codex 執行位置",
+        "description": "選擇 CC Switch 管理本機 Codex，還是 WSL 中的 Codex（與 Pi 同一發行版）。",
+        "location": "Codex 位置",
+        "settingsPath": "config.toml",
+        "takeover": "Codex 接管",
+        "takeoverDescription": "開啟後啟動本機代理，並把 Codex 設定改寫到本機代理。關閉後恢復真實上游。走 wsl.exe，不用 UNC。"
+      }
+    },
     "configDirectoryOverride": "設定目錄覆寫（進階）",
-    "configDirectoryDescription": "這裡只覆蓋本機 Windows/macOS/Linux 目錄。Claude、Codex、Pi 若跑在 WSL 內，請用「設定 → Pi 執行位置」（走 wsl.exe）。不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 會喚醒 WSL 並可能占滿一個 CPU 核。",
-    "wslUncRejected": "不允許使用 WSL UNC 路徑（\\\\wsl.localhost / \\\\wsl$）。請在「設定 → Pi 執行位置」選擇發行版，讓 Claude、Codex、Pi 都透過 wsl.exe 存取。",
+    "configDirectoryDescription": "這裡只覆蓋本機 Windows/macOS/Linux 目錄。Claude、Codex、Pi 若跑在 WSL 內，請用「設定 → 一般」裡各自的執行位置（走 wsl.exe）。不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 會喚醒 WSL 並可能占滿一個 CPU 核。",
+    "wslUncRejected": "不允許使用 WSL UNC 路徑（\\\\wsl.localhost / \\\\wsl$）。請在「設定 → 一般」選擇發行版，讓 Claude、Codex、Pi 都透過 wsl.exe 存取。",
     "appConfigDir": "CC Switch 設定目錄",
     "appConfigDirDescription": "自訂 CC Switch 的設定儲存位置（指定至雲端同步資料夾即可雲端同步設定）",
     "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",

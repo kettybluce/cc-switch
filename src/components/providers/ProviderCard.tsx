@@ -371,7 +371,7 @@ export function ProviderCard({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-xl border border-border/80 p-5 transition-all duration-200",
+        "relative overflow-hidden rounded-xl border border-border/80 p-5 transition-colors duration-150",
         "bg-card text-card-foreground shadow-card group",
         showFailoverUi && (isAutoFailoverEnabled || isProxyTakeover)
           ? "hover:border-emerald-500/45"
@@ -381,7 +381,7 @@ export function ProviderCard({
         shouldUseBlue &&
           "border-blue-500/50 bg-blue-500/[0.03] shadow-sm shadow-blue-500/10",
         dragHandleProps?.isDragging &&
-          "cursor-grabbing border-primary shadow-float scale-[1.01] z-10",
+          "cursor-grabbing border-primary shadow-float z-10",
       )}
     >
       <div

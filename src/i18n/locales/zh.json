@@ -794,12 +794,12 @@
       "takeoverDescription": "与 Claude 同一套开关。打开后自动启动本地代理，并把已管理 Pi 供应商在 ~/.pi/agent/models.json 的 baseUrl 改写到 /pi/<id>；关闭后恢复真实上游地址。不使用故障转移。",
       "takeoverOn": "接管已开启。当前 models.json 指向本地代理。",
       "takeoverOff": "接管已关闭。Pi 使用真实上游地址。",
-      "takeoverPending": "接管已开启，但 models.json 尚未投影。请确认代理已启动，或检查 WSL 可达性（NAT 需监听 0.0.0.0）。",
+      "takeoverPending": "接管已开启，但 models.json 尚未投影。镜像网络下 127.0.0.1 返回任意 HTTP 状态（含 404）即表示可达；不要把 172.30.x / 10.255.255.254 拒绝当成失败。仅在本机回环不通且确为 NAT 时，才需要把监听改成 0.0.0.0。",
       "useProxy": "Pi 使用 CC Switch 接管 + 本地代理",
       "useProxyDescription": "打开 Pi 接管，与 Claude / Codex 同一套开关。随后 CC Switch 会改写 ~/.pi/agent/models.json 里已管理供应商的 baseUrl，让 Pi 走本地代理。真实上游地址只保存在 CC Switch。不会改发行版全局网络设置。",
       "proxyStopped": "本地代理未运行。打开 Pi 接管即可启动代理并改写 models.json。",
       "proxyOff": "Pi 接管未开启，或已使用高级选项退出投影。当前使用真实上游地址。",
-      "natListenHint": "WSL NAT 模式无法访问只监听 127.0.0.1 的代理。请把本地代理监听地址改成 0.0.0.0，发行版才能经网关连上。",
+      "natListenHint": "本机回环探测未通。镜像网络（含 firewall=true）应能访问 127.0.0.1；172.30.x / 10.255.255.254 在只监听回环时拒绝是正常的。仅在确认是 NAT 且回环不通时，再把监听改成 0.0.0.0。",
       "resolvedEndpoint": "端点：{{endpoint}}",
       "proxyHealthOk": "代理可达：{{host}}（{{strategy}}）",
       "localLoopback": "本机回环",
@@ -822,9 +822,30 @@
       "proxyUnreachable": "代理不可用：{{error}}",
       "proxyTestFailed": "检测代理失败：{{error}}"
     },
+    "cliRuntime": {
+      "sharedRuntime": "Claude、Codex 与 Pi 共用同一 WSL 发行版，一律走 wsl.exe。",
+      "uncBan": "不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 会唤醒 WSL 并可能占满一个 CPU 核。",
+      "noDistros": "没有可用的 WSL 发行版",
+      "claude": {
+        "title": "Claude 运行位置",
+        "description": "选择 CC Switch 管理本机 Claude，还是 WSL 中的 Claude（与 Pi 同一发行版）。",
+        "location": "Claude 位置",
+        "settingsPath": "settings.json",
+        "takeover": "Claude 接管",
+        "takeoverDescription": "打开后启动本地代理，并把 Claude 配置改写到本地代理。关闭后恢复真实上游。走 wsl.exe，不用 UNC。"
+      },
+      "codex": {
+        "title": "Codex 运行位置",
+        "description": "选择 CC Switch 管理本机 Codex，还是 WSL 中的 Codex（与 Pi 同一发行版）。",
+        "location": "Codex 位置",
+        "settingsPath": "config.toml",
+        "takeover": "Codex 接管",
+        "takeoverDescription": "打开后启动本地代理，并把 Codex 配置改写到本地代理。关闭后恢复真实上游。走 wsl.exe，不用 UNC。"
+      }
+    },
     "configDirectoryOverride": "配置目录覆盖（高级）",
-    "configDirectoryDescription": "这里只覆盖本机 Windows/macOS/Linux 目录。Claude、Codex、Pi 若跑在 WSL 内，请用「设置 → Pi 运行位置」（走 wsl.exe）。不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 会唤醒 WSL 并可能占满一个 CPU 核。",
-    "wslUncRejected": "不允许使用 WSL UNC 路径（\\\\wsl.localhost / \\\\wsl$）。请在「设置 → Pi 运行位置」选择发行版，让 Claude、Codex、Pi 都通过 wsl.exe 访问。",
+    "configDirectoryDescription": "这里只覆盖本机 Windows/macOS/Linux 目录。Claude、Codex、Pi 若跑在 WSL 内，请用「设置 → 通用」里各自的运行位置（走 wsl.exe）。不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 会唤醒 WSL 并可能占满一个 CPU 核。",
+    "wslUncRejected": "不允许使用 WSL UNC 路径（\\\\wsl.localhost / \\\\wsl$）。请在「设置 → 通用」选择发行版，让 Claude、Codex、Pi 都通过 wsl.exe 访问。",
     "appConfigDir": "CC Switch 配置目录",
     "appConfigDirDescription": "自定义 CC Switch 的配置存储位置（指定到云同步文件夹即可云同步配置）",
     "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",

@@ -1260,7 +1260,7 @@ function App() {
       )}
 
       <header
-        className="fixed z-50 w-full border-b border-border/70 bg-background/80 backdrop-blur-xl transition-all duration-300"
+        className="fixed z-50 w-full border-b border-border/70 bg-background/90 backdrop-blur-md transition-colors duration-150"
         {...DRAG_REGION_ATTR}
         style={
           {

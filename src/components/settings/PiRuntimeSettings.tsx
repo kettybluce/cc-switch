@@ -378,11 +378,14 @@ function ProxyPanel({
             : (proxyHealth.error ?? t("settings.piRuntime.noRoute"))}
         </p>
       )}
-      {isWsl && isLoopbackListen(listenAddress) && (
-        <p className="text-xs text-muted-foreground">
-          {t("settings.piRuntime.natListenHint")}
-        </p>
-      )}
+      {isWsl &&
+        isLoopbackListen(listenAddress) &&
+        proxyHealth &&
+        !proxyHealth.reachable && (
+          <p className="text-xs text-muted-foreground">
+            {t("settings.piRuntime.natListenHint")}
+          </p>
+        )}
       <p className="text-xs text-muted-foreground">
         {t("settings.piRuntime.healthHint")}
       </p>

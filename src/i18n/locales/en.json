@@ -794,12 +794,12 @@
       "takeoverDescription": "Same on/off as Claude. Enabling starts the local proxy and rewrites managed provider baseUrls in ~/.pi/agent/models.json so Pi talks through /pi/<id>. Disabling restores the real upstream URLs. Failover is not used.",
       "takeoverOn": "Takeover is on. Live models.json currently points at the local proxy.",
       "takeoverOff": "Takeover is off. Pi uses the real upstream URLs.",
-      "takeoverPending": "Takeover is on, but live models.json is not projected yet. Start the proxy or check WSL reachability (NAT needs listen address 0.0.0.0).",
+      "takeoverPending": "Takeover is on, but live models.json is not projected yet. Under mirrored networking, any HTTP status on 127.0.0.1 (including 404) means the listener answered; refused 172.30.x / 10.255.255.254 is normal. Only switch listen to 0.0.0.0 if loopback fails and the distro is actually NAT.",
       "useProxy": "Pi uses CC Switch takeover and the local proxy",
       "useProxyDescription": "Turn on Pi takeover — the same control as Claude and Codex. CC Switch then rewrites managed provider baseUrls in ~/.pi/agent/models.json so Pi talks to the local proxy. Real upstream URLs stay in CC Switch. Distribution-wide network settings are never changed.",
       "proxyStopped": "The local proxy is off. Turn on Pi takeover to start it and rewrite live models.json.",
       "proxyOff": "Pi takeover is off, or an advanced opt-out is set. Real upstream URLs are in use.",
-      "natListenHint": "WSL NAT cannot reach a proxy bound only to 127.0.0.1. Set the local proxy listen address to 0.0.0.0 so the distribution can connect through the gateway.",
+      "natListenHint": "Loopback probe failed. Mirrored networking (even with firewall=true) should reach 127.0.0.1; refused 172.30.x / 10.255.255.254 is normal when the proxy binds loopback only. Switch listen to 0.0.0.0 only for true NAT after localhost fails.",
       "resolvedEndpoint": "Endpoint: {{endpoint}}",
       "proxyHealthOk": "Proxy reachable at {{host}} ({{strategy}})",
       "localLoopback": "this machine",
@@ -822,9 +822,30 @@
       "proxyUnreachable": "Proxy unreachable: {{error}}",
       "proxyTestFailed": "Could not test the proxy: {{error}}"
     },
+    "cliRuntime": {
+      "sharedRuntime": "Claude, Codex, and Pi share one WSL distribution and are reached only through wsl.exe.",
+      "uncBan": "Do not use \\\\wsl.localhost or \\\\wsl$ — UNC wakes WSL and can pin a CPU core.",
+      "noDistros": "No WSL distribution available",
+      "claude": {
+        "title": "Claude runtime",
+        "description": "Choose whether CC Switch manages Claude on this machine or inside WSL (same distro as Pi).",
+        "location": "Claude location",
+        "settingsPath": "settings.json",
+        "takeover": "Claude takeover",
+        "takeoverDescription": "Enabling starts the local proxy and rewrites Claude settings through it. Disabling restores the real upstream. Uses wsl.exe, never UNC."
+      },
+      "codex": {
+        "title": "Codex runtime",
+        "description": "Choose whether CC Switch manages Codex on this machine or inside WSL (same distro as Pi).",
+        "location": "Codex location",
+        "settingsPath": "config.toml",
+        "takeover": "Codex takeover",
+        "takeoverDescription": "Enabling starts the local proxy and rewrites Codex settings through it. Disabling restores the real upstream. Uses wsl.exe, never UNC."
+      }
+    },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
-    "configDirectoryDescription": "Override local Windows/macOS/Linux homes only. For Claude, Codex, or Pi inside WSL, use Settings → Pi runtime (wsl.exe). Do not point these fields at \\\\wsl.localhost or \\\\wsl$ — UNC wakes WSL and can pin a CPU core.",
-    "wslUncRejected": "WSL UNC paths (\\\\wsl.localhost / \\\\wsl$) are not allowed. Select Settings → Pi runtime so Claude, Codex, and Pi are reached through wsl.exe.",
+    "configDirectoryDescription": "Override local Windows/macOS/Linux homes only. For Claude, Codex, or Pi inside WSL, use Settings → General runtime sections (wsl.exe). Do not point these fields at \\\\wsl.localhost or \\\\wsl$ — UNC wakes WSL and can pin a CPU core.",
+    "wslUncRejected": "WSL UNC paths (\\\\wsl.localhost / \\\\wsl$) are not allowed. Select a distribution under Settings → General so Claude, Codex, and Pi are reached through wsl.exe.",
     "appConfigDir": "CC Switch Configuration Directory",
     "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
     "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",

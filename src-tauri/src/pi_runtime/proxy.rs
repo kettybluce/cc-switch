@@ -6,12 +6,24 @@
 //! `127.0.0.1` does not mean the same thing on both sides of the WSL boundary.
 //! Under mirrored networking (Windows 11 22H2+, `networkingMode=mirrored`) the
 //! loopback address is shared, so a listener bound to `127.0.0.1` on Windows is
-//! reachable from Linux. Under the default NAT mode it is not: the Windows host
-//! appears as the default gateway of the distribution's virtual switch instead.
+//! reachable from Linux. `firewall=true` does not change that: a curl to
+//! `http://127.0.0.1:<port>/` that returns any HTTP status (including 404)
+//! already proves Hyper-V/WSL firewall is not blocking loopback.
+//!
+//! Mirrored is **not** NAT, even when `ip route` still shows a default via
+//! `172.30.x.x` on eth1 and `dnsTunneling=true` publishes nameserver
+//! `10.255.255.254`. Those addresses are fallbacks. They are often
+//! connection-refused when CC Switch listens on loopback only, and that is
+//! fine — do not require them, and do not treat their presence as NAT mode.
+//!
+//! Under the default NAT mode, loopback is not shared: the Windows host
+//! appears as the default gateway of the distribution's virtual switch.
+//! Switching the listen address to `0.0.0.0` is only a NAT fallback, not the
+//! mirrored fix.
 //!
 //! Rather than guess, the resolver probes the candidates in priority order and
-//! reports which one answered. The rewritten `baseUrl` uses that host so Pi
-//! inside WSL can reach CC Switch.
+//! reports which one answered. The first success (usually `127.0.0.1`) wins.
+//! The rewritten `baseUrl` uses that host so Pi inside WSL can reach CC Switch.
 //!
 //! CC Switch never edits `/etc/environment`, `/etc/profile` or `~/.bashrc`.
 
@@ -151,8 +163,8 @@ impl HostStrategy {
     pub fn describe(self) -> &'static str {
         match self {
             Self::MirroredLoopback => "WSL mirrored networking (shared loopback)",
-            Self::DefaultGateway => "WSL NAT gateway",
-            Self::ResolvConf => "/etc/resolv.conf nameserver",
+            Self::DefaultGateway => "WSL default route (NAT gateway or mirrored eth1)",
+            Self::ResolvConf => "/etc/resolv.conf nameserver (dnsTunneling uses 10.255.255.254)",
         }
     }
 }
@@ -472,6 +484,10 @@ pub fn host_candidates(distro: &str) -> PiResult<Vec<HostCandidate>> {
 }
 
 fn build_candidates(gateway: Option<Ipv4Addr>, nameserver: Option<Ipv4Addr>) -> Vec<HostCandidate> {
+    // Localhost first: mirrored + firewall=true reaches a 127.0.0.1 listener.
+    // Gateway / nameserver are optional fallbacks (NAT *or* mirrored eth1 /
+    // dnsTunneling). Never treat them as required, and never infer NAT-only
+    // just because they appear in `ip route` / resolv.conf.
     let mut candidates = vec![HostCandidate {
         host: "127.0.0.1".to_string(),
         strategy: HostStrategy::MirroredLoopback,
@@ -577,8 +593,9 @@ pub fn resolve_gateway(distro: &str, port: u16) -> PiResult<ProxyHealth> {
     }
 
     let results = parse_probe_output(&payload);
-    // Candidates are already localhost-first (mirrored loopback → gateway →
-    // resolv). A 404 on 127.0.0.1 is enough; do not require NAT hosts.
+    // Candidates are already localhost-first (mirrored loopback → default
+    // route → resolv). A 404 on 127.0.0.1 is enough; do not require the
+    // other hosts. Mirrored+dnsTunneling still lists 172.30.x / 10.255.255.254.
     for candidate in &candidates {
         let Some(result) = results
             .iter()
@@ -608,7 +625,7 @@ pub fn resolve_gateway(distro: &str, port: u16) -> PiResult<ProxyHealth> {
         .collect::<Vec<_>>()
         .join(", ");
     Ok(ProxyHealth::unreachable(format!(
-        "no route from WSL '{distro}' to CC Switch on port {port} (tried {attempted}). Check that the local proxy is running and that Windows Firewall allows the WSL subnet."
+        "no route from WSL '{distro}' to CC Switch on port {port} (tried {attempted}). Under mirrored networking, any HTTP status on 127.0.0.1 means the listener answered; the default-route and dnsTunneling addresses are optional. Confirm the local proxy is running."
     )))
 }
 
@@ -717,6 +734,26 @@ mod tests {
             Some(Ipv4Addr::new(10, 255, 255, 254))
         );
         assert_eq!(parse_resolv_nameserver("0.0.0.0"), None);
+    }
+
+    #[test]
+    fn mirrored_firewall_dns_tunneling_topology_still_lists_localhost_first() {
+        // User machine: WSL 2.7.10, networkingMode=mirrored, firewall=true,
+        // dnsTunneling=true. Default via 172.30.213.1 and nameserver
+        // 10.255.255.254 are *not* evidence of NAT.
+        let candidates = build_candidates(
+            Some(Ipv4Addr::new(172, 30, 213, 1)),
+            Some(Ipv4Addr::new(10, 255, 255, 254)),
+        );
+        assert_eq!(candidates[0].host, "127.0.0.1");
+        assert_eq!(candidates[0].strategy, HostStrategy::MirroredLoopback);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.host.as_str())
+                .collect::<Vec<_>>(),
+            ["127.0.0.1", "172.30.213.1", "10.255.255.254"]
+        );
     }
 
     #[test]

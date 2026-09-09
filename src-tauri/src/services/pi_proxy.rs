@@ -85,7 +85,8 @@ pub fn live_models_are_projected() -> bool {
 /// Origin (`http://host:port`) Pi should use to reach the local proxy.
 ///
 /// On the local runtime this is loopback. Inside WSL it is whichever address
-/// actually answered `/health` (mirrored loopback, NAT gateway, or resolver).
+/// answered with any HTTP status (mirrored 127.0.0.1 first, including 404).
+/// Default-route / dnsTunneling hosts are fallbacks, not a NAT requirement.
 pub fn resolve_origin(
     target: &PiRuntimeTarget,
     local_proxy_port: u16,
