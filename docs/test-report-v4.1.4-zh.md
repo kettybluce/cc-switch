@@ -8,7 +8,7 @@ Parent 决定何时通知 MSI。本审计**不打 tag、不发 MSI、不通知�
 | 审计日期 | 2026-09-09 |
 | 对照基线 | `v3.0.1` (`dcab4465`) |
 | 审计起点 | PR #18 tip `a7162776`（`v4.1.4` tag `b9c2b694` 是更早的 bump） |
-| 本报告代码 | stacked PR #19 tip（read 修复 `aa6bcec1` + 本文件） |
+| 本报告代码 | 已合入 PR #18（read 修复 + 本文件） |
 | 用户网络夹具 | mirrored + dnsTunneling + firewall；listen `127.0.0.1:15721`；`localhost` → HTTP 404；`172.30.213.1` 与 `10.255.255.254` refused |
 | 执行环境 | Cursor Cloud Linux（`LocalBashRunner` 执行与生产相同的 bash 脚本常量；**没有**真 `wsl.exe`） |
 
