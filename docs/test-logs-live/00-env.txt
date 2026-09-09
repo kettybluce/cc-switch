@@ -1,0 +1,23 @@
+===== ENV =====
+2026-09-09T03:15:03Z
+hostname=cursor
+uname=Linux 6.12.94+ x86_64
+PRETTY_NAME="Ubuntu 24.04.4 LTS"
+VERSION_ID="24.04"
+pwd=/workspace
+user=uid=1000(ubuntu) gid=1000(ubuntu) groups=1000(ubuntu),4(adm),20(dialout),24(cdrom),25(floppy),27(sudo),29(audio),30(dip),44(video),46(plugdev)
+HOME=/home/ubuntu
+git=cursor/wsl-detect-mktemp-4.1.4-739a a7162776d815a95447c691171cedd8eaf8a034c4
+remote=a7162776d815a95447c691171cedd8eaf8a034c4
+rustc=rustc 1.95.0 (59807616e 2026-04-14)
+cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+node=v22.14.0
+pnpm=10.12.3
+bash=GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
+find=find (GNU findutils) 4.9.0
+curl=curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.10
+sha256sum=sha256sum (GNU coreutils) 9.4
+HAS_WSL_EXE=no
+HAS_MSIEXEC=no
+webkit=2.52.6
+gtk=3.24.41

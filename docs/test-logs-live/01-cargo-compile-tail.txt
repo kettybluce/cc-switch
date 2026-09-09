@@ -1,0 +1,20 @@
+   Compiling json-five v0.3.1
+   Compiling rquickjs v0.8.1
+   Compiling json5 v0.4.1
+   Compiling auto-launch v0.5.0
+   Compiling arboard v3.6.1
+   Compiling tauri-plugin-single-instance v2.4.0
+   Compiling webpki-roots v0.26.11
+   Compiling tower-http v0.5.2
+   Compiling tower v0.4.13
+   Compiling futures v0.3.32
+   Compiling sys-locale v0.3.2
+   Compiling rustls-webpki v0.103.9
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.6.2
+   Compiling hyper-rustls v0.27.7
+   Compiling reqwest v0.13.2
+   Compiling reqwest v0.12.28
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 45s
+  Executable unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
+COMPILE_EXIT=0

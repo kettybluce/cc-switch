@@ -1,0 +1,31 @@
+===== CMD =====
+cargo test --manifest-path src-tauri/Cargo.toml --lib wsl_linux_harness -- --nocapture --test-threads=1 
+===== START 2026-09-09T03:18:21Z =====
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
+
+running 20 tests
+test pi_runtime::wsl_linux_harness::claude_and_codex_live_writes_use_wsl_runner_never_unc ... ok
+test pi_runtime::wsl_linux_harness::cwd_encode_decode_round_trips_the_documented_pi_layout ... ok
+test pi_runtime::wsl_linux_harness::detect_treats_localhost_http_404_as_success_like_the_toast ... ok
+test pi_runtime::wsl_linux_harness::jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json ... ok
+test pi_runtime::wsl_linux_harness::live_curl_404_on_loopback_is_a_reachable_route ... ok
+test pi_runtime::wsl_linux_harness::mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead ... ok
+test pi_runtime::wsl_linux_harness::mocked_host_probe_prefers_mirrored_loopback_when_it_answers ... ok
+test pi_runtime::wsl_linux_harness::mocked_host_probe_treats_localhost_404_as_success_and_skips_nat_hosts ... ok
+test pi_runtime::wsl_linux_harness::models_json_write_survives_wsl_dropping_positional_args ... ok
+test pi_runtime::wsl_linux_harness::probe_and_manifest_share_one_session_jsonl_maxdepth ... ok
+test pi_runtime::wsl_linux_harness::probe_session_count_includes_nested_jsonl_not_just_the_sessions_root ... ok
+test pi_runtime::wsl_linux_harness::project_and_restore_dual_write_wsl_agent_and_top_level_models ... ok
+test pi_runtime::wsl_linux_harness::project_from_diverge_replaces_stale_top_proxy_then_restore_dual_writes ... ok
+test pi_runtime::wsl_linux_harness::project_from_only_agent_creates_the_top_mirror_and_restore_keeps_lockstep ... ok
+test pi_runtime::wsl_linux_harness::runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses ... ok
+test pi_runtime::wsl_linux_harness::session_refresh_does_not_depend_on_proxy_probe ... ok
+test pi_runtime::wsl_linux_harness::user_mirrored_firewall_dnstunnel_e2e_self_test ... ok
+test pi_runtime::wsl_linux_harness::writing_models_json_via_wsl_runner_round_trips_and_never_mktemps_at_root ... ok
+test pi_runtime::wsl_linux_harness::wsl_cli_rejects_unc_overrides_in_harness ... ok
+test pi_runtime::wsl_linux_harness::wsl_read_heals_identical_diverge_and_only_agent_models_mirrors ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 2970 filtered out; finished in 2.79s
+
+===== EXIT=0 END 2026-09-09T03:18:24Z =====

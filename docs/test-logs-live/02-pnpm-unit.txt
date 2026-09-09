@@ -1,0 +1,21 @@
+===== CMD =====
+pnpm test:unit tests/pi-wsl-harness.test.ts tests/components/PiRuntimeSettings.test.tsx tests/lib/proxyOffDetail.test.ts
+===== START 2026-09-09T03:15:15Z =====
+
+> cc-switch@4.1.4 test:unit /workspace
+> vitest run tests/pi-wsl-harness.test.ts tests/components/PiRuntimeSettings.test.tsx tests/lib/proxyOffDetail.test.ts
+
+
+ RUN  v2.1.9 /workspace
+
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+ ✓ tests/pi-wsl-harness.test.ts (8 tests) 8ms
+ ✓ tests/lib/proxyOffDetail.test.ts (3 tests) 5ms
+ ✓ tests/components/PiRuntimeSettings.test.tsx (12 tests) 246ms
+
+ Test Files  3 passed (3)
+      Tests  23 passed (23)
+   Start at  03:15:16
+   Duration  1.45s (transform 201ms, setup 886ms, collect 399ms, tests 259ms, environment 995ms, prepare 167ms)
+
+===== EXIT=0 END 2026-09-09T03:15:17Z =====
