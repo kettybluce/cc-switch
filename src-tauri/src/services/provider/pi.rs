@@ -60,21 +60,27 @@ pub(super) fn add(
         )));
     }
 
-    let native_inserted = if add_to_live {
-        crate::pi_config::insert_pi_provider(&provider.id, &provider.settings_config)?
+    let native_config = if add_to_live {
+        Some(native_config_for_live(state, &provider.settings_config)?)
+    } else {
+        None
+    };
+    let native_inserted = if let Some(native_config) = native_config.as_ref() {
+        crate::pi_config::insert_pi_provider(&provider.id, native_config)?
     } else {
         false
     };
 
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {
         if native_inserted {
-            if let Err(rollback) = crate::pi_config::remove_pi_provider_if_matches(
-                &provider.id,
-                &provider.settings_config,
-            ) {
-                return Err(AppError::Config(format!(
-                    "failed to save Pi provider: {error}; native rollback failed: {rollback}"
-                )));
+            if let Some(native_config) = native_config.as_ref() {
+                if let Err(rollback) =
+                    crate::pi_config::remove_pi_provider_if_matches(&provider.id, native_config)
+                {
+                    return Err(AppError::Config(format!(
+                        "failed to save Pi provider: {error}; native rollback failed: {rollback}"
+                    )));
+                }
             }
         }
         return Err(error);
@@ -129,15 +135,14 @@ pub(super) fn update(
     ProviderService::validate_provider_settings(&app_type, &provider)?;
     ProviderService::normalize_usage_script_credential_overrides(&app_type, &mut provider);
 
+    let live_config = native_config_for_live(state, &provider.settings_config)?;
     let previous_native =
-        crate::pi_config::replace_pi_provider_if_present(&original_id, &provider.settings_config)?;
+        crate::pi_config::replace_pi_provider_if_present(&original_id, &live_config)?;
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {
         if let Some(previous_native) = previous_native.as_ref() {
-            if let Err(rollback) = crate::pi_config::replace_pi_provider(
-                &original_id,
-                &provider.settings_config,
-                previous_native,
-            ) {
+            if let Err(rollback) =
+                crate::pi_config::replace_pi_provider(&original_id, &live_config, previous_native)
+            {
                 return Err(AppError::Config(format!(
                     "failed to save Pi provider: {error}; native rollback failed: {rollback}"
                 )));
@@ -214,7 +219,10 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
     }
 
     ProviderService::validate_provider_settings(&app_type, &provider)?;
-    crate::pi_config::insert_pi_provider(id, &provider.settings_config)?;
+    crate::pi_config::insert_pi_provider(
+        id,
+        &native_config_for_live(state, &provider.settings_config)?,
+    )?;
     Ok(SwitchResult::default())
 }
 
@@ -226,6 +234,9 @@ fn sync_native_locked(
     let mut changed = 0;
 
     for (id, config) in native {
+        if crate::pi_config::is_projected_provider_node(config) {
+            continue;
+        }
         let mut provider = saved.get(id).cloned().unwrap_or_else(|| {
             let name = native_provider_name(config).unwrap_or(id).to_string();
             let mut imported = Provider::with_id(id.clone(), name, config.clone(), None);
@@ -247,6 +258,15 @@ fn sync_native_locked(
     }
 
     Ok(changed)
+}
+
+fn native_config_for_live(state: &AppState, config: &Value) -> Result<Value, AppError> {
+    if !state.db.is_pi_takeover_enabled().unwrap_or(false) {
+        return Ok(config.clone());
+    }
+    let origin = futures::executor::block_on(state.proxy_service.client_proxy_origin())
+        .map_err(AppError::Config)?;
+    Ok(crate::pi_config::project_node_if_object(config, &origin))
 }
 
 fn merge_native_config(provider: &mut Provider, config: Value) {

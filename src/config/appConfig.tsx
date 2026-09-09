@@ -68,6 +68,15 @@ export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);
 }
 
+/** Pi reuses Claude's proxy listen; it is takeover-capable without failover. */
+export type TakeoverAppId = ProxyAppId | "pi";
+
+export const TAKEOVER_APP_IDS: TakeoverAppId[] = [...PROXY_APP_IDS, "pi"];
+
+export function isTakeoverAppId(appId: string): appId is TakeoverAppId {
+  return (TAKEOVER_APP_IDS as string[]).includes(appId);
+}
+
 export type AdditiveAppId = Extract<
   AppId,
   "opencode" | "openclaw" | "hermes" | "pi"

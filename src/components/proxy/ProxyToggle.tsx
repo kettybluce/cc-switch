@@ -10,11 +10,11 @@ import { Switch } from "@/components/ui/switch";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
-import { getAppLabel, type ProxyAppId } from "@/config/appConfig";
+import { getAppLabel, type TakeoverAppId } from "@/config/appConfig";
 
 interface ProxyToggleProps {
   className?: string;
-  activeApp: ProxyAppId;
+  activeApp: TakeoverAppId;
 }
 
 export function ProxyToggle({ className, activeApp }: ProxyToggleProps) {

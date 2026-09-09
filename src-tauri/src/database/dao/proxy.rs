@@ -496,32 +496,74 @@ impl Database {
     ///
     /// 检查是否有任一 app 的 enabled = true
     pub async fn is_live_takeover_active(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row(
+        let count: i64 = {
+            let conn = lock_conn!(self.conn);
+            conn.query_row(
                 "SELECT COUNT(*) FROM proxy_config WHERE enabled = 1",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count > 0)
+            .map_err(|e| AppError::Database(e.to_string()))?
+        };
+        if count > 0 {
+            return Ok(true);
+        }
+        self.is_pi_takeover_enabled()
     }
 
     /// 同步版本：检查是否有任一 app 的 enabled = true
     ///
     /// 用于 `ProfileService::apply` 等 sync 路径判断是否需要停止代理服务。
     pub fn is_live_takeover_active_sync(&self) -> bool {
-        let conn = match self.conn.lock() {
-            Ok(c) => c,
-            Err(_) => return false,
+        let proxy_enabled = {
+            let conn = match self.conn.lock() {
+                Ok(c) => c,
+                Err(_) => return false,
+            };
+            conn.query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE enabled = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+                > 0
         };
-        conn.query_row(
-            "SELECT COUNT(*) FROM proxy_config WHERE enabled = 1",
-            [],
-            |row| row.get::<_, i64>(0),
+        proxy_enabled || self.is_pi_takeover_enabled().unwrap_or(false)
+    }
+
+    const PI_TAKEOVER_SETTING_KEY: &'static str = "proxy_takeover_pi";
+
+    /// Pi cannot own a `proxy_config` row under SCHEMA 18 CHECK. Persist takeover
+    /// in the existing settings key-value table instead.
+    pub fn is_pi_takeover_enabled(&self) -> Result<bool, AppError> {
+        self.get_bool_flag(Self::PI_TAKEOVER_SETTING_KEY)
+    }
+
+    pub fn set_pi_takeover_enabled(&self, enabled: bool) -> Result<(), AppError> {
+        self.set_setting(
+            Self::PI_TAKEOVER_SETTING_KEY,
+            if enabled { "true" } else { "false" },
         )
-        .unwrap_or(0)
-            > 0
+    }
+
+    pub async fn is_app_takeover_enabled(&self, app_type: &str) -> Result<bool, AppError> {
+        if app_type == "pi" {
+            return self.is_pi_takeover_enabled();
+        }
+        Ok(self.get_proxy_config_for_app(app_type).await?.enabled)
+    }
+
+    pub async fn set_app_takeover_enabled(
+        &self,
+        app_type: &str,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        if app_type == "pi" {
+            return self.set_pi_takeover_enabled(enabled);
+        }
+        let mut config = self.get_proxy_config_for_app(app_type).await?;
+        config.enabled = enabled;
+        self.update_proxy_config_for_app(config).await
     }
 
     // ==================== Provider Health ====================

@@ -32,4 +32,17 @@ describe("ProxyToggle", () => {
 
     expect(screen.getByRole("switch")).toBeEnabled();
   });
+
+  it("renders a Pi takeover switch using the Claude UX", () => {
+    useProxyStatusMock.mockImplementation(() => ({
+      isRunning: true,
+      takeoverStatus: { pi: true },
+      setTakeoverForApp: vi.fn(),
+      isPending: false,
+      isInitialStatusPending: false,
+      status: { address: "127.0.0.1", port: 15721 },
+    }));
+    render(<ProxyToggle activeApp="pi" />);
+    expect(screen.getByRole("switch")).toBeChecked();
+  });
 });
