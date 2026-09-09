@@ -5,6 +5,23 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.3] - 2026-09-09
+
+Fork iteration on the official 3.20.2 baseline (this repository's `main` tip, including merged PR #25). Pi local-proxy takeover now matches Claude: `~/.pi/agent/models.json` is projected onto the existing Claude listen, requests hit the current Anthropic/OpenAI routes and `proxy_request_logs`, and the Pi page jumps to usage stats while takeover is on. `SCHEMA_VERSION` stays at 18 so the database can be opened again by official 3.20.2. Windows x64 MSI + Portable only.
+
+### Added
+
+- **Pi Claude-parity local proxy takeover without a schema bump** (#25): takeover flag in settings (`proxy_takeover_pi`); listen reused from the Claude `proxy_config` row; `models.json` projected onto that origin (OpenAI APIs get `/v1`); placeholder `PROXY_MANAGED`; restore on disable. No `proxy_config` row for `pi`, no `/pi/<id>` prefix, failover still off.
+
+### Changed
+
+- Fork release workflow ships **Windows x64 MSI + Portable only** (no Linux / macOS / ARM).
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18. Switching back to official 3.20.2 is supported.
+- Pi writes `~/.pi/agent/models.json`, not `~/.pi/models.json`. `auth.json` is never touched.
+
 ## [3.20.2] - 2026-09-07
 
 Development since v3.20.1 is again led by Codex, this time as a wave of compatibility repairs rather than one redesign. Grok models finally work through xAI's native Responses API under Codex routing — tool schemas xAI rejects are collapsed, whole-float numbers Codex refuses are rewritten, the agent_message mailbox items Codex's multi-agent mode injects are translated, and Codex's role SKUs are remapped onto the configured Grok model. Around it, a family of one-cause-each fixes: the v3.20.1 switch gate no longer refuses Grok OAuth cards, takeover no longer leaves Codex on the login screen after a direct third-party switch deleted `auth.json`, GPT-6 through Codex OAuth is no longer rejected for an outdated client version (#7132), Claude Code regains parallel tool calls on Codex OAuth (#7024), the built-in image generation tool is proxied (#7036), and four catalog defects — older Codex builds refusing the catalog (#6666), MCP tools invisible on DeepSeek presets (#6653), vision variants declared text-only (#6750), Kimi/Moonshot 400 on `$ref` schemas (#6863) — are closed, with the Zhipu GLM presets moved to Zhipu's official Responses endpoint (#6957). Usage accounting stops stalling after a Codex resume (#6905) and the proxy stops breaking the prompt prefix cache on every turn (#6941). The preset roster grows by Tencent Cloud Token Plan across six apps (#7011), QwenCloud across seven (#6214), AICodeWith across eight, and sponsors 9527CODE and SoleAPI across all nine, plus Tencent and PPIO for Pi; the pricing table gains seven new models and a September repricing pass (Sonnet 5 back to $2/$10, GPT-5.6 and Gemini 3.6/3.8 Flash promotional rates, MiniMax M2 family). This release does not change the database schema.
