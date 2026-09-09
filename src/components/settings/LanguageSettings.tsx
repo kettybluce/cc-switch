@@ -15,12 +15,12 @@ export function LanguageSettings({ value, onChange }: LanguageSettingsProps) {
   return (
     <section className="space-y-2">
       <header className="space-y-1">
-        <h3 className="text-sm font-semibold tracking-tight">
-          {t("settings.language")}
-        </h3>
-        <p className="page-meta text-xs">{t("settings.languageHint")}</p>
+        <h3 className="text-sm font-medium">{t("settings.language")}</h3>
+        <p className="text-xs text-muted-foreground">
+          {t("settings.languageHint")}
+        </p>
       </header>
-      <div className="segmented-control bg-muted/70">
+      <div className="inline-flex gap-1 rounded-md border border-border-default bg-background p-1">
         <LanguageButton active={value === "zh"} onClick={() => onChange("zh")}>
           {t("settings.languageOptionChinese")}
         </LanguageButton>

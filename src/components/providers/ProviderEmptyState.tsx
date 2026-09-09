@@ -20,20 +20,20 @@ export function ProviderEmptyState({
     appId === "claude" || appId === "codex" || appId === "gemini";
 
   return (
-    <div className="empty-state">
-      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/80 ring-1 ring-border/70">
+    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-10 text-center">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
         <Users className="h-7 w-7 text-muted-foreground" />
       </div>
-      <h3 className="page-title">
+      <h3 className="text-lg font-semibold">
         {isPi ? t("pi.empty.title") : t("provider.noProviders")}
       </h3>
-      <p className="page-meta mt-2 max-w-lg">
+      <p className="mt-2 max-w-lg text-sm text-muted-foreground">
         {isPi
           ? t("pi.empty.description")
           : t("provider.noProvidersDescription")}
       </p>
       {showSnippetHint && (
-        <p className="page-meta mt-1.5 max-w-lg">
+        <p className="mt-1 max-w-lg text-sm text-muted-foreground">
           {t("provider.noProvidersDescriptionSnippet")}
         </p>
       )}

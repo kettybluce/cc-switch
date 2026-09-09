@@ -158,7 +158,7 @@ export function AppSwitcher({
   return (
     <div
       ref={rootRef}
-      className="segmented-control"
+      className="inline-flex bg-muted rounded-xl p-1 gap-1"
       style={{ WebkitAppRegion: "no-drag" } as any}
     >
       {visibleList.map((app) => {
@@ -171,10 +171,10 @@ export function AppSwitcher({
             title={APP_DISPLAY_NAME[app]}
             aria-label={APP_DISPLAY_NAME[app]}
             className={cn(
-              "group inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium tracking-tight transition-colors duration-150",
+              "group inline-flex items-center px-3 h-8 rounded-md text-sm font-medium transition-all duration-200",
               isActive
                 ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                : "text-muted-foreground hover:text-foreground hover:bg-background/50",
             )}
           >
             <AppGlyph app={app} isActive={isActive} />
@@ -189,7 +189,7 @@ export function AppSwitcher({
               title={t("appSwitcher.more")}
               aria-label={t("appSwitcher.more")}
               className={cn(
-                "inline-flex h-8 items-center rounded-lg px-3 transition-colors duration-150",
+                "inline-flex items-center px-3 h-8 rounded-md transition-all duration-200",
                 moreOpen
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground hover:bg-background/50",

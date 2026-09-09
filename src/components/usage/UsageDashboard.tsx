@@ -282,14 +282,14 @@ export function UsageDashboard({
     >
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-2">
         <div className="flex flex-col gap-1">
-          <h2 className="text-2xl font-semibold tracking-tight">
+          <h2 className="text-2xl font-bold tracking-tight">
             {t("usage.title")}
           </h2>
-          <p className="page-meta">{t("usage.subtitle")}</p>
+          <p className="text-sm text-muted-foreground">{t("usage.subtitle")}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="segmented-control">
+          <div className="flex items-center p-1 bg-muted/30 rounded-lg border border-border/50">
             {APP_FILTER_OPTIONS.map((type) => {
               const label = t(`usage.appFilter.${type}`);
               return (
@@ -300,10 +300,10 @@ export function UsageDashboard({
                   title={label}
                   aria-label={label}
                   className={cn(
-                    "flex h-8 items-center justify-center rounded-lg px-2.5 transition-all",
+                    "flex h-8 items-center justify-center px-2.5 rounded-md transition-all",
                     appType === type
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                      ? "bg-background text-primary shadow-sm"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                   )}
                 >
                   {type === "all" ? (
@@ -425,7 +425,7 @@ export function UsageDashboard({
       <div className="space-y-4">
         <Tabs defaultValue="logs" className="w-full">
           <div className="flex items-center justify-between mb-4">
-            <TabsList>
+            <TabsList className="bg-muted/50">
               <TabsTrigger value="logs" className="gap-2">
                 <ListFilter className="h-4 w-4" />
                 {t("usage.requestLogs")}
