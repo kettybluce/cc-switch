@@ -839,6 +839,7 @@
         "description": "このマシンの Codex か、WSL 内の Codex（Pi と同じディストリビューション）を管理します。",
         "location": "Codex の場所",
         "settingsPath": "config.toml",
+        "authPath": "auth.json",
         "takeover": "Codex 接管",
         "takeoverDescription": "オンにするとローカルプロキシを起動し、Codex 設定をプロキシ経由にします。オフで上流に戻します。wsl.exe のみ、UNC は使いません。"
       }

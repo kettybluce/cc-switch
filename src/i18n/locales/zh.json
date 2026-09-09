@@ -839,6 +839,7 @@
         "description": "选择 CC Switch 管理本机 Codex，还是 WSL 中的 Codex（与 Pi 同一发行版）。",
         "location": "Codex 位置",
         "settingsPath": "config.toml",
+        "authPath": "auth.json",
         "takeover": "Codex 接管",
         "takeoverDescription": "打开后启动本地代理，并把 Codex 配置改写到本地代理。关闭后恢复真实上游。走 wsl.exe，不用 UNC。"
       }

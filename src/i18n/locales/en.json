@@ -839,6 +839,7 @@
         "description": "Choose whether CC Switch manages Codex on this machine or inside WSL (same distro as Pi).",
         "location": "Codex location",
         "settingsPath": "config.toml",
+        "authPath": "auth.json",
         "takeover": "Codex takeover",
         "takeoverDescription": "Enabling starts the local proxy and rewrites Codex settings through it. Disabling restores the real upstream. Uses wsl.exe, never UNC."
       }

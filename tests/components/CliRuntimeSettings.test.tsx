@@ -125,6 +125,9 @@ describe("CliRuntimeSettings", () => {
     expect(
       screen.getByText("wsl:Ubuntu-22.04:/home/tfdx8045/.codex/config.toml"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText("wsl:Ubuntu-22.04:/home/tfdx8045/.codex/auth.json"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Ubuntu-22.04")).toBeInTheDocument();
   });
 

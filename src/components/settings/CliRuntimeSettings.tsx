@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  AlertCircle,
   CheckCircle2,
   Loader2,
   Monitor,
@@ -103,7 +102,7 @@ function CliRuntimeSettings({ app }: { app: CliRuntimeApp }) {
 
   const showLocationPicker = status.wslAvailable;
   const { settings } = status;
-  const settingsPath = cliSettingsPath(app, status.target);
+  const statusLines = cliStatusLines(app, status.target);
 
   return (
     <section className="space-y-3">
@@ -215,22 +214,23 @@ function CliRuntimeSettings({ app }: { app: CliRuntimeApp }) {
       )}
 
       <div className="space-y-3 rounded-lg border border-border/60 p-3">
-        <div className="flex items-center justify-between gap-3 text-xs">
-          <span className="text-muted-foreground">
-            {t(`${prefix}.settingsPath`)}
-          </span>
-          <span
-            className="flex min-w-0 items-center gap-1.5 font-mono text-foreground"
-            title={settingsPath}
+        {statusLines.map((line) => (
+          <div
+            key={line.label}
+            className="flex items-center justify-between gap-3 text-xs"
           >
-            <span className="min-w-0 truncate">{settingsPath}</span>
-            {isWsl ? (
-              <CheckCircle2 className="size-3 shrink-0 text-green-500" />
-            ) : (
-              <AlertCircle className="size-3 shrink-0 text-yellow-500" />
-            )}
-          </span>
-        </div>
+            <span className="text-muted-foreground">{t(line.label)}</span>
+            <span
+              className="flex min-w-0 items-center gap-1.5 font-mono text-foreground"
+              title={line.path}
+            >
+              <span className="min-w-0 truncate">{line.path}</span>
+              <CheckCircle2
+                className={`size-3 shrink-0 ${isWsl ? "text-green-500" : "text-muted-foreground"}`}
+              />
+            </span>
+          </div>
+        ))}
       </div>
 
       <div className="space-y-3 rounded-lg border border-border/60 p-3">
@@ -289,19 +289,37 @@ function CliRuntimeSettings({ app }: { app: CliRuntimeApp }) {
   );
 }
 
-function cliSettingsPath(
-  app: CliRuntimeApp,
+function displayLinuxPath(
   target: { kind: "local" } | { kind: "wsl"; distro: string; home: string },
+  relative: string,
 ): string {
   if (target.kind !== "wsl") {
-    return app === "claude"
-      ? "~/.claude/settings.json"
-      : "~/.codex/config.toml";
+    return `~/${relative}`;
   }
   const home = target.home.replace(/\/$/, "");
-  const linux =
-    app === "claude"
-      ? `${home}/.claude/settings.json`
-      : `${home}/.codex/config.toml`;
-  return `wsl:${target.distro}:${linux}`;
+  return `wsl:${target.distro}:${home}/${relative}`;
+}
+
+function cliStatusLines(
+  app: CliRuntimeApp,
+  target: { kind: "local" } | { kind: "wsl"; distro: string; home: string },
+): { label: string; path: string }[] {
+  if (app === "claude") {
+    return [
+      {
+        label: "settings.cliRuntime.claude.settingsPath",
+        path: displayLinuxPath(target, ".claude/settings.json"),
+      },
+    ];
+  }
+  return [
+    {
+      label: "settings.cliRuntime.codex.settingsPath",
+      path: displayLinuxPath(target, ".codex/config.toml"),
+    },
+    {
+      label: "settings.cliRuntime.codex.authPath",
+      path: displayLinuxPath(target, ".codex/auth.json"),
+    },
+  ];
 }
