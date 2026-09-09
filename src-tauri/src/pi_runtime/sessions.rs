@@ -10,16 +10,14 @@
 //! 1. one `find` call that returns a manifest (`size`, `mtime`, relative path),
 //! 2. one batched transfer of only the files whose manifest entry changed.
 //!
-//! Once mirrored, the existing local session scanner, parser and usage
-//! importer run unchanged — the cache is a transport detail, not a second
-//! session format.
+//! Pi session listing and usage no longer consume this cache: they walk the
+//! WSL home in place (`\\wsl.localhost\…` on Windows). `sync_tree` remains
+//! for Claude/Codex `wsl_cli` mirrors only.
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +94,7 @@ root="$1"
 "#;
 
 /// `$1` sessions root, `$2` relative path of the session to delete.
+#[allow(dead_code)]
 const DELETE_SCRIPT: &str = r#"
 set -u
 root="$1"; rel="$2"
@@ -152,37 +151,12 @@ pub struct SessionSyncOutcome {
     pub errors: Vec<String>,
 }
 
-/// Session browsing, message loading and usage import all resolve the session
-/// root, so an unthrottled mirror would run several times per refresh and keep
-/// the WSL VM busy. One refresh per interval is enough to notice a session that
-/// Pi is actively appending to (design document §39, §74).
-const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(5);
+/// Pi no longer mirrors sessions onto C:. Kept so leftover callers compile.
+#[allow(dead_code)]
+pub fn sync_if_stale(_target: &PiRuntimeTarget) {}
 
-static LAST_SYNC: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
-
-/// Mirror WSL sessions unless a refresh already ran within the throttle
-/// window. Failures are logged rather than propagated: a stale mirror still
-/// renders, whereas a hard error would empty the session list.
-pub fn sync_if_stale(target: &PiRuntimeTarget) {
-    if !target.is_wsl() {
-        return;
-    }
-    {
-        let mut last = LAST_SYNC.lock().expect("lock the Pi session sync clock");
-        if last.is_some_and(|instant| instant.elapsed() < MIN_SYNC_INTERVAL) {
-            return;
-        }
-        *last = Some(Instant::now());
-    }
-    if let Err(error) = sync(target) {
-        log::warn!("[PiSession] mirroring WSL sessions failed: {error}");
-    }
-}
-
-/// Force the next [`sync_if_stale`] to do real work, for an explicit refresh.
-pub fn invalidate_sync_throttle() {
-    *LAST_SYNC.lock().expect("lock the Pi session sync clock") = None;
-}
+/// No-op: there is no C: session cache throttle to reset.
+pub fn invalidate_sync_throttle() {}
 
 /// Command that resumes a mirrored session inside WSL.
 ///
@@ -207,47 +181,54 @@ pub fn cache_root(distro: &str) -> PathBuf {
         .join(distro)
 }
 
-/// Directory the local session scanner should treat as Pi's sessions root.
+/// Directory the session scanner / usage importer should walk.
+///
+/// WSL sessions stay in the distribution home (`~/.pi/agent/sessions`) and
+/// are opened through `\\wsl.localhost\…` on Windows — the same shape as
+/// upstream Claude/Codex config dirs. They are never copied into
+/// `%USERPROFILE%\.cc-switch\pi-wsl-sessions`.
 ///
 /// `None` for the local runtime, which reads Pi's real directory directly.
 pub fn local_sessions_root(target: &PiRuntimeTarget) -> Option<PathBuf> {
-    target
-        .distro()
-        .map(|distro| cache_root(distro).join("sessions"))
+    match target {
+        PiRuntimeTarget::Local => None,
+        PiRuntimeTarget::Wsl {
+            distro,
+            home,
+            agent_dir,
+        } => Some(crate::wsl_cli::wsl_fs_path(
+            distro,
+            home,
+            &format!("{}/sessions", agent_dir.trim_end_matches('/')),
+        )),
+    }
 }
 
-/// Translate a mirrored file back to its path inside WSL, so resume commands
-/// and deletions act on the real session rather than the copy.
-pub fn wsl_source_path(target: &PiRuntimeTarget, cached: &Path) -> Option<String> {
+/// Translate a scanned WSL-home / UNC file back to the path Pi knows inside
+/// the distribution, so resume commands target the real session.
+pub fn wsl_source_path(target: &PiRuntimeTarget, scanned: &Path) -> Option<String> {
     let distro = target.distro()?;
     let sessions_root = target.sessions_path()?;
-    let relative = cached
-        .strip_prefix(cache_root(distro).join("sessions"))
-        .ok()?;
-    let relative = relative.to_str()?.replace('\\', "/");
-    is_safe_relative_path(&relative).then(|| format!("{sessions_root}/{relative}"))
+    let linux_home = match target {
+        PiRuntimeTarget::Wsl { home, .. } => home.as_str(),
+        PiRuntimeTarget::Local => return None,
+    };
+    let fs_root = crate::wsl_cli::wsl_fs_path(distro, linux_home, &sessions_root);
+    if let Ok(relative) = scanned.strip_prefix(&fs_root) {
+        let relative = relative.to_str()?.replace('\\', "/");
+        return is_safe_relative_path(&relative).then(|| format!("{sessions_root}/{relative}"));
+    }
+    let linux = crate::wsl_cli::linux_path_from_wsl_unc(distro, scanned)?;
+    let prefix = sessions_root.trim_end_matches('/');
+    let relative = linux.strip_prefix(prefix)?.trim_start_matches('/');
+    is_safe_relative_path(relative).then_some(linux)
 }
 
-/// Mirror the WSL session directory into the local cache.
-pub fn sync(target: &PiRuntimeTarget) -> PiResult<SessionSyncOutcome> {
-    let (distro, sessions_root) = match target {
-        PiRuntimeTarget::Local => return Ok(SessionSyncOutcome::default()),
-        PiRuntimeTarget::Wsl { distro, .. } => (
-            distro.clone(),
-            target
-                .sessions_path()
-                .expect("a WSL target always has a sessions path"),
-        ),
-    };
-
-    let flags = super::settings().flags;
-    if !flags.session {
-        log::debug!("[PiSession] mirroring is disabled by pi.session.enabled");
-        return Ok(SessionSyncOutcome::default());
-    }
-
-    let cache = cache_root(&distro).join("sessions");
-    sync_tree(&distro, &sessions_root, &cache)
+/// Previously copied WSL Pi sessions onto `%USERPROFILE%\.cc-switch\pi-wsl-sessions`.
+/// Listing and usage now walk the distribution home in place, so this must not
+/// write a C: copy. Claude/Codex still use [`sync_tree`] via `wsl_cli`.
+pub fn sync(_target: &PiRuntimeTarget) -> PiResult<SessionSyncOutcome> {
+    Ok(SessionSyncOutcome::default())
 }
 
 /// Mirror any WSL JSONL tree into `cache` through `wsl.exe` (never UNC).
@@ -319,6 +300,7 @@ pub fn sync_tree(distro: &str, linux_root: &str, cache: &Path) -> PiResult<Sessi
 }
 
 /// Delete a session inside WSL and drop its mirrored copy.
+#[allow(dead_code)]
 pub fn delete(target: &PiRuntimeTarget, cached: &Path) -> PiResult<bool> {
     let PiRuntimeTarget::Wsl { distro, .. } = target else {
         return Err(PiRuntimeError::invalid_input(
@@ -842,25 +824,38 @@ mod tests {
             agent_dir: format!("{}/.pi/agent", home.path().to_string_lossy()),
         };
 
-        let first = sync(&target).expect("first sync");
+        let linux_root = target
+            .sessions_path()
+            .expect("WSL target has a sessions path");
+        assert_eq!(
+            sync(&target).expect("Pi sync is a no-op"),
+            SessionSyncOutcome::default(),
+            "Pi must not copy sessions onto C:"
+        );
+        assert!(
+            !cache_root("Ubuntu-22.04").join("sessions").exists(),
+            "Pi sync() must not create .cc-switch/pi-wsl-sessions"
+        );
+        let cache = cache_root("Ubuntu-22.04").join("sessions");
+        let first = sync_tree("Ubuntu-22.04", &linux_root, &cache).expect("first sync");
         assert_eq!(first.fetched, 2);
         assert_eq!(first.total, 2);
         assert!(first.errors.is_empty(), "{:?}", first.errors);
 
-        let mirrored = cache_root("Ubuntu-22.04").join("sessions/project-a/one.jsonl");
+        let mirrored = cache.join("project-a/one.jsonl");
         assert_eq!(
             fs::read_to_string(&mirrored).expect("read mirrored session"),
             "{\"type\":\"session\"}\n"
         );
 
         // Nothing changed in WSL, so the second refresh transfers nothing.
-        let second = sync(&target).expect("second sync");
+        let second = sync_tree("Ubuntu-22.04", &linux_root, &cache).expect("second sync");
         assert_eq!(second.fetched, 0);
         assert_eq!(second.unchanged, 2);
 
         // A deleted session disappears from the mirror.
         fs::remove_file(sessions.join("two.jsonl")).expect("remove session");
-        let third = sync(&target).expect("third sync");
+        let third = sync_tree("Ubuntu-22.04", &linux_root, &cache).expect("third sync");
         assert_eq!(third.removed, 1);
         assert_eq!(third.total, 1);
         assert!(!cache_root("Ubuntu-22.04")
@@ -910,7 +905,12 @@ mod tests {
             agent_dir: format!("{}/.pi/agent", home.path().to_string_lossy()),
         };
 
-        let outcome = sync(&target).expect("portable find listing");
+        let linux_root = target
+            .sessions_path()
+            .expect("WSL target has a sessions path");
+        let cache = cache_root("Ubuntu-22.04").join("sessions");
+        let outcome =
+            sync_tree("Ubuntu-22.04", &linux_root, &cache).expect("portable find listing");
         assert!(
             outcome.errors.is_empty(),
             "portable listing errors: {:?}",
@@ -953,7 +953,12 @@ mod tests {
             agent_dir: format!("{}/.pi/agent", home.path().to_string_lossy()),
         };
 
-        let error = sync(&target).expect_err("unusable find must fail the sync");
+        let linux_root = target
+            .sessions_path()
+            .expect("WSL target has a sessions path");
+        let cache = cache_root("Ubuntu-22.04").join("sessions");
+        let error = sync_tree("Ubuntu-22.04", &linux_root, &cache)
+            .expect_err("unusable find must fail the sync");
         let message = error.to_string();
         assert!(
             message.contains("listing Pi sessions") || message.contains("find"),
@@ -972,20 +977,41 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn wsl_source_paths_round_trip_through_the_cache() {
-        let config = tempfile::tempdir().expect("tempdir");
-        let _home_guard = TestHome::install(config.path());
+    fn wsl_source_paths_round_trip_through_unc_not_the_profile_cache() {
         let target = PiRuntimeTarget::Wsl {
             distro: "Ubuntu-22.04".to_string(),
             home: "/home/me".to_string(),
             agent_dir: "/home/me/.pi/agent".to_string(),
         };
 
-        let cached = cache_root("Ubuntu-22.04").join("sessions/project-a/abc.jsonl");
+        let unc = crate::wsl_cli::wsl_localhost_unc(
+            "Ubuntu-22.04",
+            "/home/me/.pi/agent/sessions/project-a/abc.jsonl",
+        );
         assert_eq!(
-            wsl_source_path(&target, &cached).as_deref(),
+            wsl_source_path(&target, &unc).as_deref(),
             Some("/home/me/.pi/agent/sessions/project-a/abc.jsonl")
+        );
+        let mixed = crate::wsl_cli::wsl_localhost_unc(
+            "Ubuntu-22.04",
+            "/home/TFDX8045/.pi/agent/sessions/ProjectA/Abc.jsonl",
+        );
+        let mixed_target = PiRuntimeTarget::Wsl {
+            distro: "Ubuntu-22.04".to_string(),
+            home: "/home/TFDX8045".to_string(),
+            agent_dir: "/home/TFDX8045/.pi/agent".to_string(),
+        };
+        assert_eq!(
+            wsl_source_path(&mixed_target, &mixed).as_deref(),
+            Some("/home/TFDX8045/.pi/agent/sessions/ProjectA/Abc.jsonl")
+        );
+        assert_eq!(
+            wsl_source_path(
+                &target,
+                &cache_root("Ubuntu-22.04").join("sessions/project-a/abc.jsonl")
+            ),
+            None,
+            "C: profile mirrors are no longer a session root"
         );
         assert_eq!(
             wsl_source_path(&target, Path::new("/somewhere/else.jsonl")),

@@ -122,9 +122,9 @@ pub fn session_discovery() -> PiSessionDiscovery {
 }
 
 fn resolve_session_root() -> SessionRootResolution {
-    // A WSL runtime keeps Pi's sessions inside the distribution. They are
-    // mirrored into a local cache first so the scanner, parser and usage
-    // importer below stay exactly as they are for local Pi.
+    // A WSL runtime keeps Pi's sessions inside the distribution. The scanner
+    // walks that tree in place (`\\wsl.localhost\…` on Windows), the same
+    // way upstream Claude/Codex config dirs are pointed at the WSL home.
     let target = crate::pi_runtime::target();
     if target.is_wsl() {
         return resolve_wsl_session_root(&target);
@@ -168,21 +168,12 @@ fn resolve_session_root() -> SessionRootResolution {
 fn resolve_wsl_session_root(target: &crate::pi_runtime::PiRuntimeTarget) -> SessionRootResolution {
     let Some(root) = crate::pi_runtime::sessions::local_sessions_root(target) else {
         return SessionRootResolution::Unavailable {
-            reason: "Pi WSL runtime has no session cache location".to_string(),
+            reason: "Pi WSL runtime has no session location".to_string(),
         };
     };
 
-    crate::pi_runtime::sessions::sync_if_stale(target);
-
-    // An empty cache is a valid state before Pi has written its first session.
-    if let Err(error) = fs::create_dir_all(&root) {
-        return SessionRootResolution::Unavailable {
-            reason: format!(
-                "Pi session cache is unavailable ({}): {error}",
-                root.display()
-            ),
-        };
-    }
+    // Walk the WSL home in place (`\\wsl.localhost\…` on Windows). Do not
+    // mirror onto C: — a missing directory is an empty list, same as Claude.
     SessionRootResolution::Available {
         root,
         layout: SessionLayout::ProjectDirectories,
@@ -228,6 +219,9 @@ fn classify_configured_session_dir(
 }
 
 fn resolve_global_session_dir(value: &str, home: &Path) -> Option<PathBuf> {
+    if crate::wsl_cli::is_wsl_unc_str(value) {
+        return Some(PathBuf::from(value.replace('/', r"\")));
+    }
     let path = if value == "~" {
         home.to_path_buf()
     } else if let Some(suffix) = value
@@ -321,16 +315,8 @@ fn delete_session_with_layout(
         ));
     }
 
-    // Deleting only the mirror would let the next refresh bring the session
-    // straight back, so a WSL session is removed at the source.
-    let target = crate::pi_runtime::target();
-    if target.is_wsl() {
-        let deleted = crate::pi_runtime::sessions::delete(&target, &source)
-            .map_err(|error| error.to_string())?;
-        crate::pi_runtime::sessions::invalidate_sync_throttle();
-        return Ok(deleted);
-    }
-
+    // The scanned path is the file in the WSL home (UNC on Windows), so a
+    // regular unlink removes the session Pi itself wrote.
     fs::remove_file(&source)
         .map_err(|error| format!("Failed to delete Pi session {}: {error}", source.display()))?;
     Ok(true)
@@ -344,13 +330,13 @@ fn layout_for_current_root(root: &Path) -> Result<SessionLayout, String> {
         }
         SessionRootResolution::Unavailable { reason } => return Err(reason),
     };
-    let configured_root = configured_root.canonicalize().map_err(|error| {
+    let configured_root = maybe_canonicalize(&configured_root).map_err(|error| {
         format!(
             "Failed to resolve Pi session root {}: {error}",
             configured_root.display()
         )
     })?;
-    let requested_root = root.canonicalize().map_err(|error| {
+    let requested_root = maybe_canonicalize(root).map_err(|error| {
         format!(
             "Failed to resolve Pi session root {}: {error}",
             root.display()
@@ -363,9 +349,14 @@ fn layout_for_current_root(root: &Path) -> Result<SessionLayout, String> {
 }
 
 fn parse_session(path: &Path) -> Result<SessionMeta, String> {
-    let source = path
-        .canonicalize()
-        .map_err(|error| format!("Failed to resolve Pi session {}: {error}", path.display()))?;
+    // Keep `\\wsl.localhost\…` as-is. canonicalize() on Windows turns it into
+    // `\\?\UNC\…` (or, for the old C: mirror, `\\?\C:\Users\…\pi-wsl-sessions`).
+    let source = if crate::wsl_cli::is_wsl_unc_path(path) {
+        path.to_path_buf()
+    } else {
+        path.canonicalize()
+            .map_err(|error| format!("Failed to resolve Pi session {}: {error}", path.display()))?
+    };
     let source_path = source
         .to_str()
         .ok_or_else(|| "Pi session path is not valid UTF-8".to_string())?
@@ -764,14 +755,13 @@ fn validate_source_under_root(
     path: &Path,
     layout: SessionLayout,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let root = root.canonicalize().map_err(|error| {
+    let root = maybe_canonicalize(root).map_err(|error| {
         format!(
             "Failed to resolve Pi session root {}: {error}",
             root.display()
         )
     })?;
-    let source = path
-        .canonicalize()
+    let source = maybe_canonicalize(path)
         .map_err(|error| format!("Failed to resolve Pi session {}: {error}", path.display()))?;
     if !source.starts_with(&root) {
         return Err(format!(
@@ -818,6 +808,14 @@ fn is_pi_task_session(relative: &Path) -> bool {
             let name = component.as_os_str();
             name != "." && name != ".."
         })
+}
+
+fn maybe_canonicalize(path: &Path) -> Result<PathBuf, String> {
+    if crate::wsl_cli::is_wsl_unc_path(path) {
+        return Ok(path.to_path_buf());
+    }
+    path.canonicalize()
+        .map_err(|error| format!("Failed to resolve {}: {error}", path.display()))
 }
 
 fn validate_file_size(path: &Path) -> Result<(), String> {
@@ -1024,11 +1022,23 @@ mod wsl_tests {
         );
         // The mirrored copy must never be what Pi is pointed at.
         assert!(!resume.contains("pi-wsl-sessions"), "{resume}");
+        assert!(
+            !resume.contains(r"\\?\C:"),
+            "resume must not point at a Windows profile copy: {resume}"
+        );
+        let roots = session_roots();
+        assert!(
+            roots.iter().all(|root| {
+                let text = root.to_string_lossy();
+                !text.contains("pi-wsl-sessions")
+            }),
+            "session root must be the WSL home, not the C: mirror: {roots:?}"
+        );
     }
 
     #[test]
     #[serial]
-    fn messages_load_from_the_mirrored_copy() {
+    fn messages_load_from_the_wsl_home() {
         let fixture = WslSessions::new();
         fs::write(fixture.sessions_dir.join("abc.jsonl"), SESSION).expect("write WSL session");
 

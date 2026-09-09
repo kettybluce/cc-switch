@@ -97,14 +97,72 @@ pub fn is_wsl_unc_str(raw: &str) -> bool {
         .strip_prefix(r"\\?\unc\")
         .or_else(|| lower.strip_prefix(r"\\?\unix\"))
         .unwrap_or(&lower);
-    body.starts_with(r"\\wsl.localhost\")
-        || body.starts_with(r"\\wsl$\")
-        || body.starts_with(r"\\wsl.localhost")
+    // After stripping `\\?\UNC\`, Windows leaves `wsl.localhost\…` without a
+    // leading `\\`. Treat both shapes as the same 9P walk.
+    body.starts_with(r"\\wsl.localhost")
         || body.starts_with(r"\\wsl$")
+        || body.starts_with(r"wsl.localhost")
+        || body.starts_with(r"wsl$")
 }
 
 pub fn is_wsl_unc_path(path: &Path) -> bool {
     is_wsl_unc_str(&path.to_string_lossy())
+}
+
+/// Windows 9P path for a file that lives inside a WSL distribution.
+///
+/// `/home/tfdx8045/.pi/agent/sessions` on `Ubuntu-22.04` becomes
+/// `\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions`.
+pub fn wsl_localhost_unc(distro: &str, linux_abs: &str) -> PathBuf {
+    let rest = linux_abs.trim_start_matches('/');
+    PathBuf::from(format!(r"\\wsl.localhost\{distro}\{rest}").replace('/', r"\"))
+}
+
+/// POSIX path inside the distribution for a `\\wsl.localhost\` / `\\wsl$\` walk.
+///
+/// Prefix matching is case-insensitive (Windows). The reconstructed Linux
+/// path keeps the original casing so `pi --session` can open mixed-case homes.
+pub fn linux_path_from_wsl_unc(distro: &str, path: &Path) -> Option<String> {
+    let raw = path.to_string_lossy().replace('/', r"\");
+    let lower = raw.to_ascii_lowercase();
+    let prefix_len = if lower.starts_with(r"\\?\unc\") || lower.starts_with(r"\\?\unix\") {
+        r"\\?\UNC\".len()
+    } else {
+        0
+    };
+    let lower_body = &lower[prefix_len..];
+    let raw_body = &raw[prefix_len..];
+    let distro = distro.to_ascii_lowercase();
+    let prefixes = [
+        format!(r"\\wsl.localhost\{distro}\"),
+        format!(r"wsl.localhost\{distro}\"),
+        format!(r"\\wsl$\{distro}\"),
+        format!(r"wsl$\{distro}\"),
+    ];
+    for prefix in &prefixes {
+        if lower_body.starts_with(prefix.as_str()) {
+            let rest = raw_body.get(prefix.len()..)?;
+            return Some(format!("/{}", rest.replace('\\', "/")));
+        }
+    }
+    None
+}
+
+/// Path `std::fs` should walk for a WSL-resident tree.
+///
+/// On Windows this is [`wsl_localhost_unc`]. Cloud / `LocalBashRunner` tests
+/// use a real temp directory as `$HOME`, so that directory is returned as-is
+/// and never copied into `%USERPROFILE%\.cc-switch`.
+pub fn wsl_fs_path(distro: &str, linux_home: &str, linux_abs: &str) -> PathBuf {
+    let home = PathBuf::from(linux_home);
+    if home.is_absolute() && !is_wsl_unc_path(&home) && home.exists() {
+        let home_prefix = linux_home.trim_end_matches('/');
+        if let Some(rel) = linux_abs.strip_prefix(home_prefix) {
+            return home.join(rel.trim_start_matches('/'));
+        }
+        return PathBuf::from(linux_abs);
+    }
+    wsl_localhost_unc(distro, linux_abs)
 }
 
 /// Drop a configured override that would walk WSL through UNC.
@@ -292,7 +350,7 @@ pub fn codex_usage_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn detects_wsl_unc_shapes() {
@@ -306,6 +364,57 @@ mod tests {
         assert!(is_wsl_unc_path(&PathBuf::from(
             r"\\wsl.localhost\Ubuntu\home\chen\.claude"
         )));
+        assert!(is_wsl_unc_str(
+            r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi"
+        ));
+        assert!(is_wsl_unc_path(&PathBuf::from(
+            r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions"
+        )));
+    }
+
+    #[test]
+    fn wsl_localhost_unc_matches_claude_style_pi_home() {
+        let unc = wsl_localhost_unc(
+            "Ubuntu-22.04",
+            "/home/tfdx8045/.pi/agent/sessions/--home--tfdx8045--code--agent--/2026-09-09T03-33-56-122Z_01a0843a.jsonl",
+        );
+        assert_eq!(
+            unc.to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions\--home--tfdx8045--code--agent--\2026-09-09T03-33-56-122Z_01a0843a.jsonl"
+        );
+        assert_eq!(
+            linux_path_from_wsl_unc("Ubuntu-22.04", &unc).as_deref(),
+            Some("/home/tfdx8045/.pi/agent/sessions/--home--tfdx8045--code--agent--/2026-09-09T03-33-56-122Z_01a0843a.jsonl")
+        );
+        assert_eq!(
+            linux_path_from_wsl_unc(
+                "Ubuntu-22.04",
+                Path::new(
+                    r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions\a.jsonl"
+                )
+            )
+            .as_deref(),
+            Some("/home/tfdx8045/.pi/agent/sessions/a.jsonl")
+        );
+        assert_eq!(
+            linux_path_from_wsl_unc(
+                "Ubuntu-22.04",
+                Path::new(r"\\wsl.localhost\Ubuntu-22.04\home\TFDX8045\.pi\agent\sessions\ProjectA\Abc.jsonl")
+            )
+            .as_deref(),
+            Some("/home/TFDX8045/.pi/agent/sessions/ProjectA/Abc.jsonl"),
+            "resume paths must keep the distribution's original casing"
+        );
+    }
+
+    #[test]
+    fn wsl_fs_path_uses_an_existing_harness_home_instead_of_unc() {
+        let home = tempfile::tempdir().expect("temp home");
+        let linux_home = home.path().to_string_lossy().into_owned();
+        let linux_abs = format!("{linux_home}/.pi/agent/sessions");
+        let fs = wsl_fs_path("Ubuntu-22.04", &linux_home, &linux_abs);
+        assert_eq!(fs, home.path().join(".pi/agent/sessions"));
+        assert!(!is_wsl_unc_path(&fs));
     }
 
     #[test]
