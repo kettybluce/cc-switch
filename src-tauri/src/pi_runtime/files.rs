@@ -60,6 +60,7 @@ tmp=$(mktemp -p "$stage" cc-switch-XXXXXX 2>/dev/null) \
     };
 }
 
+#[cfg(test)]
 pub const ATOMIC_STAGE_SNIPPET: &str = atomic_stage_snippet!();
 pub(crate) use atomic_stage_snippet;
 

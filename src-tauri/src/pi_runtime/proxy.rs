@@ -623,10 +623,7 @@ fn parse_http_code(raw: &str) -> Option<u32> {
             }
         }
     }
-    match digits.parse::<u32>() {
-        Ok(code) => Some(code),
-        Err(_) => None,
-    }
+    digits.parse::<u32>().ok()
 }
 
 /// HTTP connectivity only. 2xx/3xx/4xx (including 404 on `/`) and 5xx all

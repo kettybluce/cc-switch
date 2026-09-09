@@ -79,6 +79,7 @@ impl WslHome {
         format!("{}/sessions", self.codex_dir())
     }
 
+    #[cfg(test)]
     pub fn display(&self, linux_path: &str) -> String {
         format!("wsl:{}:{linux_path}", self.distro)
     }
