@@ -454,6 +454,76 @@ fn session_list_and_usage_share_wsl_home_unc_layout_without_profile_mirror() {
     assert_eq!(imported, 1);
 }
 
+/// Walking WSL-home sessions (UNC on Windows) must not skip or undo local
+/// proxy projection. Claude/Codex takeover still rewrites the proxy origin
+/// through the same WSL runtime.
+#[test]
+#[serial]
+fn wsl_home_session_scan_does_not_regress_local_proxy_projection() {
+    let harness = WslHarness::install("identical");
+    let db = Database::memory().expect("memory db");
+    db.save_provider("pi", &harness_card())
+        .expect("store upstream card");
+
+    assert!(
+        !scan_sessions().is_empty(),
+        "session list must see the WSL-home fixture before projection"
+    );
+    assert!(!sessions::cache_root(DISTRO).join("sessions").exists());
+
+    let projected = crate::services::pi_proxy::sync_live_providers(&db, Some(PROXY_ORIGIN))
+        .expect("project Pi through the local proxy after a session scan");
+    assert_eq!(projected, 1);
+    let agent = read_text(&harness.agent_models());
+    assert!(
+        agent.contains(&format!("{PROXY_ORIGIN}/pi/{PROVIDER_ID}/v1")),
+        "Pi models.json must still be projected: {agent}"
+    );
+    assert!(!agent.contains(UPSTREAM));
+    assert_eq!(agent, read_text(&harness.top_models()));
+
+    assert!(
+        !scan_sessions().is_empty(),
+        "listing after projection must still see WSL-home sessions"
+    );
+    assert!(
+        read_text(&harness.agent_models()).contains("/pi/"),
+        "session walk must not restore upstream URLs"
+    );
+    assert!(
+        !sessions::cache_root(DISTRO).join("sessions").exists(),
+        "proxy + session scan must not populate pi-wsl-sessions"
+    );
+
+    let inner = LocalBashRunner::new(DISTRO, harness.wsl_home.clone());
+    let _proxy = RunnerGuard::install(Arc::new(CannedProxyRunner {
+        inner,
+        host_payload: "gateway=172.30.208.1\nnameserver=10.255.255.254\n".to_string(),
+        probe_payload:
+            "host=127.0.0.1 code=000 latency=3005\nhost=172.30.208.1 code=200 latency=12\n"
+                .to_string(),
+    }));
+    assert_eq!(
+        crate::wsl_cli::rewrite_proxy_origin("http://127.0.0.1:15721", 15721).as_deref(),
+        Some("http://172.30.208.1:15721"),
+        "Claude/Codex live takeover must still rehost the proxy for WSL"
+    );
+
+    let claude = json!({
+        "env": {
+            "ANTHROPIC_BASE_URL": "http://172.30.208.1:15721",
+            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+        }
+    });
+    assert!(
+        crate::wsl_cli::write_claude_settings(&claude).expect("write claude"),
+        "Claude settings must still land in the WSL home"
+    );
+    assert!(
+        read_text(&harness.wsl_home.join(".claude/settings.json")).contains("172.30.208.1:15721")
+    );
+}
+
 #[test]
 #[serial]
 fn wsl_read_heals_identical_diverge_and_only_agent_models_mirrors() {
