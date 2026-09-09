@@ -1461,7 +1461,9 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                   <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-muted/70 ring-1 ring-border/70">
                     <MessageSquare className="size-6 opacity-70" />
                   </div>
-                  <p className="page-meta">{t("sessionManager.selectSession")}</p>
+                  <p className="page-meta">
+                    {t("sessionManager.selectSession")}
+                  </p>
                 </div>
               ) : (
                 <>

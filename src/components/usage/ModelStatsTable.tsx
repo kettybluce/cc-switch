@@ -36,9 +36,7 @@ export function ModelStatsTable({
   );
 
   if (isLoading) {
-    return (
-      <div className="h-[400px] animate-pulse rounded-xl bg-muted/50" />
-    );
+    return <div className="h-[400px] animate-pulse rounded-xl bg-muted/50" />;
   }
 
   return (

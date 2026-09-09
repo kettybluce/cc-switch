@@ -18,9 +18,7 @@ export function LanguageSettings({ value, onChange }: LanguageSettingsProps) {
         <h3 className="text-sm font-semibold tracking-tight">
           {t("settings.language")}
         </h3>
-        <p className="page-meta text-xs">
-          {t("settings.languageHint")}
-        </p>
+        <p className="page-meta text-xs">{t("settings.languageHint")}</p>
       </header>
       <div className="segmented-control bg-muted/70">
         <LanguageButton active={value === "zh"} onClick={() => onChange("zh")}>

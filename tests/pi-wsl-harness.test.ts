@@ -14,12 +14,12 @@ const CWD_GROUP = "--home-tfdx8045-code-agent--";
 /** Pi encodes a launch cwd as a sessions/ directory name. */
 function encodeSessionCwd(cwd: string): string {
   const withoutRoot = cwd.trim().replace(/^\/+/, "");
-  return `--${withoutRoot.replaceAll("/", "-")}--`;
+  return `--${withoutRoot.split("/").join("-")}--`;
 }
 
 function decodeSessionCwd(encoded: string): string {
   const inner = encoded.replace(/^--/, "").replace(/--$/, "");
-  return `/${inner.replaceAll("-", "/")}`;
+  return `/${inner.split("-").join("/")}`;
 }
 
 function parseJsonl(filePath: string): Record<string, unknown>[] {

@@ -14,9 +14,7 @@ export function ThemeSettings() {
         <h3 className="text-sm font-semibold tracking-tight">
           {t("settings.theme")}
         </h3>
-        <p className="page-meta text-xs">
-          {t("settings.themeHint")}
-        </p>
+        <p className="page-meta text-xs">{t("settings.themeHint")}</p>
       </header>
       <div className="segmented-control bg-muted/70">
         <ThemeButton

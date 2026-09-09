@@ -30,8 +30,8 @@
     --ring: 210 100% 50%;
 
     --radius: 0.75rem;
-    --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04),
-      0 6px 20px -8px rgb(15 23 42 / 0.08);
+    --shadow-card:
+      0 1px 2px rgb(15 23 42 / 0.04), 0 6px 20px -8px rgb(15 23 42 / 0.08);
     --shadow-float: 0 12px 40px -12px rgb(15 23 42 / 0.18);
   }
 
@@ -61,8 +61,8 @@
     --input: 240 5% 18%;
     --ring: 210 100% 58%;
 
-    --shadow-card: 0 1px 0 rgb(255 255 255 / 0.04) inset,
-      0 8px 24px rgb(0 0 0 / 0.28);
+    --shadow-card:
+      0 1px 0 rgb(255 255 255 / 0.04) inset, 0 8px 24px rgb(0 0 0 / 0.28);
     --shadow-float: 0 16px 48px rgb(0 0 0 / 0.45);
   }
 }
@@ -134,7 +134,10 @@ html {
   @apply font-sans antialiased;
   line-height: 1.5;
   letter-spacing: -0.011em;
-  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  font-feature-settings:
+    "kern" 1,
+    "liga" 1,
+    "calt" 1;
   color-scheme: light;
   overscroll-behavior: none;
 }

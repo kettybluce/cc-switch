@@ -21,8 +21,7 @@ const buttonVariants = cva(
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-accent dark:text-gray-300",
         // 幽灵按钮（对应旧版 ghost）
-        ghost:
-          "text-muted-foreground hover:text-foreground hover:bg-accent",
+        ghost: "text-muted-foreground hover:text-foreground hover:bg-accent",
         // MCP 专属按钮：祖母绿
         mcp: "bg-emerald-500 text-white shadow-sm hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-700",
         // 链接按钮

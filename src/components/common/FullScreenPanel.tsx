@@ -172,9 +172,7 @@ export const FullScreenPanel: React.FC<FullScreenPanelProps> = ({
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>
-              <h2 className="page-title select-none">
-                {title}
-              </h2>
+              <h2 className="page-title select-none">{title}</h2>
             </div>
           </div>
 

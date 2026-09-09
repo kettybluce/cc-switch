@@ -172,9 +172,9 @@ export function AppSwitcher({
             aria-label={APP_DISPLAY_NAME[app]}
             className={cn(
               "group inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium tracking-tight transition-all duration-200",
-                isActive
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+              isActive
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
             )}
           >
             <AppGlyph app={app} isActive={isActive} />
