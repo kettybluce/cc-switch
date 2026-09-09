@@ -459,10 +459,12 @@ fn read_wsl(
     max_bytes: u64,
     location: PiFileLocation,
 ) -> PiResult<PiFileRead> {
+    let max_bytes_arg = max_bytes.to_string();
+    let script = wsl::with_dropped_arg_fallback(READ_SCRIPT, &[path, &max_bytes_arg]);
     let output = wsl::run(
-        &WslRequest::guarded(distro, READ_SCRIPT)
+        &WslRequest::guarded(distro, &script)
             .arg(path)
-            .arg(max_bytes.to_string()),
+            .arg(&max_bytes_arg),
     )?;
     output.require_success(&format!("reading {}", file.label()))?;
 
@@ -680,6 +682,7 @@ mod tests {
     use super::*;
     use crate::pi_runtime::test_support::TestTarget;
     use crate::pi_runtime::wsl::test_support::{LocalBashRunner, RunnerGuard};
+    use crate::pi_runtime::wsl::{WslExecResult, WslRequest, WslRunner};
     use serial_test::serial;
     use std::sync::Arc;
 
@@ -974,6 +977,41 @@ mod tests {
             assert!(script.contains("sha256sum < \"$tmp\""));
             assert!(script.contains("mv -f -- \"$tmp\" \"$target\""));
         }
+    }
+
+    #[derive(Debug)]
+    struct DroppedArgvRunner {
+        inner: LocalBashRunner,
+    }
+
+    impl WslRunner for DroppedArgvRunner {
+        fn run(&self, request: &WslRequest) -> crate::pi_runtime::PiResult<WslExecResult> {
+            let mut stripped = request.clone();
+            stripped.args.clear();
+            self.inner.run(&stripped)
+        }
+
+        fn list_distros(&self) -> crate::pi_runtime::PiResult<Vec<String>> {
+            self.inner.list_distros()
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn reading_survives_when_wsl_drops_positional_args() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home_path = home.path().to_string_lossy().into_owned();
+        let _runner = RunnerGuard::install(Arc::new(DroppedArgvRunner {
+            inner: LocalBashRunner::new("Ubuntu-22.04", home.path().to_path_buf()),
+        }));
+        let _target = TestTarget::wsl("Ubuntu-22.04", &home_path);
+        let document = b"{\"providers\":{\"baisheng\":{}}}\n";
+
+        write(PiFile::Models, document, MISSING_REVISION).expect("write with dropped $1");
+        let read_back =
+            read(PiFile::Models, LIMIT).expect("read must not treat empty $1 as missing");
+        assert_eq!(read_back.bytes.as_deref(), Some(document.as_slice()));
+        assert_ne!(read_back.revision, MISSING_REVISION);
     }
 
     #[test]
