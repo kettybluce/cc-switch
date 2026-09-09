@@ -116,6 +116,8 @@ pub struct ProxyTakeoverStatus {
     pub grokbuild: bool,
     pub opencode: bool,
     pub openclaw: bool,
+    #[serde(default)]
+    pub pi: bool,
 }
 
 /// Provider健康状态

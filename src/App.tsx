@@ -111,6 +111,7 @@ import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
   isProxyAppId,
+  isTakeoverAppId,
 } from "@/config/appConfig";
 
 type View =
@@ -278,10 +279,11 @@ function App() {
     status: proxyStatus,
   } = useProxyStatus();
   const proxyAppId = isProxyAppId(activeApp) ? activeApp : null;
+  const takeoverAppId = isTakeoverAppId(activeApp) ? activeApp : null;
   const currentAppUsesProxy =
-    proxyAppId !== null || activeApp === "claude-desktop";
-  const isCurrentAppTakeoverActive = proxyAppId
-    ? takeoverStatus?.[proxyAppId] || false
+    takeoverAppId !== null || activeApp === "claude-desktop";
+  const isCurrentAppTakeoverActive = takeoverAppId
+    ? takeoverStatus?.[takeoverAppId] || false
     : false;
   const activeProviderId = useMemo(() => {
     if (!proxyAppId) return undefined;
@@ -1370,19 +1372,19 @@ function App() {
 
           <div className="flex flex-1 min-w-0 items-center justify-end gap-1.5">
             {currentView === "providers" &&
-              (activeApp === "claude-desktop" || proxyAppId) && (
+              (activeApp === "claude-desktop" || takeoverAppId) && (
                 <div
                   className="flex shrink-0 items-center gap-1.5"
                   style={{ WebkitAppRegion: "no-drag" } as any}
                 >
                   {activeApp === "claude-desktop" ? (
                     <ClaudeDesktopRouteToggle />
-                  ) : proxyAppId ? (
+                  ) : takeoverAppId ? (
                     <>
                       {settingsData?.enableLocalProxy && (
-                        <ProxyToggle activeApp={proxyAppId} />
+                        <ProxyToggle activeApp={takeoverAppId} />
                       )}
-                      {settingsData?.enableFailoverToggle && (
+                      {proxyAppId && settingsData?.enableFailoverToggle && (
                         <FailoverToggle activeApp={proxyAppId} />
                       )}
                     </>

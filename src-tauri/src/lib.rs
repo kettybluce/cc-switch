@@ -1944,15 +1944,15 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 ///
 /// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
 /// 则自动启动代理服务并接管对应应用的 Live 配置。
-const PROXY_STARTUP_APP_TYPES: [&str; 4] = ["claude", "codex", "gemini", "grokbuild"];
+const PROXY_STARTUP_APP_TYPES: [&str; 5] = ["claude", "codex", "gemini", "grokbuild", "pi"];
 
 async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
     let mut apps = Vec::new();
     for app_type in PROXY_STARTUP_APP_TYPES {
         if db
-            .get_proxy_config_for_app(app_type)
+            .is_app_takeover_enabled(app_type)
             .await
-            .is_ok_and(|config| config.enabled)
+            .is_ok_and(|enabled| enabled)
         {
             apps.push(app_type);
         }

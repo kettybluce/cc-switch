@@ -3,6 +3,10 @@
 //! Pi owns account login and the active provider/model in `settings.json`.
 //! CC Switch only manages explicit provider entries in `models.json`.
 
+mod proxy;
+
+pub(crate) use proxy::*;
+
 use crate::config::{atomic_write_private, get_home_dir};
 use crate::error::AppError;
 use indexmap::IndexMap;
@@ -48,7 +52,7 @@ pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
     )
 }
 
-fn resolve_pi_agent_dir(
+pub(crate) fn resolve_pi_agent_dir(
     settings_override: Option<PathBuf>,
     env_override: Option<std::ffi::OsString>,
     default_path: PathBuf,
@@ -63,7 +67,7 @@ fn resolve_pi_agent_dir(
             _ => (default_path, "Pi default"),
         },
     };
-    if !path.is_absolute() {
+    if !proxy::is_usable_pi_agent_dir(&path) {
         return Err(AppError::InvalidInput(format!(
             "{source} must resolve to an absolute directory: {}",
             path.display()
@@ -276,7 +280,7 @@ pub(crate) fn provider_base_url(config: &Value) -> Result<String, AppError> {
         .ok_or_else(|| AppError::InvalidInput("Pi provider has no request URL".to_string()))
 }
 
-fn lock_models_file() -> Result<MutexGuard<'static, ()>, AppError> {
+pub(crate) fn lock_models_file() -> Result<MutexGuard<'static, ()>, AppError> {
     MODELS_FILE_LOCK
         .lock()
         .map_err(|error| AppError::Config(format!("Pi models file lock is poisoned: {error}")))
@@ -295,7 +299,7 @@ fn read_models_document(path: &Path) -> Result<Value, AppError> {
     read_models_document_with_revision(path).map(|(document, _)| document)
 }
 
-fn read_models_document_with_revision(path: &Path) -> Result<(Value, String), AppError> {
+pub(crate) fn read_models_document_with_revision(path: &Path) -> Result<(Value, String), AppError> {
     if !path.exists() {
         return Ok((
             Value::Object(Map::new()),
@@ -392,7 +396,7 @@ fn empty_json_object() -> &'static Map<String, Value> {
     &EMPTY
 }
 
-fn write_models_document(
+pub(crate) fn write_models_document(
     path: &Path,
     document: &Value,
     expected_revision: &str,

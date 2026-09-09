@@ -428,6 +428,11 @@ impl AppType {
         )
     }
 
+    /// Pi reuses Claude's proxy listen (SCHEMA 18 has no `proxy_config` row for `pi`).
+    pub fn supports_proxy_takeover(&self) -> bool {
+        self.supports_local_proxy() || matches!(self, AppType::Pi)
+    }
+
     /// Return an iterator over all app types
     pub fn all() -> impl Iterator<Item = AppType> {
         [
@@ -1019,6 +1024,14 @@ mod tests {
             AppType::ClaudeDesktop
         );
         assert_eq!(AppType::ClaudeDesktop.as_str(), "claude-desktop");
+    }
+
+    #[test]
+    fn pi_supports_takeover_without_proxy_config_row() {
+        assert!(!AppType::Pi.supports_local_proxy());
+        assert!(AppType::Pi.supports_proxy_takeover());
+        assert!(AppType::Claude.supports_proxy_takeover());
+        assert!(!AppType::Hermes.supports_proxy_takeover());
     }
 
     struct TempHome {
