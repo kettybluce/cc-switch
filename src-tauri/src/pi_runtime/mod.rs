@@ -9,7 +9,8 @@
 //! ```text
 //! PiRuntimeTarget
 //!   ├── Local  — Pi installed for the CC Switch user (Windows, macOS, Linux)
-//!   └── Wsl    — Pi installed inside a WSL2 distribution, reached via wsl.exe
+//!   └── Wsl    — Pi inside WSL2. models.json writes still use wsl.exe;
+//!                session/usage discovery reads `\\wsl.localhost\…\.pi`.
 //! ```
 //!
 //! A future `Docker` or `Ssh` target only has to add a variant here; nothing
@@ -96,7 +97,7 @@ pub struct PiFeatureFlags {
     /// upstream URL.
     #[serde(default = "enabled", alias = "proxy")]
     pub wsl_proxy: bool,
-    /// `pi.session.enabled` — mirror WSL session files into the local cache.
+    /// `pi.session.enabled` — discover WSL Pi sessions via wsl.localhost (no C: mirror).
     #[serde(default = "enabled")]
     pub session: bool,
     /// `pi.session.incremental.enabled` — only re-fetch changed session files.

@@ -1,8 +1,13 @@
-//! Shared WSL home for Claude and Codex live files and session sync.
+//! Shared WSL home for Claude, Codex, and Pi.
 //!
-//! This fork never touches `\\wsl.localhost` / `\\wsl$`. When the Pi WSL
-//! runtime is selected, Claude (`~/.claude`) and Codex (`~/.codex`) follow
-//! the same distribution and are reached only through `wsl.exe`.
+//! Claude/Codex live-file writes still go through `wsl.exe` (takeover /
+//! local proxy). Pi **session and usage discovery** reads the distro home
+//! the same way open-source CC Switch points Claude at
+//! `\\wsl.localhost\<distro>\home\<user>\.claude`:
+//! `\\wsl.localhost\<distro>\home\<user>\.pi\...`.
+//!
+//! Linux CI cannot mount that 9P share, so [`walkable_wsl_path`] falls
+//! back to the POSIX path itself (documented equivalent).
 
 use std::path::{Path, PathBuf};
 
@@ -107,13 +112,66 @@ pub fn is_wsl_unc_path(path: &Path) -> bool {
     is_wsl_unc_str(&path.to_string_lossy())
 }
 
-/// Drop a configured override that would walk WSL through UNC.
+/// `\\wsl.localhost\<distro>` plus a Linux absolute path as UNC components.
+///
+/// `/home/tfdx8045/.pi` on `Ubuntu-22.04` becomes
+/// `\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi`.
+pub fn wsl_localhost_unc(distro: &str, linux_abs: &str) -> String {
+    let mut unc = format!(r"\\wsl.localhost\{distro}");
+    for component in linux_abs.split(['/', '\\']).filter(|part| !part.is_empty()) {
+        unc.push('\\');
+        unc.push_str(component);
+    }
+    unc
+}
+
+/// Path CC Switch should `read_dir` for WSL-home files.
+///
+/// On Windows a Linux absolute path becomes `\\wsl.localhost\…`. Elsewhere
+/// (Linux fixtures / CI) the POSIX path is the documented equivalent.
+pub fn walkable_wsl_path(distro: &str, linux_abs: &str) -> PathBuf {
+    if cfg!(windows) && wsl::is_valid_linux_path(linux_abs) {
+        PathBuf::from(wsl_localhost_unc(distro, linux_abs))
+    } else {
+        PathBuf::from(linux_abs)
+    }
+}
+
+/// Invert [`wsl_localhost_unc`], including `\\?\UNC\` and `\\wsl$\` shapes.
+pub fn linux_path_from_wsl_unc(raw: &str, distro: &str) -> Option<String> {
+    let normalized = raw.replace('/', r"\");
+    let lower = normalized.to_ascii_lowercase();
+    let distro_l = distro.to_ascii_lowercase();
+    let prefixes = [
+        format!(r"\\?\unc\wsl.localhost\{distro_l}"),
+        format!(r"\\?\unc\wsl$\{distro_l}"),
+        format!(r"\\wsl.localhost\{distro_l}"),
+        format!(r"\\wsl$\{distro_l}"),
+    ];
+    for prefix in prefixes {
+        if lower.starts_with(&prefix) {
+            let rest = &normalized[prefix.len()..];
+            let linux = rest.replace('\\', "/");
+            let linux = if linux.starts_with('/') {
+                linux
+            } else {
+                format!("/{linux}")
+            };
+            if linux.len() > 1 {
+                return Some(linux);
+            }
+        }
+    }
+    None
+}
+
+/// Drop a Claude/Codex override that would walk WSL through UNC.
+///
+/// Pi keeps UNC overrides — that is the session/usage discovery path.
 pub fn reject_unc_override(path: Option<&str>) -> Option<String> {
     let value = path.map(str::trim).filter(|value| !value.is_empty())?;
     if is_wsl_unc_str(value) {
-        log::warn!(
-            "[WslCli] ignoring UNC override '{value}'; use Settings → Pi runtime (wsl.exe only)"
-        );
+        log::warn!("[WslCli] ignoring UNC override '{value}'; select the WSL runtime instead");
         return None;
     }
     Some(value.to_string())
@@ -306,6 +364,43 @@ mod tests {
         assert!(is_wsl_unc_path(&PathBuf::from(
             r"\\wsl.localhost\Ubuntu\home\chen\.claude"
         )));
+    }
+
+    #[test]
+    fn wsl_localhost_unc_matches_open_source_claude_shape() {
+        assert_eq!(
+            wsl_localhost_unc("Ubuntu-22.04", "/home/tfdx8045/.pi"),
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi"
+        );
+        assert_eq!(
+            wsl_localhost_unc("Ubuntu-22.04", "/home/tfdx8045/.pi/agent/sessions"),
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions"
+        );
+        assert_eq!(
+            linux_path_from_wsl_unc(
+                r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions\work\abc.jsonl",
+                "Ubuntu-22.04",
+            )
+            .as_deref(),
+            Some("/home/tfdx8045/.pi/agent/sessions/work/abc.jsonl")
+        );
+        assert_eq!(
+            linux_path_from_wsl_unc(
+                r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\sessions\a.jsonl",
+                "Ubuntu-22.04",
+            )
+            .as_deref(),
+            Some("/home/tfdx8045/.pi/agent/sessions/a.jsonl")
+        );
+        let walkable = walkable_wsl_path("Ubuntu-22.04", "/tmp/fixture/.pi/agent/sessions");
+        if cfg!(windows) {
+            assert_eq!(
+                walkable,
+                PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\tmp\fixture\.pi\agent\sessions")
+            );
+        } else {
+            assert_eq!(walkable, PathBuf::from("/tmp/fixture/.pi/agent/sessions"));
+        }
     }
 
     #[test]

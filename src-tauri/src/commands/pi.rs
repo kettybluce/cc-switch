@@ -89,7 +89,8 @@ pub(crate) async fn set_pi_runtime(
     Ok(crate::pi_runtime::status())
 }
 
-/// Mirror WSL Pi sessions now, bypassing the refresh throttle.
+/// Re-count Pi sessions under the WSL home (UNC / POSIX equivalent).
+/// Does not copy JSONL onto the Windows user profile.
 #[tauri::command]
 pub(crate) fn sync_pi_wsl_sessions() -> Result<SessionSyncOutcome, String> {
     let target = crate::pi_runtime::target();

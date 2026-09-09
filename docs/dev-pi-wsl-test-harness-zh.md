@@ -2,7 +2,7 @@
 
 这份文档说明：**不必登录任何人的 Windows 电脑、不必碰真实 `machineId` / Ubuntu-22.04**，也能在 Cursor Cloud Agent Linux VM 和 GitHub CI Linux 上，把 CC Switch 的 WSL 远程控制路径跑通。
 
-产品里的 WSL 路径是：Windows 上的 CC Switch 通过 `wsl.exe -d <distro> -- bash …` 读写发行版里的 `~/.pi/agent/`（**禁止**走 `\\wsl.localhost` UNC）。云端和 CI 没有 `wsl.exe`，所以用现成的 `WslRunner` 特质把「发行版里的 bash」换成 **本机 bash 测试替身**（`LocalBashRunner`），再配一套假的 `~/.pi/agent` 夹具。
+产品里 **接管 / models.json 写入** 仍走 `wsl.exe -d <distro> -- bash …`。**会话与用量发现**改为与开源版 Claude 相同的 WSL 家目录：Windows 上是 `\\wsl.localhost\<发行版>\home\<linux 用户>\.pi\…`，不得再默认镜像到 `%USERPROFILE%\.cc-switch\pi-wsl-sessions`。云端和 CI 没有 9P 共享，所以夹具用同一套 POSIX `~/.pi/agent`（文档中的等价路径），`LocalBashRunner` 只覆盖仍走 bash 的写入/探测。
 
 ```text
 Windows 真机                         Linux 云 / CI 本 harness
@@ -39,7 +39,7 @@ cwd 编码与 Pi 一致：`/home/tfdx8045/code/agent` → `--home-tfdx8045-code-
 
 通过 `pi_runtime` 公共 API，**假装目标是 WSL**：
 
-1. **嵌套会话发现**：probe 的 `sessionCount` 与 session sync 的 manifest **共用** `SESSION_JSONL_MAXDEPTH`（当前 8），而不是 `sessions/*.jsonl` 扁平 glob。cwd 组、`tasks/*.jsonl`、以及旧 maxdepth 4 会丢掉的 `tasks/group/*.jsonl` 都会被镜像。
+1. **嵌套会话发现**：会话列表与用量直接走 WSL 家目录（Linux 夹具即 POSIX `~/.pi/agent/sessions`）。probe 的 `sessionCount` 与发现深度 **共用** `SESSION_JSONL_MAXDEPTH`（当前 8）。cwd 组、`tasks/*.jsonl`、以及旧 maxdepth 4 会丢掉的 `tasks/group/*.jsonl` 都必须被看到，且 **不得** 写入 `pi-wsl-sessions`。
 2. **逐行解析 JSONL**：抽出 `message.usage`；`cost.total == 0` 时按 `models.json` 单价计费；requested ≠ served 时按 served 模型计价。
 3. **双写 / 同步**（默认 `cargo test` 路径，不藏在 feature flag 后）：`read` 时 heal（identical / diverge / only-agent）；`sync_live_providers` 投影与 restore：only-agent 会补写顶层镜像，diverge 会覆盖 stale top。
 4. **cwd 编解码**：`--…--` 与 `/home/tfdx8045/code/agent` 往返；并断言带连字符路径不可往返。生产 `project_dir` 来自 JSONL `cwd`。
@@ -57,7 +57,7 @@ Rust：`src-tauri/src/pi_runtime/wsl_linux_harness.rs`（`cargo test --lib wsl_l
 | 真网卡上的 NAT vs 镜像网络、改写发行版 `resolv.conf`                 | 需要真 WSL 网卡；候选顺序与探测结果由 canned runner 覆盖 |
 | 登录壳 `~/.bashrc` / nvm 把 `pi` 放进 PATH                           | 替身去掉了 `PI_CODING_AGENT_DIR`，但不会跑用户的 profile |
 | 设置页「Pi 接管」开关、托盘、会话列表 GUI                            | 无 Windows GUI；前端有 `PiRuntimeSettings` 等组件测试    |
-| UNC `\\wsl.localhost\…` 写盘                                         | 产品禁止这条路径；Windows CI 另有原子写契约              |
+| 真机 `\\wsl.localhost\…` 9P 读盘                                     | Linux 云没有 9P；夹具用 POSIX 等价路径，UNC 字符串有单元测试 |
 | 用户本机 `machineId`、真实 Ubuntu-22.04 家目录                       | 约束：不得访问                                           |
 
 真机验收（Windows MSI）仍按产品清单：打开 Pi 接管后两份 `models.json` 都变成 `/pi/<id>`；关掉后都恢复上游 URL。

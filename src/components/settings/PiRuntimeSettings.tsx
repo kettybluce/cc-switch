@@ -20,11 +20,12 @@ import {
 import { Label } from "@/components/ui/label";
 import { ToggleRow } from "@/components/ui/toggle-row";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
-import type {
-  PiFeatureFlags,
-  PiProxyHealth,
-  PiRuntimeKind,
-  WslPiProbe,
+import {
+  piWslUncHome,
+  type PiFeatureFlags,
+  type PiProxyHealth,
+  type PiRuntimeKind,
+  type WslPiProbe,
 } from "@/lib/api/pi";
 import {
   usePiProxyPlan,
@@ -270,6 +271,11 @@ function WslRuntimeDetails({ probe, syncing, onSync }: WslRuntimeDetailsProps) {
           label={t("settings.piRuntime.agentDir")}
           value={probe.agentDir}
           ok={probe.hasModels}
+        />
+        <DetailRow
+          label={t("settings.piRuntime.uncHome")}
+          value={piWslUncHome(probe.distro, probe.home)}
+          ok
         />
         <DetailRow
           label={t("settings.piRuntime.sessions")}

@@ -629,7 +629,12 @@ impl AppSettings {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        self.pi_config_dir = crate::wsl_cli::reject_unc_override(self.pi_config_dir.as_deref());
+        self.pi_config_dir = self
+            .pi_config_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         self.language = self
             .language
@@ -975,18 +980,10 @@ pub fn get_hermes_override_dir() -> Option<PathBuf> {
 
 pub fn get_pi_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
-    let path = settings
+    settings
         .pi_config_dir
         .as_ref()
-        .map(|path| resolve_override_path(path))?;
-    if crate::wsl_cli::is_wsl_unc_path(&path) {
-        log::warn!(
-            "[WslCli] skipping UNC Pi override {}; use Settings → Pi runtime",
-            path.display()
-        );
-        return None;
-    }
-    Some(path)
+        .map(|path| resolve_override_path(path))
 }
 
 /// Device-level Pi runtime selection.
@@ -1268,14 +1265,18 @@ mod tests {
     }
 
     #[test]
-    fn normalize_paths_drops_wsl_unc_overrides() {
+    fn normalize_paths_drops_claude_codex_unc_but_keeps_pi() {
         let mut settings = AppSettings::default();
         settings.claude_config_dir = Some(r"\\wsl.localhost\Ubuntu\home\u\.claude".to_string());
         settings.codex_config_dir = Some(r"\\wsl$\Ubuntu\home\u\.codex".to_string());
-        settings.pi_config_dir = Some("//wsl.localhost/Ubuntu/home/u/.pi".to_string());
+        settings.pi_config_dir =
+            Some(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi".to_string());
         settings.normalize_paths();
         assert_eq!(settings.claude_config_dir, None);
         assert_eq!(settings.codex_config_dir, None);
-        assert_eq!(settings.pi_config_dir, None);
+        assert_eq!(
+            settings.pi_config_dir.as_deref(),
+            Some(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi")
+        );
     }
 }

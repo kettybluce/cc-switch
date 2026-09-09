@@ -46,6 +46,12 @@ export interface PiCapabilities {
   duration: boolean;
 }
 
+/** Windows UNC for a Linux home, matching open-source Claude config dirs. */
+export function piWslUncHome(distro: string, linuxHome: string): string {
+  const rest = linuxHome.replace(/\//g, "\\").replace(/^\\+/, "");
+  return `\\\\wsl.localhost\\${distro}\\${rest}\\.pi`;
+}
+
 export interface WslPiProbe {
   distro: string;
   home: string;

@@ -66,11 +66,17 @@ export function isWslUncPath(value: string): boolean {
   );
 }
 
-const sanitizeDir = (value?: string | null): string | undefined => {
+const allowsWslUnc = (key?: DirectoryKey | DirectoryAppId): boolean =>
+  key === "pi";
+
+const sanitizeDir = (
+  value?: string | null,
+  key?: DirectoryKey | DirectoryAppId,
+): string | undefined => {
   if (!value) return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  if (isWslUncPath(trimmed)) return undefined;
+  if (isWslUncPath(trimmed) && !allowsWslUnc(key)) return undefined;
   return trimmed;
 };
 
@@ -266,10 +272,10 @@ export function useDirectorySettings({
 
   const updateDirectoryState = useCallback(
     (key: DirectoryKey, value?: string) => {
-      if (value && isWslUncPath(value)) {
+      if (value && isWslUncPath(value) && !allowsWslUnc(key)) {
         toast.error(t("settings.wslUncRejected"));
       }
-      const sanitized = sanitizeDir(value);
+      const sanitized = sanitizeDir(value, key);
       if (key === "appConfig") {
         setAppConfigDir(sanitized);
       } else {
@@ -312,11 +318,11 @@ export function useDirectorySettings({
 
       try {
         const picked = await settingsApi.selectConfigDirectory(currentValue);
-        if (picked && isWslUncPath(picked)) {
+        if (picked && isWslUncPath(picked) && !allowsWslUnc(app)) {
           toast.error(t("settings.wslUncRejected"));
           return;
         }
-        const sanitized = sanitizeDir(picked ?? undefined);
+        const sanitized = sanitizeDir(picked ?? undefined, app);
         if (!sanitized) return;
         updateDirectoryState(key, sanitized);
       } catch (error) {

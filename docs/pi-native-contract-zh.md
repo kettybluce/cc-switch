@@ -27,9 +27,17 @@ Pi 可能装在 CC Switch 所在的机器上，也可能装在 WSL2 发行版里
 
 `piConfigDir` 是 Pi **主目录**（默认 `~/.pi`，与 `~/.claude` 同形）。Pi 实际读取的文件在下一层：`{piConfigDir}/agent/models.json`、`agent/settings.json`、`agent/sessions/`。`PI_CODING_AGENT_DIR` 指向的是 agent 目录本身。若顶层 `{piConfigDir}/models.json` 存在，写入时与 agent 文件保持同步，不得分叉。
 
-WSL 运行时通过 `wsl.exe` 访问，不走 `\\wsl.localhost`：UNC 访问 WSL9p 共享很慢，且发行版停止时直接失败。脚本是代码里的常量，发行版名、路径和会话 ID 一律作为位置参数传入。
+`models.json` 等接管写入仍走 `wsl.exe`（本地代理可保留）。**会话列表与用量扫描**则与开源版 Claude 的配置目录一致：在 Windows 上读
 
-会话先按 `size`/`mtime` 清单增量镜像到本地缓存，再交给既有的本机扫描、解析和用量导入流程。缓存只是传输细节，不构成第二套会话格式；恢复和删除作用于发行版内的原始会话，而不是镜像副本。
+`\\wsl.localhost\<发行版>\home\<linux 用户>\.pi\agent\sessions`
+
+不再默认镜像到 `%USERPROFILE%\.cc-switch\pi-wsl-sessions`，恢复命令也不得指向 `\\?\C:\Users\…`。Linux 夹具用同一套 POSIX 路径作为等价物。
+
+### 残留风险（诚实说明）
+
+- **`wsl.localhost` 会唤醒发行版**：9P 访问可能慢，发行版停止时列表/用量会失败（界面应显示不可用，而不是在 C: 建空目录）。
+- **VHD 仍可能在 C:**：逻辑数据在 WSL 家目录（`~/.pi`），但发行版虚拟磁盘通常仍落在 Windows 用户目录下的 `ext4.vhdx`。UNC 只避免把会话 JSONL 再复制一份到 `%USERPROFILE%\.cc-switch\`，并不能把 VHD 搬离 C:。
+- **不要用 Windows 用户名 / machineId 当默认路径**：发行版名与 Linux 用户来自探测或用户填写，不得写死本机 Windows 账号。
 
 ### 供应商
 

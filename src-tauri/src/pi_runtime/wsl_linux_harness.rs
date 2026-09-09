@@ -5,10 +5,11 @@
 //! rest of `pi_runtime`) and a fake `~/.pi/agent` tree from
 //! `tests/fixtures/pi-wsl/`.
 //!
-//! Covered here: nested session discovery through the runner `find` (not a
-//! flat glob), JSONL usage with `cost: 0` priced from `models.json` (including
-//! requested ≠ served), dual `models.json` heal/project/restore, cwd `--…--`
-//! encode/decode (test-only), and the default
+//! Covered here: nested session discovery from the WSL-home tree (POSIX
+//! equivalent of `\\wsl.localhost\…\.pi\agent\sessions`, not
+//! `pi-wsl-sessions`), JSONL usage with `cost: 0` priced from `models.json`
+//! (including requested ≠ served), dual `models.json` heal/project/restore,
+//! cwd `--…--` encode/decode (test-only), and the default
 //! [`super::mirrored_topology::USER_MIRRORED`] host matrix (mirrored +
 //! firewall + dnsTunneling, not generic NAT).
 
@@ -245,40 +246,43 @@ fn runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses()
     );
     assert!(sessions_root.join(CWD_GROUP).is_dir());
 
-    let outcome = sessions::sync(&harness.target).expect("mirror via runner find");
+    let outcome = sessions::sync(&harness.target).expect("count WSL-home sessions");
     assert!(
         outcome.errors.is_empty(),
-        "session sync errors: {:?}",
+        "session refresh errors: {:?}",
         outcome.errors
     );
     assert_eq!(
-        outcome.fetched, EXPECTED_JSONL,
+        outcome.fetched, 0,
+        "must not copy JSONL into pi-wsl-sessions"
+    );
+    assert_eq!(
+        outcome.total, EXPECTED_JSONL,
         "parent, mapped, tasks/*.jsonl, and tasks/group/*.jsonl (depth 5 > old maxdepth 4)"
     );
-    assert_eq!(outcome.total, EXPECTED_JSONL);
+    assert!(
+        !sessions::cache_root(DISTRO).exists(),
+        "must not create %USERPROFILE%/.cc-switch/pi-wsl-sessions"
+    );
 
-    let mirrored = sessions::cache_root(DISTRO)
-        .join("sessions")
-        .join(CWD_GROUP);
+    let live = sessions_root.join(CWD_GROUP);
     assert!(
-        mirrored.join("2026-03-14T10-32-00_abc.jsonl").is_file(),
-        "parent session should be mirrored under the encoded cwd group"
+        live.join("2026-03-14T10-32-00_abc.jsonl").is_file(),
+        "parent session stays in the WSL home"
     );
     assert!(
-        mirrored
-            .join("2026-03-14T10-32-00_abc/tasks/task-1.jsonl")
+        live.join("2026-03-14T10-32-00_abc/tasks/task-1.jsonl")
             .is_file(),
-        "task session should be mirrored at depth 4"
+        "task session stays at depth 4 in the WSL home"
     );
     assert!(
-        mirrored
-            .join("2026-03-14T10-32-00_abc/tasks/group/deep-task.jsonl")
+        live.join("2026-03-14T10-32-00_abc/tasks/group/deep-task.jsonl")
             .is_file(),
         "depth-5 tasks/group JSONL must not be dropped by the old maxdepth 4"
     );
     assert!(
-        mirrored.join("2026-03-14T11-00-00_map.jsonl").is_file(),
-        "cwd-group mapped-model JSONL should be mirrored"
+        live.join("2026-03-14T11-00-00_map.jsonl").is_file(),
+        "cwd-group mapped-model JSONL stays in the WSL home"
     );
 
     let discovered = scan_sessions();
@@ -296,6 +300,13 @@ fn runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses()
             .iter()
             .all(|session| session.project_dir.as_deref() == Some(CWD)),
         "project_dir must come from the JSONL cwd header, not decode_session_cwd"
+    );
+    assert!(
+        discovered.iter().all(|session| {
+            let source = session.source_path.as_deref().unwrap_or("");
+            !source.contains("pi-wsl-sessions") && !source.contains(r"\\?\C:")
+        }),
+        "session files must be the WSL-home JSONL, not a C: mirror"
     );
 }
 
@@ -319,7 +330,7 @@ fn jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json() {
     sessions::invalidate_sync_throttle();
 
     let db = Database::memory().expect("memory db");
-    let result = sync_pi_usage(&db).expect("import usage from mirrored sessions");
+    let result = sync_pi_usage(&db).expect("import usage from WSL-home sessions");
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(
         result.imported, EXPECTED_JSONL as u32,
@@ -681,13 +692,17 @@ fn session_refresh_does_not_depend_on_proxy_probe() {
     assert!(!health.reachable, "fixture is a failed probe");
 
     sessions::invalidate_sync_throttle();
-    let outcome = sessions::sync(&harness.target).expect("session sync via wsl.exe");
+    let outcome = sessions::sync(&harness.target).expect("session refresh from WSL home");
     assert!(
         outcome.errors.is_empty(),
         "session refresh must not gate on proxy reachability: {:?}",
         outcome.errors
     );
     assert_eq!(outcome.total, EXPECTED_JSONL);
+    assert!(
+        !sessions::cache_root(DISTRO).exists(),
+        "refresh must not create a C: session mirror"
+    );
 }
 
 #[test]

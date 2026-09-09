@@ -137,6 +137,11 @@ describe("PiRuntimeSettings", () => {
     expect(screen.getByText("0.4.1")).toBeInTheDocument();
     expect(screen.getByText(probe.agentDir)).toBeInTheDocument();
     expect(
+      screen.getByText(
+        "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.pi",
+      ),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText("settings.piRuntime.sessionCount:137"),
     ).toBeInTheDocument();
     expect(

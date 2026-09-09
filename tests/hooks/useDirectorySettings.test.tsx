@@ -268,7 +268,7 @@ describe("useDirectorySettings", () => {
     expect(result.current.resolvedDirs.openclaw).toBe("/server/openclaw");
   });
 
-  it("rejects WSL UNC overrides instead of storing them", async () => {
+  it("rejects WSL UNC overrides for Claude instead of storing them", async () => {
     const { result } = renderHook(() =>
       useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
     );
@@ -285,5 +285,23 @@ describe("useDirectorySettings", () => {
     expect(onUpdateSettings).toHaveBeenCalledWith({
       claudeConfigDir: undefined,
     });
+  });
+
+  it("keeps a Pi WSL UNC home like Claude's open-source config path", async () => {
+    const { result } = renderHook(() =>
+      useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const unc = "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.pi";
+    act(() => {
+      result.current.updateDirectory("pi", unc);
+    });
+
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      piConfigDir: unc,
+    });
+    expect(result.current.resolvedDirs.pi).toBe(unc);
   });
 });
