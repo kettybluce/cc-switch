@@ -1083,6 +1083,22 @@ fn enable_pi_provider_on_user_topology_survives_dropped_argv() {
         !agent.contains("/bin/bash: line 1: '': No such file or directory"),
         "must never invoke empty bash"
     );
+
+    let models_path = crate::pi_config::get_pi_models_path().expect("live models path");
+    assert_eq!(
+        models_path,
+        harness.agent_models(),
+        "CC Switch config UI must point at the WSL-home models.json Pi reads"
+    );
+    assert_eq!(
+        crate::pi_config::get_pi_config_dir().expect("Pi home"),
+        harness.pi_home()
+    );
+    assert!(
+        !models_path.to_string_lossy().contains("pi-wsl-sessions"),
+        "enable/open-folder must not use the C: session mirror: {}",
+        models_path.display()
+    );
 }
 
 #[test]

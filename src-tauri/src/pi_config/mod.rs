@@ -57,6 +57,13 @@ pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
         return require_absolute(path, "Pi settings override");
     }
 
+    // WSL runtime: live files are the distribution `~/.pi/agent`
+    // (`\\wsl.localhost\…` on Windows). Do not open or create the Windows
+    // profile `~\.pi` — that is a different Pi install.
+    if let Some(path) = wsl_runtime_agent_dir() {
+        return require_absolute(path, "Pi WSL agent directory");
+    }
+
     if let Some(path) = crate::settings::get_pi_override_dir() {
         let home = require_absolute(path, "Pi settings override")?;
         return Ok(agent_dir_from_pi_home(&home));
@@ -70,6 +77,17 @@ pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
     }
 
     Ok(get_home_dir().join(".pi").join("agent"))
+}
+
+fn wsl_runtime_agent_dir() -> Option<PathBuf> {
+    match crate::pi_runtime::target() {
+        crate::pi_runtime::PiRuntimeTarget::Wsl {
+            distro,
+            home,
+            agent_dir,
+        } => Some(crate::wsl_cli::wsl_fs_path(&distro, &home, &agent_dir)),
+        crate::pi_runtime::PiRuntimeTarget::Local => None,
+    }
 }
 
 fn require_absolute(path: PathBuf, source: &str) -> Result<PathBuf, AppError> {
@@ -539,6 +557,45 @@ mod tests {
             .expect("a built-in provider key may be explicitly configured");
         assert!(validate_provider_node("", &json!({})).is_err());
         assert!(validate_provider_node("anthropic", &json!("invalid")).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn wsl_runtime_config_dir_is_the_distro_home_not_the_windows_profile() {
+        let wsl_home = tempfile::tempdir().expect("WSL home");
+        let cc_home = tempfile::tempdir().expect("CC Switch profile");
+        struct HomeGuard(Option<String>);
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                    None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+                }
+            }
+        }
+        let _home = HomeGuard(std::env::var("CC_SWITCH_TEST_HOME").ok());
+        std::env::set_var("CC_SWITCH_TEST_HOME", cc_home.path());
+        let _target = crate::pi_runtime::test_support::TestTarget::wsl(
+            "Ubuntu-22.04",
+            &wsl_home.path().to_string_lossy(),
+        );
+
+        let agent = get_pi_agent_dir().expect("WSL agent dir");
+        let home = get_pi_config_dir().expect("WSL Pi home");
+        let models = get_pi_models_path().expect("WSL models.json");
+        assert_eq!(agent, wsl_home.path().join(".pi/agent"));
+        assert_eq!(home, wsl_home.path().join(".pi"));
+        assert_eq!(models, wsl_home.path().join(".pi/agent/models.json"));
+        assert!(
+            !agent.starts_with(cc_home.path()),
+            "must not resolve to the Windows/CC Switch profile: {}",
+            agent.display()
+        );
+        assert!(
+            !agent.to_string_lossy().contains("pi-wsl-sessions"),
+            "must not resolve to the old C: session mirror: {}",
+            agent.display()
+        );
     }
 
     #[test]
