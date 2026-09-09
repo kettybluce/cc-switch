@@ -162,7 +162,7 @@ describe("ProviderList Component", () => {
     );
 
     const placeholders = container.querySelectorAll(
-      ".border-dashed.border-border\\/70",
+      ".border-dashed.border-muted-foreground\\/40",
     );
     expect(placeholders).toHaveLength(3);
   });

@@ -36,11 +36,11 @@ export function ProviderStatsTable({
   );
 
   if (isLoading) {
-    return <div className="h-[400px] animate-pulse rounded-xl bg-muted/50" />;
+    return <div className="h-[400px] animate-pulse rounded bg-gray-100" />;
   }
 
   return (
-    <div className="surface-table">
+    <div className="rounded-lg border border-border/50 bg-card/40 backdrop-blur-sm overflow-hidden">
       <Table>
         <TableHeader>
           <TableRow>
@@ -67,7 +67,7 @@ export function ProviderStatsTable({
             <TableRow>
               <TableCell
                 colSpan={6}
-                className="py-12 text-center text-muted-foreground"
+                className="text-center text-muted-foreground"
               >
                 {t("usage.noData", "暂无数据")}
               </TableCell>

@@ -110,7 +110,7 @@ export function RequestLogTable({
 
   return (
     <div className="space-y-4">
-      <div className="surface-card p-2.5">
+      <div className="rounded-lg border bg-card/50 p-2 backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Status code */}
           <Select
@@ -147,10 +147,10 @@ export function RequestLogTable({
       </div>
 
       {isLoading ? (
-        <div className="h-[400px] animate-pulse rounded-xl bg-muted/50" />
+        <div className="h-[400px] animate-pulse rounded bg-gray-100" />
       ) : (
         <>
-          <div className="surface-table overflow-x-auto">
+          <div className="rounded-lg border border-border/50 bg-card/40 backdrop-blur-sm overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -188,7 +188,7 @@ export function RequestLogTable({
                   <TableRow>
                     <TableCell
                       colSpan={9}
-                      className="py-12 text-center text-muted-foreground"
+                      className="text-center text-muted-foreground"
                     >
                       {t("usage.noData")}
                     </TableCell>
