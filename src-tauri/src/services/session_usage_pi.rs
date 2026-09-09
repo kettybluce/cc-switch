@@ -854,8 +854,8 @@ fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Resu
             cache_read_cost.to_string(),
             cache_write_cost.to_string(),
             total_cost.to_string(),
-            0i64,
-            Option::<i64>::None,
+            0i64, // latency_ms: 会话日志无此数据（JSONL 无 latency/TTFT；SCHEMA 18 NOT NULL）
+            Option::<i64>::None, // first_token_ms
             record.status_code,
             record.error_message,
             record.session_id,
@@ -997,6 +997,16 @@ mod tests {
                 Decimal::from_str(&assistant.6).expect("reported total"),
                 Decimal::from_str("0.0000255").expect("expected total")
             );
+
+            let timing: (i64, Option<i64>) = conn.query_row(
+                "SELECT latency_ms, first_token_ms FROM proxy_request_logs
+                 WHERE provider_id = 'custom-pi' AND status_code = 200",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            // JSONL timestamps must not be used as latency/TTFT. SCHEMA 18
+            // latency_ms is NOT NULL, so unknown is stored as 0 (UI shows —).
+            assert_eq!(timing, (0, None));
 
             let empty_failure: (i64, i64, String) = conn.query_row(
                 "SELECT status_code, input_tokens, error_message

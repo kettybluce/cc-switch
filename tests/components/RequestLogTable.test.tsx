@@ -158,4 +158,53 @@ describe("RequestLogTable", () => {
       );
     });
   });
+
+  it("shows an em dash instead of 0.0s for Pi session rows without timing", () => {
+    useRequestLogsMock.mockImplementation(() => ({
+      data: {
+        data: [
+          {
+            requestId: "pi-1",
+            providerId: "_pi_session",
+            providerName: "Pi (Session)",
+            appType: "pi",
+            model: "fixture-model",
+            costMultiplier: "1.0",
+            inputTokens: 10,
+            outputTokens: 2,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            inputCostUsd: "0",
+            outputCostUsd: "0",
+            cacheReadCostUsd: "0",
+            cacheCreationCostUsd: "0",
+            totalCostUsd: "0.01",
+            isStreaming: true,
+            latencyMs: 0,
+            firstTokenMs: undefined,
+            statusCode: 200,
+            createdAt: 1_700_000_000,
+            dataSource: "pi_session",
+          },
+        ],
+        total: 1,
+        page: 0,
+        pageSize: 20,
+      },
+      isLoading: false,
+    }));
+
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        appType="pi"
+        refreshIntervalMs={0}
+      />,
+    );
+
+    expect(screen.queryByText("0.0s")).not.toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getByText("pi_session")).toBeInTheDocument();
+  });
 });

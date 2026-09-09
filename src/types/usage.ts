@@ -36,6 +36,15 @@ export interface RequestLog {
   dataSource?: string;
 }
 
+/**
+ * Session JSONL imports (Claude `session_log`, `pi_session`, `codex_session`, …).
+ * Official session files typically carry tokens/cost but no latency/TTFT.
+ */
+export function isSessionUsageSource(dataSource?: string | null): boolean {
+  if (!dataSource) return false;
+  return dataSource === "session_log" || dataSource.endsWith("_session");
+}
+
 export interface SessionSyncResult {
   imported: number;
   skipped: number;

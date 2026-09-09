@@ -1,4 +1,8 @@
-import { appHasUsageDashboard, getCacheWriteAvailability } from "@/types/usage";
+import {
+  appHasUsageDashboard,
+  getCacheWriteAvailability,
+  isSessionUsageSource,
+} from "@/types/usage";
 
 describe("getCacheWriteAvailability", () => {
   it("distinguishes cache-write support across fixed protocols", () => {
@@ -15,6 +19,16 @@ describe("appHasUsageDashboard", () => {
     expect(appHasUsageDashboard("pi")).toBe(true);
     expect(appHasUsageDashboard("claude")).toBe(true);
     expect(appHasUsageDashboard("openclaw")).toBe(false);
+  });
+});
+
+describe("isSessionUsageSource", () => {
+  it("recognizes Claude session_log and * _session importers", () => {
+    expect(isSessionUsageSource("pi_session")).toBe(true);
+    expect(isSessionUsageSource("session_log")).toBe(true);
+    expect(isSessionUsageSource("codex_session")).toBe(true);
+    expect(isSessionUsageSource("proxy")).toBe(false);
+    expect(isSessionUsageSource(undefined)).toBe(false);
   });
 });
 
