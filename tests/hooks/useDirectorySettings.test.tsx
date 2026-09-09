@@ -268,7 +268,7 @@ describe("useDirectorySettings", () => {
     expect(result.current.resolvedDirs.openclaw).toBe("/server/openclaw");
   });
 
-  it("rejects WSL UNC overrides instead of storing them", async () => {
+  it("stores WSL UNC overrides like upstream CC Switch", async () => {
     const { result } = renderHook(() =>
       useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
     );
@@ -277,13 +277,16 @@ describe("useDirectorySettings", () => {
     act(() => {
       result.current.updateDirectory(
         "claude",
-        "\\\\wsl.localhost\\Ubuntu\\home\\chen\\.claude",
+        "  \\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.claude  ",
       );
     });
 
-    expect(toastErrorMock).toHaveBeenCalledWith("settings.wslUncRejected");
+    expect(toastErrorMock).not.toHaveBeenCalled();
     expect(onUpdateSettings).toHaveBeenCalledWith({
-      claudeConfigDir: undefined,
+      claudeConfigDir: "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.claude",
     });
+    expect(result.current.resolvedDirs.claude).toBe(
+      "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.claude",
+    );
   });
 });

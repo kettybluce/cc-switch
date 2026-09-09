@@ -673,17 +673,7 @@ struct CodexFileSyncResult {
 
 /// 同步 Codex 使用数据（从 JSONL 会话日志）
 pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
-    let Some(codex_dir) = crate::wsl_cli::codex_usage_dir() else {
-        log::info!("[CODEX-SYNC] skipping Codex usage scan: WSL UNC path is not walked");
-        return Ok(SessionSyncResult {
-            imported: 0,
-            skipped: 0,
-            files_scanned: 0,
-            suspected_duplicates: 0,
-            deferred_files: 0,
-            errors: vec![],
-        });
-    };
+    let codex_dir = crate::wsl_cli::codex_usage_dir();
     let files = collect_codex_session_files(&codex_dir);
     let rollout_index = build_rollout_index(&files);
     let mut pass = CodexSyncPass::load(db)?;

@@ -824,8 +824,8 @@
       "proxyStartFirst": "Please start the local proxy first"
     },
     "cliRuntime": {
-      "sharedRuntime": "Claude, Codex, and Pi share one WSL distribution and are reached only through wsl.exe.",
-      "uncBan": "Do not use \\\\wsl.localhost or \\\\wsl$ — UNC wakes WSL and can pin a CPU core.",
+      "sharedRuntime": "Claude, Codex, and Pi share one WSL distribution and one local proxy.",
+      "wslHome": "Config, sessions, and usage are read in place from the distribution home (\\\\wsl.localhost\\<distro>\\home\\<user>\\.claude / .codex / .pi). Nothing is mirrored to C:\\Users. Writes go through wsl.exe.",
       "noDistros": "No WSL distribution available",
       "claude": {
         "title": "Claude runtime",
@@ -833,7 +833,7 @@
         "location": "Claude location",
         "settingsPath": "settings.json",
         "takeover": "Claude takeover",
-        "takeoverDescription": "Enabling starts the local proxy and rewrites Claude settings through it. Disabling restores the real upstream. Uses wsl.exe, never UNC."
+        "takeoverDescription": "Enabling starts the local proxy and rewrites ANTHROPIC_BASE_URL in the WSL ~/.claude/settings.json through it. Disabling restores the real upstream."
       },
       "codex": {
         "title": "Codex runtime",
@@ -842,12 +842,11 @@
         "settingsPath": "config.toml",
         "authPath": "auth.json",
         "takeover": "Codex takeover",
-        "takeoverDescription": "Enabling starts the local proxy and rewrites Codex settings through it. Disabling restores the real upstream. Uses wsl.exe, never UNC."
+        "takeoverDescription": "Enabling starts the local proxy and rewrites base_url in the WSL ~/.codex/config.toml through it. Disabling restores the real upstream."
       }
     },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
-    "configDirectoryDescription": "Override local Windows/macOS/Linux homes only. For Claude, Codex, or Pi inside WSL, use Settings → General runtime sections (wsl.exe). Do not point these fields at \\\\wsl.localhost or \\\\wsl$ — UNC wakes WSL and can pin a CPU core.",
-    "wslUncRejected": "WSL UNC paths (\\\\wsl.localhost / \\\\wsl$) are not allowed. Select a distribution under Settings → General so Claude, Codex, and Pi are reached through wsl.exe.",
+    "configDirectoryDescription": "Override where each CLI keeps its files. For Claude, Codex, or Pi inside WSL, prefer Settings → General runtime sections (the WSL home is used automatically); a \\\\wsl.localhost\\<distro>\\home\\<user>\\.claude style path is also accepted, as in upstream CC Switch.",
     "appConfigDir": "CC Switch Configuration Directory",
     "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
     "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",
@@ -866,7 +865,7 @@
     "hermesConfigDir": "Hermes Configuration Directory",
     "hermesConfigDirDescription": "Override Hermes configuration directory (config.yaml).",
     "piConfigDir": "Pi Configuration Directory",
-    "piConfigDirDescription": "Override the local Pi home (default ~/.pi). Live files Pi reads are under agent/ (models.json, settings.json, sessions). For Pi inside WSL, use Settings → Pi runtime — do not point this at \\\\wsl.localhost.",
+    "piConfigDirDescription": "Override the Pi home (default ~/.pi). Live files Pi reads are under agent/ (models.json, settings.json, sessions). For Pi inside WSL, prefer Settings → Pi runtime; a \\\\wsl.localhost\\<distro>\\home\\<user>\\.pi path is also accepted.",
     "browsePlaceholderClaude": "e.g., /home/<your-username>/.claude",
     "browsePlaceholderCodex": "e.g., /home/<your-username>/.codex",
     "browsePlaceholderGemini": "e.g., /home/<your-username>/.gemini",

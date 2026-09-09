@@ -1033,6 +1033,7 @@ impl WslRunner for PanicOnWslRunner {
 }
 
 #[test]
+#[serial]
 fn plan_ui_snapshot_never_invokes_wsl_runner() {
     let _runner = RunnerGuard::install(Arc::new(PanicOnWslRunner));
     let wsl = PiRuntimeTarget::Wsl {
@@ -1130,12 +1131,373 @@ transport_kind = "responses_http"
 }
 
 #[test]
-fn wsl_cli_rejects_unc_overrides_in_harness() {
+fn wsl_cli_recognises_upstream_unc_shapes() {
     assert!(crate::wsl_cli::is_wsl_unc_str(
         r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude"
     ));
-    assert!(
-        crate::wsl_cli::reject_unc_override(Some(r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.codex"))
-            .is_none()
+    assert!(crate::wsl_cli::is_wsl_unc_str(
+        r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.codex"
+    ));
+}
+
+/// Claude and Codex follow the Pi rule: sessions and usage are read from the
+/// WSL home in place (`\\wsl.localhost\…` on Windows, the harness `$HOME`
+/// here). Nothing is copied into `%USERPROFILE%\.cc-switch\wsl-cli-sessions`.
+#[test]
+#[serial]
+fn claude_and_codex_sessions_and_usage_walk_wsl_home_without_c_mirror() {
+    let harness = WslHarness::install("identical");
+
+    let claude_project = harness
+        .wsl_home
+        .join(".claude/projects/-home-tfdx8045-code-agent");
+    fs::create_dir_all(&claude_project).expect("claude project dir");
+    let claude_lines = [
+        json!({
+            "type": "user",
+            "sessionId": "0b0d7c8e-1111-4e6a-9d2f-2c2c2c2c2c2c",
+            "cwd": CWD,
+            "timestamp": "2026-09-09T03:33:56.122Z",
+            "message": { "role": "user", "content": "帮我看下 WSL 里的会话" }
+        }),
+        json!({
+            "type": "assistant",
+            "sessionId": "0b0d7c8e-1111-4e6a-9d2f-2c2c2c2c2c2c",
+            "timestamp": "2026-09-09T03:34:01.000Z",
+            "message": {
+                "id": "msg_wsl_claude_1",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "stop_reason": "end_turn",
+                "content": [{ "type": "text", "text": "会话在 ~/.claude/projects 里。" }],
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 40,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0
+                }
+            }
+        }),
+    ];
+    fs::write(
+        claude_project.join("0b0d7c8e-1111-4e6a-9d2f-2c2c2c2c2c2c.jsonl"),
+        claude_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .expect("claude jsonl");
+
+    let codex_day = harness.wsl_home.join(".codex/sessions/2026/09/09");
+    fs::create_dir_all(&codex_day).expect("codex day dir");
+    let codex_lines = [
+        json!({
+            "timestamp": "2026-09-09T03:40:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "019c0000-aaaa-4bbb-8ccc-0d0d0d0d0d0d",
+                "cwd": CWD,
+                "source": "cli"
+            }
+        }),
+        json!({
+            "timestamp": "2026-09-09T03:40:01Z",
+            "type": "turn_context",
+            "payload": { "model": "gpt-5.6-sol" }
+        }),
+        json!({
+            "timestamp": "2026-09-09T03:40:02Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "列出 WSL 里的 Codex 会话" }]
+            }
+        }),
+        json!({
+            "timestamp": "2026-09-09T03:40:03Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": { "total_token_usage": {
+                    "input_tokens": 300,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 50,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 350
+                }}
+            }
+        }),
+    ];
+    fs::write(
+        codex_day.join("rollout-2026-09-09T03-40-00-019c0000-aaaa-4bbb-8ccc-0d0d0d0d0d0d.jsonl"),
+        codex_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .expect("codex jsonl");
+
+    // Config dirs resolve into the WSL home, not %USERPROFILE%.
+    assert_eq!(
+        crate::config::get_claude_config_dir(),
+        harness.wsl_home.join(".claude")
     );
+    assert_eq!(
+        crate::codex_config::get_codex_config_dir(),
+        harness.wsl_home.join(".codex")
+    );
+    assert_eq!(
+        crate::wsl_cli::claude_projects_dir(),
+        harness.wsl_home.join(".claude/projects")
+    );
+    assert!(crate::wsl_cli::codex_session_roots()
+        .iter()
+        .all(|root| root.starts_with(&harness.wsl_home)));
+
+    let claude_sessions = crate::session_manager::providers::claude::scan_sessions();
+    assert_eq!(
+        claude_sessions.len(),
+        1,
+        "Claude session list must walk the WSL home: {claude_sessions:?}"
+    );
+    let wsl_home_str = harness.wsl_home.to_string_lossy().into_owned();
+    assert!(claude_sessions[0]
+        .source_path
+        .as_deref()
+        .is_some_and(|path| path.starts_with(&wsl_home_str)));
+
+    let codex_sessions = crate::session_manager::providers::codex::scan_sessions();
+    assert_eq!(
+        codex_sessions.len(),
+        1,
+        "Codex session list must walk the WSL home: {codex_sessions:?}"
+    );
+    assert!(codex_sessions[0]
+        .source_path
+        .as_deref()
+        .is_some_and(|path| path.starts_with(&wsl_home_str)));
+
+    let db = Database::memory().expect("memory db");
+    let claude_usage =
+        crate::services::session_usage::sync_claude_session_logs(&db).expect("claude usage");
+    assert_eq!(claude_usage.files_scanned, 1);
+    assert_eq!(
+        claude_usage.imported, 1,
+        "Claude usage must import from the same WSL tree as the session list: {claude_usage:?}"
+    );
+    let codex_usage =
+        crate::services::session_usage_codex::sync_codex_usage(&db).expect("codex usage");
+    assert_eq!(codex_usage.files_scanned, 1);
+    assert_eq!(
+        codex_usage.imported, 1,
+        "Codex usage must import from the same WSL tree as the session list: {codex_usage:?}"
+    );
+
+    let cc_home = crate::config::get_app_config_dir();
+    assert!(
+        !cc_home.join("wsl-cli-sessions").exists(),
+        "Claude/Codex must not mirror sessions under .cc-switch/wsl-cli-sessions"
+    );
+    assert!(
+        !cc_home.join("pi-wsl-sessions").exists(),
+        "Pi must not mirror sessions under .cc-switch/pi-wsl-sessions"
+    );
+}
+
+/// All three clients project the running local proxy into their WSL live
+/// files on the user's mirrored topology: Claude `ANTHROPIC_BASE_URL`,
+/// Codex `[model_providers.*].base_url`, Pi `models.json` `baseUrl`.
+/// The origin comes from the real WSL probe (curl against the listener), so
+/// mirrored `127.0.0.1:<port>` wins and nothing points at `:0`.
+///
+/// Multi-thread runtime: the probe is a blocking `curl` through the bash
+/// runner, and the axum listener must keep accepting meanwhile (as it does
+/// under Tauri's runtime in production).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn claude_codex_pi_takeover_projects_local_proxy_into_wsl_home() {
+    let harness = WslHarness::install("identical");
+    crate::settings::reload_settings().expect("reload settings");
+
+    let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+    let mut proxy_config = state.db.get_proxy_config().await.expect("proxy config");
+    proxy_config.listen_port = 0;
+    state
+        .db
+        .update_proxy_config(proxy_config)
+        .await
+        .expect("ephemeral listen port");
+
+    // Claude: live settings + current provider.
+    let claude_live = json!({
+        "env": {
+            "ANTHROPIC_AUTH_TOKEN": "live-claude-key",
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+        }
+    });
+    assert!(crate::wsl_cli::write_claude_settings(&claude_live).expect("seed claude live"));
+    let claude_provider = Provider::with_id(
+        "claude-wsl".to_string(),
+        "Claude WSL".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "provider-claude-key",
+                "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+            }
+        }),
+        None,
+    );
+    state
+        .db
+        .save_provider("claude", &claude_provider)
+        .expect("save claude provider");
+    state
+        .db
+        .set_current_provider("claude", "claude-wsl")
+        .expect("current claude");
+    crate::settings::set_current_provider(&AppType::Claude, Some("claude-wsl"))
+        .expect("local current claude");
+
+    // Codex: live auth + config.toml + current provider.
+    let codex_config = r#"model_provider = "deepseek"
+model = "deepseek-v4-flash"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+wire_api = "responses"
+"#;
+    assert!(crate::wsl_cli::write_codex_live(
+        Some(&json!({ "OPENAI_API_KEY": "live-codex-key" })),
+        Some(codex_config),
+    )
+    .expect("seed codex live"));
+    let mut codex_provider = Provider::with_id(
+        "deepseek".to_string(),
+        "DeepSeek".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "provider-codex-key" },
+            "config": codex_config
+        }),
+        None,
+    );
+    codex_provider.category = Some("custom".to_string());
+    state
+        .db
+        .save_provider("codex", &codex_provider)
+        .expect("save codex provider");
+    state
+        .db
+        .set_current_provider("codex", "deepseek")
+        .expect("current codex");
+    crate::settings::set_current_provider(&AppType::Codex, Some("deepseek"))
+        .expect("local current codex");
+
+    // Pi: harness card already lives in models.json; store the DB card.
+    state
+        .db
+        .save_provider("pi", &harness_card())
+        .expect("save pi card");
+
+    // The listener must be reachable from "inside WSL" (real curl through the
+    // bash runner) before any client is projected onto it.
+    state
+        .proxy_service
+        .start()
+        .await
+        .expect("start local proxy");
+    let port = state
+        .proxy_service
+        .get_status()
+        .await
+        .expect("proxy status")
+        .port;
+    assert_ne!(port, 0);
+    let origin = format!("http://127.0.0.1:{port}");
+    let health = proxy::resolve_gateway(DISTRO, port).expect("probe from WSL");
+    assert!(
+        health.reachable,
+        "WSL probe must reach the local proxy on {origin}: {health:?}"
+    );
+    assert_eq!(health.endpoint.as_deref(), Some(origin.as_str()));
+
+    for app in ["claude", "codex", "pi"] {
+        state
+            .proxy_service
+            .set_takeover_for_app(app, true)
+            .await
+            .unwrap_or_else(|error| panic!("enable {app} takeover on WSL: {error}"));
+    }
+    assert!(state.proxy_service.is_running().await);
+
+    let claude = read_text(&harness.wsl_home.join(".claude/settings.json"));
+    assert!(
+        claude.contains(&origin),
+        "Claude settings.json in WSL must point at the local proxy {origin}: {claude}"
+    );
+    assert!(claude.contains("PROXY_MANAGED"));
+
+    let codex_toml = read_text(&harness.wsl_home.join(".codex/config.toml"));
+    assert!(
+        codex_toml.contains(&format!("{origin}/v1")),
+        "Codex config.toml in WSL must point at the local proxy {origin}/v1: {codex_toml}"
+    );
+
+    let models = read_text(&harness.agent_models());
+    assert!(
+        models.contains(&format!("{origin}/pi/{PROVIDER_ID}")),
+        "Pi models.json in WSL must point at the local proxy {origin}: {models}"
+    );
+    assert_eq!(
+        models,
+        read_text(&harness.top_models()),
+        "top-level models.json mirror must follow"
+    );
+
+    let takeover = state
+        .proxy_service
+        .get_takeover_status()
+        .await
+        .expect("takeover status");
+    assert!(takeover.claude && takeover.codex && takeover.pi);
+
+    for app in ["claude", "codex", "pi"] {
+        state
+            .proxy_service
+            .set_takeover_for_app(app, false)
+            .await
+            .unwrap_or_else(|error| panic!("disable {app} takeover on WSL: {error}"));
+    }
+    let claude = read_text(&harness.wsl_home.join(".claude/settings.json"));
+    assert!(
+        !claude.contains(&origin),
+        "disabling Claude takeover must restore the upstream URL: {claude}"
+    );
+    let codex_toml = read_text(&harness.wsl_home.join(".codex/config.toml"));
+    assert!(codex_toml.contains("https://api.deepseek.com/v1"));
+    assert!(read_text(&harness.agent_models()).contains(UPSTREAM));
+    // Disabling the last takeover may already have stopped the listener.
+    if state.proxy_service.is_running().await {
+        state.proxy_service.stop().await.expect("stop proxy");
+    }
+}
+
+/// `build_proxy_urls` rewrites the Windows loopback origin for WSL through the
+/// same probe 「检测代理」 uses. On the user's mirrored topology loopback is
+/// reachable, so the origin stays `http://127.0.0.1:15721` for all three.
+#[test]
+#[serial]
+fn rewrite_proxy_origin_keeps_mirrored_loopback_for_claude_and_codex() {
+    let harness = WslHarness::install("identical");
+    let _topo = RunnerGuard::install(Arc::new(UserMirroredTopologyRunner::new(
+        LocalBashRunner::new(DISTRO, harness.wsl_home.clone()),
+    )));
+    let origin =
+        crate::wsl_cli::rewrite_proxy_origin(&USER_MIRRORED.endpoint(), USER_MIRRORED.proxy_port);
+    assert_eq!(origin.as_deref(), Some(USER_MIRRORED.endpoint().as_str()));
 }

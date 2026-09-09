@@ -14,9 +14,7 @@ use super::utils::{
 const PROVIDER_ID: &str = "claude";
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let Some(root) = crate::wsl_cli::claude_projects_dir() else {
-        return Vec::new();
-    };
+    let root = crate::wsl_cli::claude_projects_dir();
     let mut files = Vec::new();
     collect_jsonl_files(&root, &mut files);
 

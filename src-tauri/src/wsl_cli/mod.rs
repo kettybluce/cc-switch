@@ -1,8 +1,15 @@
-//! Shared WSL home for Claude and Codex live files and session sync.
+//! Shared WSL home for Claude and Codex live files, sessions and usage.
 //!
-//! This fork never touches `\\wsl.localhost` / `\\wsl$`. When the Pi WSL
-//! runtime is selected, Claude (`~/.claude`) and Codex (`~/.codex`) follow
-//! the same distribution and are reached only through `wsl.exe`.
+//! When the WSL runtime is selected, Claude (`~/.claude`), Codex (`~/.codex`)
+//! and Pi (`~/.pi`) all live in the same distribution home. That home is
+//! addressed the way upstream CC Switch does it —
+//! `\\wsl.localhost\{distro}\home\{user}\.<claude|codex|pi>` — so reads,
+//! session listing and usage scans walk the distribution in place. Nothing is
+//! copied into `%USERPROFILE%\.cc-switch\*-wsl-sessions`.
+//!
+//! Live-file writes still prefer `wsl.exe` (stdin → stage → sha256 → `mv`)
+//! because an atomic rename over 9P is not guaranteed; both paths land on the
+//! same file inside WSL.
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +18,6 @@ use serde_json::Value;
 use crate::error::AppError;
 use crate::pi_runtime::error::PiRuntimeError;
 use crate::pi_runtime::files;
-use crate::pi_runtime::sessions;
 use crate::pi_runtime::wsl::{self, WslRequest};
 use crate::pi_runtime::{self, PiRuntimeTarget};
 
@@ -75,6 +81,7 @@ impl WslHome {
         format!("{}/config.toml", self.codex_dir())
     }
 
+    #[cfg(test)]
     pub fn codex_sessions(&self) -> String {
         format!("{}/sessions", self.codex_dir())
     }
@@ -165,18 +172,6 @@ pub fn wsl_fs_path(distro: &str, linux_home: &str, linux_abs: &str) -> PathBuf {
     wsl_localhost_unc(distro, linux_abs)
 }
 
-/// Drop a configured override that would walk WSL through UNC.
-pub fn reject_unc_override(path: Option<&str>) -> Option<String> {
-    let value = path.map(str::trim).filter(|value| !value.is_empty())?;
-    if is_wsl_unc_str(value) {
-        log::warn!(
-            "[WslCli] ignoring UNC override '{value}'; use Settings → Pi runtime (wsl.exe only)"
-        );
-        return None;
-    }
-    Some(value.to_string())
-}
-
 /// Active WSL home when the Pi runtime target is a distribution.
 pub fn active_wsl_home() -> Option<WslHome> {
     match pi_runtime::target() {
@@ -192,6 +187,28 @@ pub fn active_wsl_home() -> Option<WslHome> {
 
 pub fn is_wsl_runtime() -> bool {
     active_wsl_home().is_some()
+}
+
+impl WslHome {
+    /// Path `std::fs` should use for `linux_abs` inside this home
+    /// (`\\wsl.localhost\…` on Windows, the harness `$HOME` on Linux CI).
+    pub fn fs_path(&self, linux_abs: &str) -> PathBuf {
+        wsl_fs_path(&self.distro, &self.home, linux_abs)
+    }
+}
+
+/// `~/.claude` inside the active WSL distribution, or `None` on the local
+/// runtime. This is what `config::get_claude_config_dir` resolves to so live
+/// reads, MCP/plugin files and session scans hit the same tree Claude uses
+/// inside WSL.
+pub fn claude_wsl_config_dir() -> Option<PathBuf> {
+    active_wsl_home().map(|home| home.fs_path(&home.claude_dir()))
+}
+
+/// `~/.codex` inside the active WSL distribution, or `None` on the local
+/// runtime.
+pub fn codex_wsl_config_dir() -> Option<PathBuf> {
+    active_wsl_home().map(|home| home.fs_path(&home.codex_dir()))
 }
 
 fn overwrite_linux_file(distro: &str, linux_path: &str, bytes: &[u8]) -> Result<(), AppError> {
@@ -278,73 +295,32 @@ pub fn rewrite_proxy_origin(local_origin: &str, listen_port: u16) -> Option<Stri
     Some(origin)
 }
 
-fn app_cache(distro: &str, name: &str) -> PathBuf {
-    crate::config::get_app_config_dir()
-        .join("wsl-cli-sessions")
-        .join(distro)
-        .join(name)
-}
-
-fn prepare_tree(home: &WslHome, linux_root: &str, cache_name: &str) -> PathBuf {
-    let cache = app_cache(&home.distro, cache_name);
-    if let Err(error) = sessions::sync_tree(&home.distro, linux_root, &cache) {
-        log::warn!("[WslCli] session sync via wsl.exe failed for {linux_root}: {error}");
-    }
-    cache
-}
-
-/// Local directory the Claude session scanner / usage importer should walk.
+/// Directory the Claude session scanner / usage importer should walk.
 ///
-/// `None` means skip this pass (UNC override with no WSL runtime).
-pub fn claude_projects_dir() -> Option<PathBuf> {
+/// With the WSL runtime this is `~/.claude/projects` inside the distribution
+/// (`\\wsl.localhost\…` on Windows), walked in place — never a C: mirror.
+pub fn claude_projects_dir() -> PathBuf {
     if let Some(home) = active_wsl_home() {
-        return Some(prepare_tree(
-            &home,
-            &home.claude_projects(),
-            "claude-projects",
-        ));
+        return home.fs_path(&home.claude_projects());
     }
-    let dir = crate::config::get_claude_config_dir();
-    if is_wsl_unc_path(&dir) {
-        return None;
-    }
-    Some(dir.join("projects"))
+    crate::config::get_claude_config_dir().join("projects")
 }
 
-fn prepare_codex_home(home: &WslHome) -> PathBuf {
-    let home_cache = app_cache(&home.distro, "codex-home");
-    let sessions = home_cache.join("sessions");
-    if let Err(error) = sessions::sync_tree(&home.distro, &home.codex_sessions(), &sessions) {
-        log::warn!(
-            "[WslCli] session sync via wsl.exe failed for {}: {error}",
-            home.codex_sessions()
-        );
-    }
-    home_cache
-}
-
-/// Local Codex session roots after an optional WSL mirror.
+/// Codex session roots: `sessions/` plus the flat `archived_sessions/`.
+///
+/// With the WSL runtime both live under `~/.codex` inside the distribution
+/// and are walked in place.
 pub fn codex_session_roots() -> Vec<PathBuf> {
-    if let Some(home) = active_wsl_home() {
-        return vec![prepare_codex_home(&home).join("sessions")];
-    }
-    let dir = crate::codex_config::get_codex_config_dir();
-    if is_wsl_unc_path(&dir) {
-        return Vec::new();
-    }
+    let dir = codex_usage_dir();
     vec![dir.join("sessions"), dir.join("archived_sessions")]
 }
 
-/// Codex home used by the usage importer. Empty when UNC would be walked.
-pub fn codex_usage_dir() -> Option<PathBuf> {
+/// Codex home the usage importer scans (`sessions/` + `archived_sessions/`).
+pub fn codex_usage_dir() -> PathBuf {
     if let Some(home) = active_wsl_home() {
-        return Some(prepare_codex_home(&home));
+        return home.fs_path(&home.codex_dir());
     }
-    let dir = crate::codex_config::get_codex_config_dir();
-    if is_wsl_unc_path(&dir) {
-        return None;
-    }
-    Some(dir)
+    crate::codex_config::get_codex_config_dir()
 }
 
 #[cfg(test)]
@@ -418,16 +394,25 @@ mod tests {
     }
 
     #[test]
-    fn reject_unc_override_drops_wsl_paths() {
+    fn wsl_home_resolves_claude_codex_dirs_like_upstream_unc() {
+        let home = WslHome {
+            distro: "Ubuntu-22.04".to_string(),
+            home: "/home/tfdx8045".to_string(),
+        };
+        // `/home/tfdx8045` does not exist on this machine, so the Windows
+        // shape (`\\wsl.localhost\…`) is produced even on Linux CI.
         assert_eq!(
-            reject_unc_override(Some(r"\\wsl.localhost\Ubuntu\home\u\.claude")),
-            None
+            home.fs_path(&home.claude_dir()).to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude"
         );
         assert_eq!(
-            reject_unc_override(Some("  /home/u/.claude  ")),
-            Some("/home/u/.claude".to_string())
+            home.fs_path(&home.codex_sessions()).to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.codex\sessions"
         );
-        assert_eq!(reject_unc_override(Some("   ")), None);
+        assert_eq!(
+            home.fs_path(&home.claude_projects()).to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude\projects"
+        );
     }
 
     #[test]

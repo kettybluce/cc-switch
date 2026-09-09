@@ -445,7 +445,13 @@ const CODEX_RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
 ];
 
 /// 获取 Codex 配置目录路径
+///
+/// 选择了 WSL 运行位置时为发行版家目录里的 `~/.codex`
+/// （Windows 上是 `\\wsl.localhost\{distro}\home\{user}\.codex`）。
 pub fn get_codex_config_dir() -> PathBuf {
+    if let Some(wsl) = crate::wsl_cli::codex_wsl_config_dir() {
+        return wsl;
+    }
     if let Some(custom) = crate::settings::get_codex_override_dir() {
         return custom;
     }

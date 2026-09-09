@@ -33,9 +33,10 @@ export type CliRuntimeApp = "claude" | "codex";
 /**
  * Settings → 通用 sections for Claude and Codex, parallel to Pi.
  *
- * Live files follow the shared Pi WSL runtime (same distro, wsl.exe only,
- * never UNC). Location pickers write that shared runtime so the user does
- * not have to hunt in the Claude/Codex app tabs.
+ * Live files follow the shared WSL runtime (same distro as Pi). They are read
+ * in place from the distribution home (`\\wsl.localhost\…`, like upstream
+ * CC Switch) and written through wsl.exe. Location pickers write that shared
+ * runtime so the user does not have to hunt in the Claude/Codex app tabs.
  */
 export function ClaudeRuntimeSettings() {
   return <CliRuntimeSettings app="claude" />;
@@ -131,7 +132,7 @@ function CliRuntimeSettings({ app }: { app: CliRuntimeApp }) {
         {t("settings.cliRuntime.sharedRuntime")}
       </p>
       <p className="text-xs text-muted-foreground">
-        {t("settings.cliRuntime.uncBan")}
+        {t("settings.cliRuntime.wslHome")}
       </p>
 
       {showLocationPicker && (
@@ -289,6 +290,10 @@ function CliRuntimeSettings({ app }: { app: CliRuntimeApp }) {
   );
 }
 
+/**
+ * Path the user can paste into Explorer: the upstream-style
+ * `\\wsl.localhost\<distro>\home\<user>\.claude\settings.json`.
+ */
 function displayLinuxPath(
   target: { kind: "local" } | { kind: "wsl"; distro: string; home: string },
   relative: string,
@@ -296,8 +301,11 @@ function displayLinuxPath(
   if (target.kind !== "wsl") {
     return `~/${relative}`;
   }
-  const home = target.home.replace(/\/$/, "");
-  return `wsl:${target.distro}:${home}/${relative}`;
+  const home = target.home.replace(/\/$/, "").replace(/^\//, "");
+  return `\\\\wsl.localhost\\${target.distro}\\${home}\\${relative}`.replace(
+    /\//g,
+    "\\",
+  );
 }
 
 function cliStatusLines(

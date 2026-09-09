@@ -824,8 +824,8 @@
       "proxyStartFirst": "请先开启本地代理"
     },
     "cliRuntime": {
-      "sharedRuntime": "Claude、Codex 与 Pi 共用同一 WSL 发行版，一律走 wsl.exe。",
-      "uncBan": "不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 会唤醒 WSL 并可能占满一个 CPU 核。",
+      "sharedRuntime": "Claude、Codex 与 Pi 共用同一 WSL 发行版和同一个本地代理。",
+      "wslHome": "配置、会话、用量直接读发行版家目录（\\\\wsl.localhost\\<发行版>\\home\\<用户>\\.claude / .codex / .pi），不镜像到 C:\\Users；写入走 wsl.exe。",
       "noDistros": "没有可用的 WSL 发行版",
       "claude": {
         "title": "Claude 运行位置",
@@ -833,7 +833,7 @@
         "location": "Claude 位置",
         "settingsPath": "settings.json",
         "takeover": "Claude 接管",
-        "takeoverDescription": "打开后启动本地代理，并把 Claude 配置改写到本地代理。关闭后恢复真实上游。走 wsl.exe，不用 UNC。"
+        "takeoverDescription": "打开后启动本地代理，并把 WSL 里 ~/.claude/settings.json 的 ANTHROPIC_BASE_URL 改写到本地代理。关闭后恢复真实上游。"
       },
       "codex": {
         "title": "Codex 运行位置",
@@ -842,12 +842,11 @@
         "settingsPath": "config.toml",
         "authPath": "auth.json",
         "takeover": "Codex 接管",
-        "takeoverDescription": "打开后启动本地代理，并把 Codex 配置改写到本地代理。关闭后恢复真实上游。走 wsl.exe，不用 UNC。"
+        "takeoverDescription": "打开后启动本地代理，并把 WSL 里 ~/.codex/config.toml 的 base_url 改写到本地代理。关闭后恢复真实上游。"
       }
     },
     "configDirectoryOverride": "配置目录覆盖（高级）",
-    "configDirectoryDescription": "这里只覆盖本机 Windows/macOS/Linux 目录。Claude、Codex、Pi 若跑在 WSL 内，请用「设置 → 通用」里各自的运行位置（走 wsl.exe）。不要填 \\\\wsl.localhost 或 \\\\wsl$：UNC 会唤醒 WSL 并可能占满一个 CPU 核。",
-    "wslUncRejected": "不允许使用 WSL UNC 路径（\\\\wsl.localhost / \\\\wsl$）。请在「设置 → 通用」选择发行版，让 Claude、Codex、Pi 都通过 wsl.exe 访问。",
+    "configDirectoryDescription": "覆盖各 CLI 的配置目录。Claude、Codex、Pi 若跑在 WSL 内，优先用「设置 → 通用」里的运行位置（会自动使用 WSL 家目录）；也接受上游写法 \\\\wsl.localhost\\<发行版>\\home\\<用户>\\.claude。",
     "appConfigDir": "CC Switch 配置目录",
     "appConfigDirDescription": "自定义 CC Switch 的配置存储位置（指定到云同步文件夹即可云同步配置）",
     "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",
@@ -866,7 +865,7 @@
     "hermesConfigDir": "Hermes 配置目录",
     "hermesConfigDirDescription": "覆盖 Hermes 配置目录 (config.yaml)。",
     "piConfigDir": "Pi 配置目录",
-    "piConfigDirDescription": "覆盖本机 Pi 主目录（默认 ~/.pi）。Pi 实际读取的文件在 agent/ 下（models.json、settings.json、会话）。WSL 中的 Pi 请用「设置 → Pi 运行位置」，不要填 \\\\wsl.localhost 路径。",
+    "piConfigDirDescription": "覆盖 Pi 主目录（默认 ~/.pi）。Pi 实际读取的文件在 agent/ 下（models.json、settings.json、会话）。WSL 中的 Pi 优先用「设置 → Pi 运行位置」；也接受 \\\\wsl.localhost\\<发行版>\\home\\<用户>\\.pi。",
     "browsePlaceholderClaude": "例如：/home/<你的用户名>/.claude",
     "browsePlaceholderCodex": "例如：/home/<你的用户名>/.codex",
     "browsePlaceholderGemini": "例如：/home/<你的用户名>/.gemini",

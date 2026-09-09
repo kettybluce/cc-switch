@@ -10,9 +10,10 @@
 //! 1. one `find` call that returns a manifest (`size`, `mtime`, relative path),
 //! 2. one batched transfer of only the files whose manifest entry changed.
 //!
-//! Pi session listing and usage no longer consume this cache: they walk the
-//! WSL home in place (`\\wsl.localhost\…` on Windows). `sync_tree` remains
-//! for Claude/Codex `wsl_cli` mirrors only.
+//! Session listing and usage for Pi, Claude and Codex no longer consume this
+//! cache: they walk the WSL home in place (`\\wsl.localhost\…` on Windows).
+//! `sync_tree` is retained (tested, unused in production) as an opt-in
+//! fallback should a 9P walk ever prove too slow for a large tree.
 
 use std::collections::HashMap;
 use std::fs;
@@ -226,12 +227,16 @@ pub fn wsl_source_path(target: &PiRuntimeTarget, scanned: &Path) -> Option<Strin
 
 /// Previously copied WSL Pi sessions onto `%USERPROFILE%\.cc-switch\pi-wsl-sessions`.
 /// Listing and usage now walk the distribution home in place, so this must not
-/// write a C: copy. Claude/Codex still use [`sync_tree`] via `wsl_cli`.
+/// write a C: copy. Claude/Codex follow the same rule via `wsl_cli`.
 pub fn sync(_target: &PiRuntimeTarget) -> PiResult<SessionSyncOutcome> {
     Ok(SessionSyncOutcome::default())
 }
 
 /// Mirror any WSL JSONL tree into `cache` through `wsl.exe` (never UNC).
+///
+/// No production caller since Claude/Codex/Pi walk the WSL home in place;
+/// kept under test as the documented fallback.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn sync_tree(distro: &str, linux_root: &str, cache: &Path) -> PiResult<SessionSyncOutcome> {
     if !wsl::is_valid_linux_path(linux_root) {
         return Err(PiRuntimeError::invalid_input(format!(

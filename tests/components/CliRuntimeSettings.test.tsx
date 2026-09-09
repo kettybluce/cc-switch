@@ -104,7 +104,7 @@ describe("CliRuntimeSettings", () => {
     proxyPlan = undefined;
   });
 
-  it("shows Claude next to Pi with a shared WSL runtime and UNC ban", () => {
+  it("shows Claude next to Pi with a shared WSL runtime and WSL home", () => {
     render(<ClaudeRuntimeSettings />);
     expect(
       screen.getByText("settings.cliRuntime.claude.title"),
@@ -112,21 +112,25 @@ describe("CliRuntimeSettings", () => {
     expect(
       screen.getByText("settings.cliRuntime.sharedRuntime"),
     ).toBeInTheDocument();
-    expect(screen.getByText("settings.cliRuntime.uncBan")).toBeInTheDocument();
+    expect(screen.getByText("settings.cliRuntime.wslHome")).toBeInTheDocument();
     expect(screen.getByText("~/.claude/settings.json")).toBeInTheDocument();
   });
 
-  it("shows Codex config via wsl.exe when the shared runtime is WSL", () => {
+  it("shows Codex config as a wsl.localhost path when the shared runtime is WSL", () => {
     status = wslStatus;
     render(<CodexRuntimeSettings />);
     expect(
       screen.getByText("settings.cliRuntime.codex.title"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("wsl:Ubuntu-22.04:/home/tfdx8045/.codex/config.toml"),
+      screen.getByText(
+        "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.codex\\config.toml",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("wsl:Ubuntu-22.04:/home/tfdx8045/.codex/auth.json"),
+      screen.getByText(
+        "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tfdx8045\\.codex\\auth.json",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("Ubuntu-22.04")).toBeInTheDocument();
   });

@@ -213,17 +213,7 @@ struct ParsedAssistantUsage {
 
 /// 同步 Claude Code 会话日志到使用统计数据库
 pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppError> {
-    let Some(projects_dir) = crate::wsl_cli::claude_projects_dir() else {
-        log::info!("[SESSION-SYNC] skipping Claude usage scan: WSL UNC path is not walked");
-        return Ok(SessionSyncResult {
-            imported: 0,
-            skipped: 0,
-            files_scanned: 0,
-            suspected_duplicates: 0,
-            deferred_files: 0,
-            errors: vec![],
-        });
-    };
+    let projects_dir = crate::wsl_cli::claude_projects_dir();
     if !projects_dir.exists() {
         return Ok(SessionSyncResult {
             imported: 0,

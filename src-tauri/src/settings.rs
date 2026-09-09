@@ -588,11 +588,21 @@ impl AppSettings {
     }
 
     fn normalize_paths(&mut self) {
-        self.claude_config_dir =
-            crate::wsl_cli::reject_unc_override(self.claude_config_dir.as_deref());
+        // Claude/Codex may point at the WSL home the way upstream does
+        // (`\\wsl.localhost\{distro}\home\…\.claude`). Keep UNC overrides.
+        self.claude_config_dir = self
+            .claude_config_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
-        self.codex_config_dir =
-            crate::wsl_cli::reject_unc_override(self.codex_config_dir.as_deref());
+        self.codex_config_dir = self
+            .codex_config_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         self.gemini_config_dir = self
             .gemini_config_dir
@@ -910,34 +920,18 @@ pub fn reload_settings() -> Result<(), AppError> {
 
 pub fn get_claude_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
-    let path = settings
+    settings
         .claude_config_dir
         .as_ref()
-        .map(|p| resolve_override_path(p))?;
-    if crate::wsl_cli::is_wsl_unc_path(&path) {
-        log::warn!(
-            "[WslCli] skipping UNC Claude override {}; use Pi WSL runtime",
-            path.display()
-        );
-        return None;
-    }
-    Some(path)
+        .map(|p| resolve_override_path(p))
 }
 
 pub fn get_codex_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
-    let path = settings
+    settings
         .codex_config_dir
         .as_ref()
-        .map(|p| resolve_override_path(p))?;
-    if crate::wsl_cli::is_wsl_unc_path(&path) {
-        log::warn!(
-            "[WslCli] skipping UNC Codex override {}; use Pi WSL runtime",
-            path.display()
-        );
-        return None;
-    }
-    Some(path)
+        .map(|p| resolve_override_path(p))
 }
 
 pub fn get_gemini_override_dir() -> Option<PathBuf> {
@@ -1267,14 +1261,22 @@ mod tests {
     }
 
     #[test]
-    fn normalize_paths_drops_wsl_unc_overrides() {
-        let mut settings = AppSettings::default();
-        settings.claude_config_dir = Some(r"\\wsl.localhost\Ubuntu\home\u\.claude".to_string());
-        settings.codex_config_dir = Some(r"\\wsl$\Ubuntu\home\u\.codex".to_string());
-        settings.pi_config_dir = Some("//wsl.localhost/Ubuntu/home/u/.pi".to_string());
+    fn normalize_paths_keeps_wsl_unc_overrides_like_upstream() {
+        let mut settings = AppSettings {
+            claude_config_dir: Some(r"  \\wsl.localhost\Ubuntu\home\u\.claude  ".to_string()),
+            codex_config_dir: Some(r"\\wsl$\Ubuntu\home\u\.codex".to_string()),
+            pi_config_dir: Some("//wsl.localhost/Ubuntu/home/u/.pi".to_string()),
+            ..AppSettings::default()
+        };
         settings.normalize_paths();
-        assert_eq!(settings.claude_config_dir, None);
-        assert_eq!(settings.codex_config_dir, None);
+        assert_eq!(
+            settings.claude_config_dir.as_deref(),
+            Some(r"\\wsl.localhost\Ubuntu\home\u\.claude")
+        );
+        assert_eq!(
+            settings.codex_config_dir.as_deref(),
+            Some(r"\\wsl$\Ubuntu\home\u\.codex")
+        );
         assert_eq!(
             settings.pi_config_dir.as_deref(),
             Some("//wsl.localhost/Ubuntu/home/u/.pi")

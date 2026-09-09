@@ -255,7 +255,7 @@ fn delete_session_with_roots(
 fn provider_roots(provider_id: &str) -> Result<Vec<PathBuf>, String> {
     let roots = match provider_id {
         "codex" => codex::session_roots(),
-        "claude" => crate::wsl_cli::claude_projects_dir().into_iter().collect(),
+        "claude" => vec![crate::wsl_cli::claude_projects_dir()],
         "opencode" => vec![opencode::get_opencode_data_dir()],
         "openclaw" => vec![crate::openclaw_config::get_openclaw_dir().join("agents")],
         "gemini" => vec![crate::gemini_config::get_gemini_dir().join("tmp")],

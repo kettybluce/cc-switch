@@ -34,7 +34,14 @@ pub fn get_home_dir() -> PathBuf {
 }
 
 /// 获取 Claude Code 配置目录路径
+///
+/// 选择了 WSL 运行位置时，Claude 与 Pi 同在该发行版家目录：
+/// `\\wsl.localhost\{distro}\home\{user}\.claude`（与上游 CC Switch 的 WSL
+/// 用法一致）。读取、MCP/插件文件、会话与用量扫描都直接走这棵树。
 pub fn get_claude_config_dir() -> PathBuf {
+    if let Some(wsl) = crate::wsl_cli::claude_wsl_config_dir() {
+        return wsl;
+    }
     if let Some(custom) = crate::settings::get_claude_override_dir() {
         return custom;
     }
