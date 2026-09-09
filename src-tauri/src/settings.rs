@@ -588,9 +588,11 @@ impl AppSettings {
     }
 
     fn normalize_paths(&mut self) {
-        self.claude_config_dir = crate::wsl_cli::reject_unc_override(self.claude_config_dir.as_deref());
+        self.claude_config_dir =
+            crate::wsl_cli::reject_unc_override(self.claude_config_dir.as_deref());
 
-        self.codex_config_dir = crate::wsl_cli::reject_unc_override(self.codex_config_dir.as_deref());
+        self.codex_config_dir =
+            crate::wsl_cli::reject_unc_override(self.codex_config_dir.as_deref());
 
         self.gemini_config_dir = self
             .gemini_config_dir
@@ -1268,8 +1270,7 @@ mod tests {
     #[test]
     fn normalize_paths_drops_wsl_unc_overrides() {
         let mut settings = AppSettings::default();
-        settings.claude_config_dir =
-            Some(r"\\wsl.localhost\Ubuntu\home\u\.claude".to_string());
+        settings.claude_config_dir = Some(r"\\wsl.localhost\Ubuntu\home\u\.claude".to_string());
         settings.codex_config_dir = Some(r"\\wsl$\Ubuntu\home\u\.codex".to_string());
         settings.pi_config_dir = Some("//wsl.localhost/Ubuntu/home/u/.pi".to_string());
         settings.normalize_paths();

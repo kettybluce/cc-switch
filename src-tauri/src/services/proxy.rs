@@ -360,7 +360,10 @@ impl CodexAuthFileTransaction {
         ) || error.kind() == std::io::ErrorKind::Unsupported
     }
 
-    fn link_or_copy(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+    fn link_or_copy(
+        source: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> std::io::Result<()> {
         match std::fs::hard_link(source, destination) {
             Ok(()) => Ok(()),
             Err(error) if Self::hard_link_unsupported(&error) => {
@@ -4010,9 +4013,10 @@ impl ProxyService {
 
         if crate::wsl_cli::is_wsl_runtime() {
             let auth_value = auth.filter(|value| !value.as_object().is_some_and(Map::is_empty));
-            let write_result = crate::wsl_cli::write_codex_live(auth_value, prepared_cfg.as_deref())
-                .map(|_| ())
-                .map_err(|e| format!("写入 WSL Codex 配置失败: {e}"));
+            let write_result =
+                crate::wsl_cli::write_codex_live(auth_value, prepared_cfg.as_deref())
+                    .map(|_| ())
+                    .map_err(|e| format!("写入 WSL Codex 配置失败: {e}"));
             if let Err(error) = write_result {
                 if let Some(snapshot) = catalog_snapshot.as_ref() {
                     snapshot.restore().map_err(|rollback_error| {

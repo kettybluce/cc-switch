@@ -189,7 +189,9 @@ fn cost_state_model_hints(value: &serde_json::Value) -> Option<Vec<String>> {
     if value.get("type").and_then(|value| value.as_str()) != Some("cost-state") {
         return None;
     }
-    let usage = value.get("modelUsage").and_then(|value| value.as_object())?;
+    let usage = value
+        .get("modelUsage")
+        .and_then(|value| value.as_object())?;
     let hints: Vec<String> = usage
         .keys()
         .filter_map(|key| normalize_cost_state_model(key))

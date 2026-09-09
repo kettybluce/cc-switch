@@ -4536,9 +4536,7 @@ command = "example"
             Some(false)
         );
         assert_eq!(
-            provider
-                .get("transport_kind")
-                .and_then(toml::Value::as_str),
+            provider.get("transport_kind").and_then(toml::Value::as_str),
             Some("responses_http")
         );
         assert!(codex_config_has_official_proxy_route(&output));
