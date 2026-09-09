@@ -15,6 +15,10 @@ use serde_json::{Map, Value};
 use std::path::Path;
 
 pub(crate) const PI_PROXY_API_KEY_PLACEHOLDER: &str = "PROXY_MANAGED";
+/// Injected into projected `models.json` headers so shared-listen logs can be
+/// filtered as Pi without a `/pi/` gateway or SCHEMA bump.
+pub(crate) const PI_CLIENT_APP_HEADER: &str = "x-cc-switch-app";
+pub(crate) const PI_CLIENT_APP_VALUE: &str = "pi";
 
 /// Same Claude-style connect-host rewrite used by `ProxyService::build_proxy_urls`.
 pub(crate) fn rewrite_listen_host_for_clients(listen_address: &str) -> String {
@@ -111,6 +115,15 @@ pub(crate) fn project_provider_node(node: &Value, proxy_origin: &str) -> Value {
         "apiKey".to_string(),
         Value::String(PI_PROXY_API_KEY_PLACEHOLDER.to_string()),
     );
+    let headers = object
+        .entry("headers")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(headers) = headers.as_object_mut() {
+        headers.insert(
+            PI_CLIENT_APP_HEADER.to_string(),
+            Value::String(PI_CLIENT_APP_VALUE.to_string()),
+        );
+    }
     if let Some(Value::Array(models)) = object.get_mut("models") {
         for model in models {
             if let Some(model_object) = model.as_object_mut() {
@@ -199,6 +212,24 @@ pub(crate) fn is_windows_unc_path(path: &Path) -> bool {
     normalized.starts_with(r"\\")
 }
 
+pub(crate) fn request_is_pi_client(headers: &http::HeaderMap) -> bool {
+    headers
+        .get(PI_CLIENT_APP_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case(PI_CLIENT_APP_VALUE))
+}
+
+pub(crate) fn usage_app_type_from_headers(
+    headers: &http::HeaderMap,
+    routed_app: &'static str,
+) -> &'static str {
+    if request_is_pi_client(headers) {
+        "pi"
+    } else {
+        routed_app
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +263,20 @@ mod tests {
             .expect("UNC override must resolve"),
             unc
         );
+    }
+
+    #[test]
+    fn wsl_localhost_dot_pi_override_canonicalizes_to_agent() {
+        let unc = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\user\.pi");
+        let resolved =
+            crate::pi_config::resolve_pi_agent_dir(Some(unc), None, PathBuf::from("/unused"))
+                .expect("UNC .pi override must resolve");
+        let normalized = resolved.to_string_lossy().replace('/', r"\");
+        assert!(
+            normalized.ends_with(r"\.pi\agent"),
+            "session root must be under .pi/agent, not a C: mirror: {normalized}"
+        );
+        assert!(!normalized.to_ascii_lowercase().contains("pi-wsl-sessions"));
     }
 
     #[test]
@@ -303,6 +348,10 @@ mod tests {
         assert_eq!(anthropic["baseUrl"], json!("http://127.0.0.1:15721"));
         assert_eq!(anthropic["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
         assert_eq!(anthropic["headers"]["X-Custom"], json!("hdr"));
+        assert_eq!(
+            anthropic["headers"][PI_CLIENT_APP_HEADER],
+            json!(PI_CLIENT_APP_VALUE)
+        );
         assert_eq!(anthropic["sdkOption"]["timeout"], json!(30));
         assert_eq!(
             anthropic["models"][0]["compat"]["supportsDeveloperRole"],
@@ -329,7 +378,24 @@ mod tests {
         node = project_provider_node(&node, "http://127.0.0.1:15721");
         assert_eq!(node["baseUrl"], json!("http://127.0.0.1:15721"));
         assert_eq!(node["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
+        assert_eq!(
+            node["headers"][PI_CLIENT_APP_HEADER],
+            json!(PI_CLIENT_APP_VALUE)
+        );
         assert_eq!(node["futureField"], json!(true));
+    }
+
+    #[test]
+    fn usage_app_type_from_headers_tags_pi_without_changing_routed_app() {
+        let mut headers = http::HeaderMap::new();
+        assert_eq!(usage_app_type_from_headers(&headers, "claude"), "claude");
+        headers.insert(
+            PI_CLIENT_APP_HEADER,
+            http::HeaderValue::from_static(PI_CLIENT_APP_VALUE),
+        );
+        assert!(request_is_pi_client(&headers));
+        assert_eq!(usage_app_type_from_headers(&headers, "claude"), "pi");
+        assert_eq!(usage_app_type_from_headers(&headers, "codex"), "pi");
     }
 
     #[test]

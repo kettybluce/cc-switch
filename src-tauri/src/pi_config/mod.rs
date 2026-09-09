@@ -67,6 +67,7 @@ pub(crate) fn resolve_pi_agent_dir(
             _ => (default_path, "Pi default"),
         },
     };
+    let path = canonicalize_pi_agent_dir(path);
     if !proxy::is_usable_pi_agent_dir(&path) {
         return Err(AppError::InvalidInput(format!(
             "{source} must resolve to an absolute directory: {}",
@@ -74,6 +75,25 @@ pub(crate) fn resolve_pi_agent_dir(
         )));
     }
     Ok(path)
+}
+
+/// If the user points at `~/.pi` (or `\\wsl.localhost\…\.pi`), use the agent dir.
+/// Session JSONL and models.json live under `.pi/agent/`, not the Pi root.
+fn canonicalize_pi_agent_dir(path: PathBuf) -> PathBuf {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(".pi"))
+    {
+        return path.join("agent");
+    }
+    let raw = path.to_string_lossy();
+    let normalized = raw.replace('/', r"\");
+    if normalized.len() >= 3 && normalized.to_ascii_lowercase().ends_with(r"\.pi") {
+        path.join("agent")
+    } else {
+        path
+    }
 }
 
 pub(crate) fn get_pi_models_path() -> Result<PathBuf, AppError> {
@@ -561,6 +581,37 @@ mod tests {
         )
         .expect_err("relative Pi directory must be rejected");
         assert!(error.to_string().contains("absolute directory"));
+    }
+
+    #[test]
+    fn canonicalize_dot_pi_to_agent_dir() {
+        assert_eq!(
+            canonicalize_pi_agent_dir(PathBuf::from("/home/user/.pi")),
+            PathBuf::from("/home/user/.pi/agent")
+        );
+        assert_eq!(
+            canonicalize_pi_agent_dir(PathBuf::from("/home/user/.pi/agent")),
+            PathBuf::from("/home/user/.pi/agent")
+        );
+        let unc_pi = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\user\.pi");
+        let canonical = canonicalize_pi_agent_dir(unc_pi)
+            .to_string_lossy()
+            .replace('/', r"\");
+        assert!(
+            canonical.ends_with(r"\.pi\agent"),
+            "UNC .pi must resolve under agent: {canonical}"
+        );
+        let unc_agent = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\user\.pi\agent");
+        assert_eq!(canonicalize_pi_agent_dir(unc_agent.clone()), unc_agent);
+
+        let user_pi = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi");
+        let user_canonical = canonicalize_pi_agent_dir(user_pi)
+            .to_string_lossy()
+            .replace('/', r"\");
+        assert!(
+            user_canonical.ends_with(r"home\tfdx8045\.pi\agent"),
+            "user WSL .pi override must land on .pi/agent: {user_canonical}"
+        );
     }
 
     #[test]

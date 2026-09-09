@@ -90,6 +90,7 @@ interface UsageDashboardProps {
   onSessionAutoSyncEnabledChange?: (
     next: boolean,
   ) => Promise<boolean> | boolean | void;
+  initialAppType?: AppTypeFilter;
 }
 
 export function UsageDashboard({
@@ -97,11 +98,14 @@ export function UsageDashboard({
   onRefreshIntervalChange,
   sessionAutoSyncEnabled = true,
   onSessionAutoSyncEnabledChange,
+  initialAppType,
 }: UsageDashboardProps = {}) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [range, setRange] = useState<UsageRangeSelection>({ preset: "today" });
-  const [appType, setAppType] = useState<AppTypeFilter>("all");
+  const [appType, setAppType] = useState<AppTypeFilter>(
+    initialAppType ?? "all",
+  );
   const [providerName, setProviderName] = useState<string | undefined>(
     undefined,
   );

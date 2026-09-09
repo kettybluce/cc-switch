@@ -4304,6 +4304,14 @@ mod tests {
             written["providers"]["openai"]["baseUrl"],
             json!(format!("{origin}/v1"))
         );
+        assert_eq!(
+            written["providers"]["anthropic"]["headers"]["x-cc-switch-app"],
+            json!("pi")
+        );
+        assert_eq!(
+            written["providers"]["anthropic"]["headers"]["X-Custom"],
+            json!("hdr")
+        );
         assert_eq!(written["customTopLevel"], json!("keep-me"));
         assert!(written.get("defaultProvider").is_none());
         assert_eq!(

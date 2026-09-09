@@ -373,6 +373,8 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 从 [Releases](../../releases) 页面下载最新版本的 `CC-Switch-v{版本号}-Windows.msi` 安装包或 `CC-Switch-v{版本号}-Windows-Portable.zip` 绿色版。
 
+MSI 若在安装/升级时出现 **Error 5（拒绝访问 `D:\Config.Msi` 或系统盘 `Config.Msi`）**，这是 Windows Installer 回滚缓存目录的 ACL 问题，per-user 安装包无法修复。请改用绿色版：见 [Windows MSI Error 5](docs/windows-msi-error-5-zh.md)。
+
 ### macOS 用户
 
 **方式一：通过 Homebrew 安装（推荐）**

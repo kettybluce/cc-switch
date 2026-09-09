@@ -208,6 +208,11 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
   "pi",
 ];
 
+/** Apps that have a Usage Statistics dashboard (session JSONL and/or proxy logs). */
+export function appHasUsageDashboard(appId: string): boolean {
+  return (KNOWN_APP_TYPES as readonly string[]).includes(appId);
+}
+
 /**
  * App types whose proxy uses an OpenAI-style protocol. Two consequences:
  *

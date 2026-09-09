@@ -138,6 +138,7 @@ vi.mock("@/components/AppSwitcher", () => ({
       <span>{activeApp}</span>
       <button onClick={() => onSwitch("claude")}>switch-claude</button>
       <button onClick={() => onSwitch("codex")}>switch-codex</button>
+      <button onClick={() => onSwitch("pi")}>switch-pi</button>
       <button onClick={() => onSwitch("openclaw")}>switch-openclaw</button>
     </div>
   ),
@@ -458,6 +459,19 @@ describe("App integration with MSW", () => {
 
     fireEvent.click(checkUpdatesButton);
     expect(skillsPanelMocks.checkUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the usage stats entry on the Pi page when takeover is off", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByText("switch-pi"));
+
+    expect(await screen.findByTitle("使用统计")).toBeInTheDocument();
   });
 
   it("routes the Skills discover toolbar action through the panel guard", async () => {

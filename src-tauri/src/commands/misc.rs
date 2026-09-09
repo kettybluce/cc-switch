@@ -3694,6 +3694,9 @@ pub async fn probe_tool_installations(
     .map_err(|e| format!("probe task join error: {e}"))
 }
 
+/// Official farion1231 behavior: badge follows the **config override path**,
+/// not whether a Windows binary is on PATH. Claude at
+/// `\\wsl.localhost\<distro>\…\.claude` must show WSL · distro, same as Pi.
 #[cfg(target_os = "windows")]
 fn wsl_distro_for_tool(tool: &str) -> Option<String> {
     let override_dir = match tool {
@@ -3715,6 +3718,12 @@ fn wsl_distro_for_tool(tool: &str) -> Option<String> {
 /// 支持 `\\wsl$\Ubuntu\...` 和 `\\wsl.localhost\Ubuntu\...` 两种格式
 #[cfg(target_os = "windows")]
 fn wsl_distro_from_path(path: &Path) -> Option<String> {
+    wsl_distro_from_path_components(path)
+        .or_else(|| wsl_distro_from_path_str(&path.to_string_lossy()))
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_distro_from_path_components(path: &Path) -> Option<String> {
     use std::path::{Component, Prefix};
     let Some(Component::Prefix(prefix)) = path.components().next() else {
         return None;
@@ -3733,6 +3742,35 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
             None
         }
         _ => None,
+    }
+}
+
+/// Path-string WSL distro parser (official UNC badge logic, testable off Windows).
+/// Accepts `\\wsl$\Distro\...`, `\\wsl.localhost\Distro\...`, `//wsl.localhost/Distro/...`,
+/// and `\\?\UNC\wsl.localhost\Distro\...`.
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+fn wsl_distro_from_path_str(raw: &str) -> Option<String> {
+    let normalized = raw.replace('/', r"\");
+    let lower = normalized.to_ascii_lowercase();
+    let prefix_len = if lower.starts_with(r"\\?\unc\") {
+        r"\\?\unc\".len()
+    } else if lower.starts_with(r"\\") {
+        2
+    } else {
+        return None;
+    };
+    let stripped = &normalized[prefix_len..];
+
+    let mut parts = stripped.split('\\').filter(|part| !part.is_empty());
+    let server = parts.next()?;
+    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
+        return None;
+    }
+    let distro = parts.next()?.trim();
+    if distro.is_empty() {
+        None
+    } else {
+        Some(distro.to_string())
     }
 }
 
@@ -4742,6 +4780,51 @@ pub async fn set_window_theme(window: tauri::Window, theme: String) -> Result<()
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn wsl_distro_from_path_str_parses_claude_and_pi_unc() {
+        assert_eq!(
+            wsl_distro_from_path_str(r"\\wsl.localhost\Ubuntu-22.04\home\alice\.claude").as_deref(),
+            Some("Ubuntu-22.04")
+        );
+        assert_eq!(
+            wsl_distro_from_path_str(r"\\wsl$\Debian\home\alice\.claude").as_deref(),
+            Some("Debian")
+        );
+        assert_eq!(
+            wsl_distro_from_path_str(r"//wsl.localhost/Ubuntu/home/alice/.claude").as_deref(),
+            Some("Ubuntu")
+        );
+        assert_eq!(
+            wsl_distro_from_path_str(r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\alice\.pi\agent")
+                .as_deref(),
+            Some("Ubuntu-22.04")
+        );
+        assert_eq!(
+            wsl_distro_from_path_str(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude")
+                .as_deref(),
+            Some("Ubuntu-22.04")
+        );
+        assert_eq!(
+            wsl_distro_from_path_str(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent")
+                .as_deref(),
+            Some("Ubuntu-22.04")
+        );
+        assert_eq!(wsl_distro_from_path_str(r"C:\Users\alice\.claude"), None);
+        assert_eq!(wsl_distro_from_path_str(r"\\nas\share\.claude"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_distro_from_path_uses_official_unc_components() {
+        let claude = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\alice\.claude");
+        assert_eq!(
+            wsl_distro_from_path(&claude).as_deref(),
+            Some("Ubuntu-22.04")
+        );
+        let win = PathBuf::from(r"C:\Users\alice\.claude");
+        assert_eq!(wsl_distro_from_path(&win), None);
+    }
 
     /// 探测 helper 正常路径：spawn（含 pre_exec setsid）能启动、输出能捕获。
     /// `/bin/echo --version` 在 macOS/Linux 均即刻成功退出。

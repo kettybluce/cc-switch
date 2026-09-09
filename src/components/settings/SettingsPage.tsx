@@ -57,12 +57,14 @@ import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
+import type { AppTypeFilter } from "@/types/usage";
 
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImportSuccess?: () => void | Promise<void>;
   defaultTab?: string;
+  initialUsageAppType?: AppTypeFilter;
 }
 
 export function SettingsPage({
@@ -70,6 +72,7 @@ export function SettingsPage({
   onOpenChange,
   onImportSuccess,
   defaultTab = "general",
+  initialUsageAppType,
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const {
@@ -512,6 +515,8 @@ export function SettingsPage({
 
               <TabsContent value="usage" className="mt-0">
                 <UsageDashboard
+                  key={initialUsageAppType ?? "all"}
+                  initialAppType={initialUsageAppType}
                   refreshIntervalMs={settings?.usageDashboardRefreshIntervalMs}
                   onRefreshIntervalChange={(usageDashboardRefreshIntervalMs) =>
                     handleAutoSave({ usageDashboardRefreshIntervalMs })

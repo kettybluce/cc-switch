@@ -62,6 +62,7 @@ import {
   DRAG_REGION_ATTR,
   DRAG_REGION_STYLE,
 } from "@/lib/platform";
+import { appHasUsageDashboard, type AppTypeFilter } from "@/types/usage";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProfileSwitcher } from "@/components/profiles/ProfileSwitcher";
 import { ProviderList } from "@/components/providers/ProviderList";
@@ -185,6 +186,9 @@ function App() {
   const [skillsDiscoverySource, setSkillsDiscoverySource] =
     useState<SkillsPageSource>("repos");
   const [settingsDefaultTab, setSettingsDefaultTab] = useState("general");
+  const [settingsUsageAppType, setSettingsUsageAppType] = useState<
+    AppTypeFilter | undefined
+  >(undefined);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [mcpManagementBusy, setMcpManagementBusy] = useState(false);
@@ -1016,6 +1020,7 @@ function App() {
               onOpenChange={() => setCurrentView("providers")}
               onImportSuccess={handleImportSuccess}
               defaultTab={settingsDefaultTab}
+              initialUsageAppType={settingsUsageAppType}
             />
           );
         case "prompts":
@@ -1337,6 +1342,7 @@ function App() {
                   size="icon"
                   onClick={() => {
                     setSettingsDefaultTab("general");
+                    setSettingsUsageAppType(undefined);
                     setCurrentView("settings");
                   }}
                   title={t("common.settings")}
@@ -1347,15 +1353,17 @@ function App() {
                 <UpdateBadge
                   onClick={() => {
                     setSettingsDefaultTab("about");
+                    setSettingsUsageAppType(undefined);
                     setCurrentView("settings");
                   }}
                 />
-                {isCurrentAppTakeoverActive && (
+                {appHasUsageDashboard(activeApp) && (
                   <Button
                     variant="ghost"
                     size="icon"
                     onClick={() => {
                       setSettingsDefaultTab("usage");
+                      setSettingsUsageAppType(activeApp as AppTypeFilter);
                       setCurrentView("settings");
                     }}
                     title={t("usage.title", {

@@ -124,6 +124,21 @@ describe("UsageDashboard", () => {
     expect(screen.getByTestId("select-5000")).toBeInTheDocument();
   });
 
+  it("starts on the Pi filter when opened from the Pi provider page", async () => {
+    renderDashboard({ initialAppType: "pi" });
+
+    await waitFor(() =>
+      expect(useProviderStatsMock).toHaveBeenLastCalledWith(
+        expect.anything(),
+        { appType: "pi" },
+        expect.anything(),
+      ),
+    );
+    expect(usageHeroMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ appType: "pi" }),
+    );
+  });
+
   it("filters usage queries to Pi", async () => {
     renderDashboard();
 

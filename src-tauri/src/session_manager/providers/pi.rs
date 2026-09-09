@@ -771,6 +771,7 @@ fn push_jsonl_file(entry: &fs::DirEntry, output: &mut Vec<PathBuf>, enforce_size
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     fn write_session_header(path: &Path, id: &str) {
         fs::create_dir_all(path.parent().expect("session parent")).expect("create session parent");
@@ -779,6 +780,22 @@ mod tests {
             format!("{{\"type\":\"session\",\"version\":3,\"id\":\"{id}\",\"cwd\":\"/work\"}}\n"),
         )
         .expect("write session");
+    }
+
+    #[test]
+    #[serial]
+    fn default_session_root_is_agent_sessions_not_a_windows_mirror() {
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let expected = crate::pi_config::get_pi_agent_dir()
+            .expect("agent dir")
+            .join("sessions");
+        assert_eq!(session_roots(), vec![expected]);
+        assert!(session_roots().iter().all(|root| {
+            !root
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("pi-wsl-sessions")
+        }));
     }
 
     #[test]
