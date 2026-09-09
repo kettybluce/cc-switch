@@ -25,12 +25,15 @@ use super::wsl::test_support::{LocalBashRunner, RunnerGuard};
 use super::wsl::{WslExecResult, WslRunner};
 use super::PiRuntimeTarget;
 use super::SESSION_JSONL_MAXDEPTH;
+use crate::app_config::AppType;
 use crate::database::Database;
 use crate::provider::Provider;
+use crate::services::provider::ProviderService;
 use crate::services::session_usage_pi::sync_pi_usage;
 use crate::session_manager::providers::pi::{
     decode_session_cwd, encode_session_cwd, scan_sessions,
 };
+use crate::store::AppState;
 use rust_decimal::Decimal;
 use serde_json::json;
 use serial_test::serial;
@@ -913,6 +916,124 @@ fn user_mirrored_firewall_dnstunnel_e2e_self_test() {
             || files::ATOMIC_STAGE_SNIPPET.contains("mktemp -p")
     );
     assert!(!files::ATOMIC_STAGE_SNIPPET.contains("$dir/.cc-switch-XXXXXX"));
+}
+
+/// Settings click / focus must never spawn `wsl.exe` / curl. A runner that
+/// panics on any invocation proves `plan_ui_snapshot` is a local snapshot.
+#[derive(Debug)]
+struct PanicOnWslRunner;
+
+impl WslRunner for PanicOnWslRunner {
+    fn run(
+        &self,
+        request: &crate::pi_runtime::wsl::WslRequest,
+    ) -> crate::pi_runtime::PiResult<WslExecResult> {
+        panic!(
+            "plan_ui_snapshot must not invoke WSL (script starts with {:?})",
+            request.script.chars().take(80).collect::<String>()
+        );
+    }
+
+    fn list_distros(&self) -> crate::pi_runtime::PiResult<Vec<String>> {
+        panic!("plan_ui_snapshot must not list WSL distros");
+    }
+}
+
+#[test]
+fn plan_ui_snapshot_never_invokes_wsl_runner() {
+    let _runner = RunnerGuard::install(Arc::new(PanicOnWslRunner));
+    let wsl = PiRuntimeTarget::Wsl {
+        distro: DISTRO.into(),
+        home: "/home/tfdx8045".into(),
+        agent_dir: "/home/tfdx8045/.pi/agent".into(),
+    };
+    let plan = proxy::plan_ui_snapshot(&wsl, true, USER_MIRRORED.proxy_port);
+    assert!(plan.gateway.reachable);
+    assert_eq!(plan.origin.as_deref(), Some("http://127.0.0.1:15721"));
+    assert_eq!(plan.gateway.host.as_deref(), Some("127.0.0.1"));
+}
+
+/// Enable 「百胜」 is `ProviderService::switch` → `insert_pi_provider` →
+/// `files::read` + `files::write`. Production v4.1.3 failed here with
+/// empty bash / dropped `$1`. Must succeed on the user topology.
+#[test]
+#[serial]
+fn enable_pi_provider_on_user_topology_survives_dropped_argv() {
+    let harness = WslHarness::install("identical");
+    let _topo = RunnerGuard::install(Arc::new(UserMirroredTopologyRunner::new(
+        LocalBashRunner::new(DISTRO, harness.wsl_home.clone()),
+    )));
+
+    let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+    let mut card = harness_card();
+    card.id = "baisheng".to_string();
+    card.name = "百胜".to_string();
+    if let Some(object) = card.settings_config.as_object_mut() {
+        object.insert("name".into(), json!("百胜"));
+    }
+    state
+        .db
+        .save_provider("pi", &card)
+        .expect("store 百胜 card");
+
+    ProviderService::switch(&state, AppType::Pi, "baisheng")
+        .expect("enable 百胜 must not empty-bash when WSL drops $1");
+
+    let agent = read_text(&harness.agent_models());
+    let top = read_text(&harness.top_models());
+    assert!(
+        agent.contains("baisheng"),
+        "enable must insert 百胜 into agent models.json: {agent}"
+    );
+    assert_eq!(agent, top, "top-level mirror must stay in sync");
+    assert!(
+        !agent.contains("/bin/bash: line 1: '': No such file or directory"),
+        "must never invoke empty bash"
+    );
+}
+
+#[test]
+#[serial]
+fn claude_codex_writes_survive_dropped_argv_on_user_topology() {
+    let harness = WslHarness::install("identical");
+    let _topo = RunnerGuard::install(Arc::new(UserMirroredTopologyRunner::new(
+        LocalBashRunner::new(DISTRO, harness.wsl_home.clone()),
+    )));
+
+    let settings = json!({
+        "env": {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
+            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+        }
+    });
+    assert!(
+        crate::wsl_cli::write_claude_settings(&settings).expect("write claude"),
+        "Claude settings write must be handled by the WSL runtime"
+    );
+    let claude = read_text(&harness.wsl_home.join(".claude/settings.json"));
+    assert!(claude.contains("127.0.0.1:15721"));
+    assert!(!claude.contains(r"\\wsl"));
+
+    let auth = json!({ "OPENAI_API_KEY": "PROXY_MANAGED" });
+    let config = r#"
+model_provider = "custom"
+model = "glm-5.2"
+
+[model_providers.custom]
+name = "Custom"
+base_url = "http://127.0.0.1:15721/v1"
+wire_api = "responses"
+transport_kind = "responses_http"
+"#;
+    assert!(
+        crate::wsl_cli::write_codex_live(Some(&auth), Some(config)).expect("write codex"),
+        "Codex write must be handled by the WSL runtime"
+    );
+    let auth_text = read_text(&harness.wsl_home.join(".codex/auth.json"));
+    let toml = read_text(&harness.wsl_home.join(".codex/config.toml"));
+    assert!(auth_text.contains("PROXY_MANAGED"));
+    assert!(toml.contains("127.0.0.1:15721"));
+    assert!(!toml.contains(r"\\wsl"));
 }
 
 #[test]
