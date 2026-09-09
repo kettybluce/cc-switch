@@ -198,9 +198,8 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const refreshSessions = useCallback(async () => {
     setIsRefreshingSessions(true);
     try {
-      // WSL Pi sessions are mirrored through wsl.exe. Do not gate this on
-      // the proxy route probe — a false-negative /health check must not
-      // block 「刷新会话」.
+      // WSL Pi sessions are read in-place from the distribution home
+      // (`\\wsl.localhost\…`). Do not gate this on the proxy route probe.
       await piApi.syncWslSessions();
     } catch {
       // Local runtime returns an empty outcome; a hard error still lists

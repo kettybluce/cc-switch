@@ -73,13 +73,13 @@ pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
 }
 
 fn require_absolute(path: PathBuf, source: &str) -> Result<PathBuf, AppError> {
-    if !path.is_absolute() {
-        return Err(AppError::InvalidInput(format!(
-            "{source} must resolve to an absolute directory: {}",
-            path.display()
-        )));
+    if path.is_absolute() || crate::wsl_cli::is_wsl_unc_path(&path) {
+        return Ok(path);
     }
-    Ok(path)
+    Err(AppError::InvalidInput(format!(
+        "{source} must resolve to an absolute directory: {}",
+        path.display()
+    )))
 }
 
 /// True when `path` is already the agent layer (`…/agent`), not Pi home.

@@ -89,12 +89,23 @@ pub(crate) async fn set_pi_runtime(
     Ok(crate::pi_runtime::status())
 }
 
-/// Mirror WSL Pi sessions now, bypassing the refresh throttle.
+/// Refresh hook for the session page. Walks the WSL home in place
+/// (`\\wsl.localhost\…` on Windows); nothing is copied to C:.
 #[tauri::command]
 pub(crate) fn sync_pi_wsl_sessions() -> Result<SessionSyncOutcome, String> {
     let target = crate::pi_runtime::target();
-    crate::pi_runtime::sessions::invalidate_sync_throttle();
-    crate::pi_runtime::sessions::sync(&target).map_err(|error| error.to_string())
+    // No C: mirror. `sync` stays in the refresh path so leftover callers
+    // cannot reintroduce a profile copy.
+    let _ = crate::pi_runtime::sessions::sync(&target);
+    if !target.is_wsl() {
+        return Ok(SessionSyncOutcome::default());
+    }
+    let files = crate::session_manager::providers::pi::session_files().unwrap_or_default();
+    Ok(SessionSyncOutcome {
+        total: files.len(),
+        unchanged: files.len(),
+        ..Default::default()
+    })
 }
 
 /// Proxy plan for Pi: resolved local-proxy origin and whether models.json

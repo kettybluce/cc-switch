@@ -31,7 +31,7 @@ use crate::provider::Provider;
 use crate::services::provider::ProviderService;
 use crate::services::session_usage_pi::sync_pi_usage;
 use crate::session_manager::providers::pi::{
-    decode_session_cwd, encode_session_cwd, scan_sessions,
+    decode_session_cwd, encode_session_cwd, scan_sessions, session_files, session_roots,
 };
 use crate::store::AppState;
 use rust_decimal::Decimal;
@@ -245,40 +245,34 @@ fn runner_discovers_nested_cwd_group_and_task_sessions_that_a_flat_glob_misses()
     );
     assert!(sessions_root.join(CWD_GROUP).is_dir());
 
-    let outcome = sessions::sync(&harness.target).expect("mirror via runner find");
+    let home_sessions = harness.sessions_root().join(CWD_GROUP);
     assert!(
-        outcome.errors.is_empty(),
-        "session sync errors: {:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.fetched, EXPECTED_JSONL,
-        "parent, mapped, tasks/*.jsonl, and tasks/group/*.jsonl (depth 5 > old maxdepth 4)"
-    );
-    assert_eq!(outcome.total, EXPECTED_JSONL);
-
-    let mirrored = sessions::cache_root(DISTRO)
-        .join("sessions")
-        .join(CWD_GROUP);
-    assert!(
-        mirrored.join("2026-03-14T10-32-00_abc.jsonl").is_file(),
-        "parent session should be mirrored under the encoded cwd group"
+        home_sessions
+            .join("2026-03-14T10-32-00_abc.jsonl")
+            .is_file(),
+        "parent session stays under the WSL home cwd group"
     );
     assert!(
-        mirrored
+        home_sessions
             .join("2026-03-14T10-32-00_abc/tasks/task-1.jsonl")
             .is_file(),
-        "task session should be mirrored at depth 4"
+        "task session stays at depth 4 in the WSL home"
     );
     assert!(
-        mirrored
+        home_sessions
             .join("2026-03-14T10-32-00_abc/tasks/group/deep-task.jsonl")
             .is_file(),
         "depth-5 tasks/group JSONL must not be dropped by the old maxdepth 4"
     );
     assert!(
-        mirrored.join("2026-03-14T11-00-00_map.jsonl").is_file(),
-        "cwd-group mapped-model JSONL should be mirrored"
+        home_sessions
+            .join("2026-03-14T11-00-00_map.jsonl")
+            .is_file(),
+        "cwd-group mapped-model JSONL stays in the WSL home"
+    );
+    assert!(
+        !sessions::cache_root(DISTRO).join("sessions").exists(),
+        "listing must not copy sessions into .cc-switch/pi-wsl-sessions"
     );
 
     let discovered = scan_sessions();
@@ -319,7 +313,7 @@ fn jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json() {
     sessions::invalidate_sync_throttle();
 
     let db = Database::memory().expect("memory db");
-    let result = sync_pi_usage(&db).expect("import usage from mirrored sessions");
+    let result = sync_pi_usage(&db).expect("import usage from WSL-home sessions");
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(
         result.imported, EXPECTED_JSONL as u32,
@@ -370,6 +364,94 @@ fn jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json() {
         Decimal::from_str(&mapped.2).expect("mapped decimal"),
         Decimal::from_str("8").expect("8")
     );
+}
+
+/// Sessions list and usage scan must share the WSL-home tree (UNC on Windows),
+/// including the `--home--…--` cwd encoding seen on Ubuntu-22.04, and must
+/// not copy JSONL into `%USERPROFILE%\.cc-switch\pi-wsl-sessions`.
+#[test]
+#[serial]
+fn session_list_and_usage_share_wsl_home_unc_layout_without_profile_mirror() {
+    let harness = WslHarness::install("identical");
+    let cwd_group = "--home--tfdx8045--code--agent--";
+    let session_dir = harness.sessions_root().join(cwd_group);
+    fs::create_dir_all(&session_dir).expect("user-style cwd group");
+    let session_file = session_dir.join("2026-09-09T03-33-56-122Z_01a0843a.jsonl");
+    fs::write(
+        &session_file,
+        concat!(
+            r#"{"type":"session","version":3,"id":"sess-unc-home","timestamp":"2026-09-09T03:33:56.122Z","cwd":"/home/tfdx8045/code/agent"}"#,
+            "\n",
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-09-09T03:34:00.000Z","message":{"role":"user","content":[{"type":"text","text":"list the repo"}],"timestamp":1757393640000}}"#,
+            "\n",
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-09-09T03:34:08.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"provider":"cc-switch-harness","model":"gpt-4.1-mini","responseId":"msg_unc","timestamp":1757393648000,"usage":{"input":1000,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":1020,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop"}}"#,
+            "\n",
+        ),
+    )
+    .expect("write UNC-layout session");
+
+    let listed = scan_sessions();
+    assert!(
+        listed
+            .iter()
+            .any(|session| session.session_id == "sess-unc-home"),
+        "session list must see the WSL-home JSONL: {:?}",
+        listed
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        listed.iter().all(|session| {
+            session
+                .source_path
+                .as_deref()
+                .is_none_or(|path| !path.contains("pi-wsl-sessions"))
+        }),
+        "source_path must not be a C: profile mirror: {:?}",
+        listed
+            .iter()
+            .filter_map(|s| s.source_path.as_deref())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        session_roots()
+            .iter()
+            .all(|root| !root.to_string_lossy().contains("pi-wsl-sessions")),
+        "session root must be the WSL home: {:?}",
+        session_roots()
+    );
+
+    let files = session_files().expect("discover the same tree usage walks");
+    assert!(
+        files.iter().any(|path| path.file_name()
+            == Some(std::ffi::OsStr::new(
+                "2026-09-09T03-33-56-122Z_01a0843a.jsonl"
+            ))),
+        "usage discovery must include the WSL-home file: {files:?}"
+    );
+    assert!(
+        !sessions::cache_root(DISTRO).join("sessions").exists(),
+        "usage/list must not populate .cc-switch/pi-wsl-sessions"
+    );
+
+    let db = Database::memory().expect("memory db");
+    let result = sync_pi_usage(&db).expect("import from the shared WSL-home root");
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert!(
+        result.imported >= 1,
+        "usage scan of the same morning session must import at least the UNC-layout turn"
+    );
+    let conn = db.conn.lock().expect("lock usage db");
+    let imported: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs
+             WHERE data_source = 'pi_session' AND session_id = 'sess-unc-home'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count UNC-layout usage");
+    assert_eq!(imported, 1);
 }
 
 #[test]
@@ -681,13 +763,24 @@ fn session_refresh_does_not_depend_on_proxy_probe() {
     assert!(!health.reachable, "fixture is a failed probe");
 
     sessions::invalidate_sync_throttle();
-    let outcome = sessions::sync(&harness.target).expect("session sync via wsl.exe");
-    assert!(
-        outcome.errors.is_empty(),
-        "session refresh must not gate on proxy reachability: {:?}",
-        outcome.errors
+    assert_eq!(
+        sessions::sync(&harness.target).expect("Pi sync is a no-op"),
+        sessions::SessionSyncOutcome::default()
     );
-    assert_eq!(outcome.total, EXPECTED_JSONL);
+    let listed = scan_sessions();
+    assert_eq!(
+        listed.len(),
+        EXPECTED_JSONL,
+        "session list walks the WSL home without a C: mirror or proxy: {:?}",
+        listed
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !sessions::cache_root(DISTRO).join("sessions").exists(),
+        "refresh must not copy sessions into .cc-switch/pi-wsl-sessions"
+    );
 }
 
 #[test]
