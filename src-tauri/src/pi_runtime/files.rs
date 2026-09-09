@@ -41,7 +41,9 @@ cat -- "$1"
 /// Stage the payload under `$TMPDIR` or `/tmp`. Never `mktemp` at `/` — an
 /// empty `$1` used to expand `"$dir/.cc-switch-XXXXXX"` into
 /// `/.cc-switch-XXXXXX` (Codex WSL write on Ubuntu-22.04).
-pub const ATOMIC_STAGE_SNIPPET: &str = r#"
+macro_rules! atomic_stage_snippet {
+    () => {
+        r#"
 stage="${TMPDIR:-/tmp}"
 case "$stage" in
   /*) ;;
@@ -54,7 +56,11 @@ mkdir -p -- "$stage" || { printf 'mkdir-failed\n' >&2; exit 1; }
 tmp=$(mktemp -p "$stage" cc-switch-XXXXXX 2>/dev/null) \
   || tmp=$(mktemp /tmp/cc-switch-XXXXXX) \
   || { printf 'mktemp-failed\n' >&2; exit 1; }
-"#;
+"#
+    };
+}
+
+pub const ATOMIC_STAGE_SNIPPET: &str = atomic_stage_snippet!();
 
 /// `$1` target, `$2` expected revision, `$3` digest of the incoming payload.
 const WRITE_SCRIPT: &str = concat!(
@@ -78,7 +84,7 @@ fi
 if [ "$actual" != "$expected" ]; then printf 'revision-mismatch\n'; exit 0; fi
 umask 077
 "#,
-    ATOMIC_STAGE_SNIPPET,
+    atomic_stage_snippet!(),
     r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }
@@ -108,7 +114,7 @@ mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
 chmod 700 -- "$dir" 2>/dev/null || true
 umask 077
 "#,
-    ATOMIC_STAGE_SNIPPET,
+    atomic_stage_snippet!(),
     r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }

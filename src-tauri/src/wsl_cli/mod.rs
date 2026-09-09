@@ -29,7 +29,20 @@ mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
 chmod 700 -- "$dir" 2>/dev/null || true
 umask 077
 "#,
-    files::ATOMIC_STAGE_SNIPPET,
+    r#"
+stage="${TMPDIR:-/tmp}"
+case "$stage" in
+  /*) ;;
+  *) stage=/tmp ;;
+esac
+if [ ! -d "$stage" ]; then
+  stage=/tmp
+fi
+mkdir -p -- "$stage" || { printf 'mkdir-failed\n' >&2; exit 1; }
+tmp=$(mktemp -p "$stage" cc-switch-XXXXXX 2>/dev/null) \
+  || tmp=$(mktemp /tmp/cc-switch-XXXXXX) \
+  || { printf 'mktemp-failed\n' >&2; exit 1; }
+"#,
     r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }
@@ -181,9 +194,8 @@ pub fn write_claude_settings(settings: &Value) -> Result<bool, AppError> {
     let Some(home) = active_wsl_home() else {
         return Ok(false);
     };
-    let bytes = serde_json::to_vec_pretty(settings).map_err(|error| AppError::JsonSerialize {
-        source: error,
-    })?;
+    let bytes = serde_json::to_vec_pretty(settings)
+        .map_err(|error| AppError::JsonSerialize { source: error })?;
     overwrite_linux_file(&home.distro, &home.claude_settings(), &bytes)?;
     Ok(true)
 }
@@ -194,9 +206,8 @@ pub fn write_codex_live(auth: Option<&Value>, config_text: Option<&str>) -> Resu
         return Ok(false);
     };
     if let Some(auth) = auth {
-        let bytes = serde_json::to_vec_pretty(auth).map_err(|error| AppError::JsonSerialize {
-            source: error,
-        })?;
+        let bytes = serde_json::to_vec_pretty(auth)
+            .map_err(|error| AppError::JsonSerialize { source: error })?;
         overwrite_linux_file(&home.distro, &home.codex_auth(), &bytes)?;
     }
     if let Some(config) = config_text {
@@ -230,9 +241,7 @@ fn app_cache(distro: &str, name: &str) -> PathBuf {
 fn prepare_tree(home: &WslHome, linux_root: &str, cache_name: &str) -> PathBuf {
     let cache = app_cache(&home.distro, cache_name);
     if let Err(error) = sessions::sync_tree(&home.distro, linux_root, &cache) {
-        log::warn!(
-            "[WslCli] session sync via wsl.exe failed for {linux_root}: {error}"
-        );
+        log::warn!("[WslCli] session sync via wsl.exe failed for {linux_root}: {error}");
     }
     cache
 }
@@ -242,7 +251,11 @@ fn prepare_tree(home: &WslHome, linux_root: &str, cache_name: &str) -> PathBuf {
 /// `None` means skip this pass (UNC override with no WSL runtime).
 pub fn claude_projects_dir() -> Option<PathBuf> {
     if let Some(home) = active_wsl_home() {
-        return Some(prepare_tree(&home, &home.claude_projects(), "claude-projects"));
+        return Some(prepare_tree(
+            &home,
+            &home.claude_projects(),
+            "claude-projects",
+        ));
     }
     let dir = crate::config::get_claude_config_dir();
     if is_wsl_unc_path(&dir) {
@@ -335,7 +348,10 @@ mod tests {
             distro: "Ubuntu-22.04".to_string(),
             home: "/home/tfdx8045".to_string(),
         };
-        assert_eq!(home.claude_settings(), "/home/tfdx8045/.claude/settings.json");
+        assert_eq!(
+            home.claude_settings(),
+            "/home/tfdx8045/.claude/settings.json"
+        );
         assert_eq!(home.codex_auth(), "/home/tfdx8045/.codex/auth.json");
         assert!(!home.display(&home.claude_settings()).contains(r"\\wsl"));
         assert!(home.display(&home.claude_settings()).starts_with("wsl:"));

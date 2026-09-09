@@ -698,13 +698,16 @@ fn mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead() {
 #[serial]
 fn writing_models_json_via_wsl_runner_round_trips_and_never_mktemps_at_root() {
     let harness = WslHarness::install("identical");
-    let document = br#"{"providers":{"baisheng":{"name":"百胜","baseUrl":"https://api.example.com/v1"}}}"#;
+    let document =
+        br#"{"providers":{"baisheng":{"name":"BaiSheng","baseUrl":"https://api.example.com/v1"}}}"#;
     let location = files::locate(PiFile::Models).expect("locate models");
     assert!(matches!(location, PiFileLocation::Wsl { .. }));
 
-    files::write(PiFile::Models, document, &files::revision(
-        &fs::read(harness.agent_models()).expect("current agent"),
-    ))
+    files::write(
+        PiFile::Models,
+        document,
+        &files::revision(&fs::read(harness.agent_models()).expect("current agent")),
+    )
     .expect("write models.json via WslRunner");
 
     let agent = fs::read(harness.agent_models()).expect("agent after write");

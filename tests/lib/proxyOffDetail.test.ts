@@ -4,9 +4,7 @@ import { isProxyOffDetail } from "@/lib/query/pi";
 describe("isProxyOffDetail", () => {
   it("maps Windows /ping connection refused to start-the-proxy", () => {
     expect(
-      isProxyOffDetail(
-        'Get "http://127.0.0.1:15721/ping": connection refused',
-      ),
+      isProxyOffDetail('Get "http://127.0.0.1:15721/ping": connection refused'),
     ).toBe(true);
   });
 
