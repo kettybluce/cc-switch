@@ -5,6 +5,23 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.4] - 2026-09-09
+
+Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #27). Fixes the Claude WSL About badge, always-visible Pi Usage Stats, UNC `.pi/agent/sessions`, Pi-filterable proxy logs plus session JSONL, Claude-parity local proxy projection, and documents Portable-first for MSI Error 5. `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- **Claude WSL badge shows Win on `\\wsl.localhost\…\.claude`**: restore official override-path UNC detection; About card shows **WSL · distro**.
+- **Pi Usage Stats hidden behind proxy takeover**: header BarChart2 is always visible for Pi/Claude-class apps.
+- **Pi sessions**: list/refresh from `…\.pi\agent\sessions` on WSL UNC; no C: `pi-wsl-sessions` mirror.
+- **Usage stats omit Pi proxy traffic**: shared listen logs can be filtered as `app_type=pi` via `x-cc-switch-app` (no SCHEMA bump).
+- **MSI Error 5 / `D:\Config.Msi` ACL**: per-user WiX cannot fix it; **use Portable zip first**. See `docs/windows-msi-error-5-zh.md`.
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+
 ## [3.20.3] - 2026-09-09
 
 Fork iteration on the official 3.20.2 baseline (this repository's `main` tip, including merged PR #25). Pi local-proxy takeover now matches Claude: `~/.pi/agent/models.json` is projected onto the existing Claude listen, requests hit the current Anthropic/OpenAI routes and `proxy_request_logs`, and the Pi page jumps to usage stats while takeover is on. `SCHEMA_VERSION` stays at 18 so the database can be opened again by official 3.20.2. Windows x64 MSI + Portable only.
