@@ -1,0 +1,12 @@
+===== CMD =====
+cargo test --manifest-path src-tauri/Cargo.toml --lib reading_survives_when_wsl_drops_positional_args -- --nocapture --test-threads=1
+===== START 2026-09-09T03:21:24Z =====
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
+
+running 1 test
+test pi_runtime::files::tests::reading_survives_when_wsl_drops_positional_args ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2993 filtered out; finished in 0.13s
+
+===== EXIT=0 END 2026-09-09T03:21:24Z =====

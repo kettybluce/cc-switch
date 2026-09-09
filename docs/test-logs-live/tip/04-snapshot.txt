@@ -1,0 +1,12 @@
+===== CMD =====
+cargo test --manifest-path src-tauri/Cargo.toml --lib plan_ui_snapshot_never_invokes_wsl_runner -- --nocapture --test-threads=1
+===== START 2026-09-09T03:21:24Z =====
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
+
+running 1 test
+test pi_runtime::wsl_linux_harness::plan_ui_snapshot_never_invokes_wsl_runner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2993 filtered out; finished in 0.00s
+
+===== EXIT=0 END 2026-09-09T03:21:25Z =====

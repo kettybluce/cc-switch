@@ -1,0 +1,15 @@
+===== CMD =====
+cargo test --manifest-path src-tauri/Cargo.toml --lib wsl_cli:: -- --nocapture --test-threads=1
+===== START 2026-09-09T03:21:34Z =====
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
+
+running 4 tests
+test wsl_cli::tests::detects_wsl_unc_shapes ... ok
+test wsl_cli::tests::overwrite_script_stages_under_tmp_never_at_root ... ok
+test wsl_cli::tests::reject_unc_override_drops_wsl_paths ... ok
+test wsl_cli::tests::wsl_home_paths_stay_posix_and_never_unc ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2990 filtered out; finished in 0.00s
+
+===== EXIT=0 END 2026-09-09T03:21:34Z =====

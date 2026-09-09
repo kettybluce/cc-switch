@@ -2,26 +2,35 @@
 
 > **标签（必须读）**：本次是 Cursor Cloud Agent 上的 **Ubuntu 24.04.4 Linux fixture 实测**。  
 > **不是** Windows MSI 安装验收，**不是** 真机 `wsl.exe`，**没有** 用户本机 Ubuntu-22.04 / `machineId`。  
-> **未打 tag、未发 MSI。** 请继续用 v3.0.1，等后续中文报告全表 PASS 后再决定是否通知安装。
+> **本任务未打 tag、未发 MSI。** 下面的 PASS 全部来自本机 `cargo test` / `pnpm test:unit` 的真实退出码和日志，不是口头对照。
 
 | 项 | 值 |
 | --- | --- |
 | 仓库 / PR | `kettybluce/cc-switch` [PR #18](https://github.com/kettybluce/cc-switch/pull/18) |
 | 分支 | `cursor/wsl-detect-mktemp-4.1.4-739a` |
-| 实测 SHA | `a7162776d815a95447c691171cedd8eaf8a034c4`（与 `origin` 尖端一致） |
 | 主机 | `cursor` · Linux 6.12.94+ x86_64 · Ubuntu 24.04.4 LTS |
-| 时间（UTC） | 2026-09-09 03:15:03 — 03:18:30 |
 | 工具链 | rustc/cargo 1.95.0 · node v22.14.0 · pnpm 10.12.3 · bash 5.2.21 · curl 8.5.0 · GNU find 4.9.0 |
 | `wsl.exe` | **不存在**（`command -v wsl.exe` → no） |
 | `msiexec` | **不存在** |
 | 替身 | `LocalBashRunner` + `UserMirroredTopologyRunner`（本机 `bash` 执行编译期脚本常量；丢掉 `$1`；回放 mirrored + firewall + dnsTunneling 探测矩阵） |
 | 夹具 | `tests/fixtures/pi-wsl/` 假 `~/.pi/agent` |
-| 总评 | **本表全部 PASS。** 覆盖 #18 的 detect toast / Settings 快照 / 丢掉 `$1` 的 write / `/tmp` mktemp。**不含** stacked PR #19 的 `files::read` 回退。 |
+| 总评 | **两轮全部 PASS。** 本任务不打 tag、不发 MSI。 |
 
-完整命令日志副本：
+## 两轮实测
 
-- 云端 artifacts：`/opt/cursor/artifacts/test-report-live-zh.md`、`/opt/cursor/artifacts/logs/`、`/opt/cursor/artifacts/test-logs-live/`
-- 仓库：`docs/test-logs-live/`（不含 crate 下载刷屏；编译尾部见 `01-cargo-compile-tail.txt`）
+| 轮次 | 代码 SHA | 时间 (UTC) | 结果 |
+| --- | --- | --- | --- |
+| 1（起步时 PR #18 tip） | `a7162776d815a95447c691171cedd8eaf8a034c4` | 03:15:03–03:18:30 | **PASS**：e2e 1/1；harness 20/20；`pi_runtime::` 127/127；pnpm 23/23 |
+| 2（rebase 后，含 #19 read 回退） | 代码 `46b7db6f66398663b5bc2623dc92a2aec84cbc13`（工作树再加本报告） | 03:20:42–03:21:34 | **PASS**：e2e 1/1；enable/read/snapshot 各 1/1；harness 23/23；`pi_runtime::` 131/131；`wsl_cli::` 4/4 |
+
+第 1 轮起步后远端又合入 `89be8705`（Pi enable/read 丢掉 `$1`）等文档。第 2 轮在含该修复的树上 **重新编译并重跑**，所以 enable 路径也有现场日志。
+
+原始日志：
+
+- 云端：`/opt/cursor/artifacts/test-report-live-zh.md`、`/opt/cursor/artifacts/logs/`（第 1 轮）、`/opt/cursor/artifacts/logs-tip/`（第 2 轮）
+- 仓库：`docs/test-logs-live/`（第 1 轮）、`docs/test-logs-live/tip/`（第 2 轮）
+
+另有审计叙述稿 [`docs/test-report-v4.1.4-zh.md`](test-report-v4.1.4-zh.md)。**本文件是本机命令的逐条退出码与完整相关输出。**
 
 ---
 
@@ -66,7 +75,7 @@ pnpm install --frozen-lockfile
 mkdir -p dist
 ```
 
-实测（`RUST_BACKTRACE=1`，`--nocapture --test-threads=1`）：
+第 1 轮（`a7162776`，`RUST_BACKTRACE=1`，`--nocapture --test-threads=1`）：
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
@@ -77,58 +86,82 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib mirrored_topology -- --noc
 pnpm test:unit tests/pi-wsl-harness.test.ts tests/components/PiRuntimeSettings.test.tsx tests/lib/proxyOffDetail.test.ts
 ```
 
+第 2 轮（代码 `46b7db6f`，rebase 后重编）：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --lib user_mirrored_firewall_dnstunnel_e2e_self_test -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib enable_pi_provider_on_user_topology_survives_dropped_argv -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib reading_survives_when_wsl_drops_positional_args -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib plan_ui_snapshot_never_invokes_wsl_runner -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib wsl_linux_harness -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib pi_runtime:: -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib wsl_cli:: -- --nocapture --test-threads=1
+```
+
 ---
 
-## PASS / FAIL 总表
+## PASS / FAIL 总表（第 2 轮，当前 tip）
 
 | # | 命令 / 套件 | 结果 | 计数 | 耗时 |
 | --- | --- | --- | --- | --- |
-| 0 | 环境探测：Linux / 无 `wsl.exe` / 无 `msiexec` | **PASS** | — | — |
-| 1 | `cargo test --lib --no-run`（拉 crate + 编译） | **PASS** | compile ok | 2m 45s（首次无 cache） |
-| 2 | `user_mirrored_firewall_dnstunnel_e2e_self_test` | **PASS** | 1 passed; 0 failed | 0.05s（+ 13.74s 链 test bin） |
-| 3 | `--lib wsl_linux_harness` | **PASS** | 20 passed; 0 failed | 2.79s |
-| 4 | `--lib pi_runtime::` | **PASS** | 127 passed; 0 failed | 4.20s |
-| 5 | `--lib mirrored_topology` | **PASS** | 1 passed; 0 failed | 0.00s |
-| 6 | `pnpm test:unit` 相关 3 个文件 | **PASS** | 23 passed; 0 failed | 1.45s |
-| — | **合计（去重后）** | **PASS** | cargo 127 + pnpm 23，0 fail | — |
+| 0 | 环境：Linux / 无 `wsl.exe` / 无 `msiexec` | **PASS** | — | — |
+| 1 | `user_mirrored_firewall_dnstunnel_e2e_self_test` | **PASS** | 1 passed; 0 failed | 0.05s（重编 39.81s） |
+| 2 | `enable_pi_provider_on_user_topology_survives_dropped_argv` | **PASS** | 1 passed; 0 failed | 0.21s |
+| 3 | `reading_survives_when_wsl_drops_positional_args` | **PASS** | 1 passed; 0 failed | 0.13s |
+| 4 | `plan_ui_snapshot_never_invokes_wsl_runner` | **PASS** | 1 passed; 0 failed | 0.00s |
+| 5 | `--lib wsl_linux_harness` | **PASS** | 23 passed; 0 failed | 3.09s |
+| 6 | `--lib pi_runtime::` | **PASS** | 131 passed; 0 failed | 4.63s |
+| 7 | `--lib wsl_cli::` | **PASS** | 4 passed; 0 failed | 0.00s |
 | — | Windows MSI / 真 `wsl.exe` | **未跑（本环境没有）** | — | — |
-| — | 打 tag / 发 MSI | **未做（按任务禁止）** | — | — |
-| — | PR #19 `files::read` 丢掉 `$1` | **不在本次范围** | — | — |
+| — | 本任务打 tag / 发 MSI | **未做** | — | — |
 
-首次 `cargo test --lib --no-run --offline` 因空 registry 找不到 `arboard` 失败，已去掉 `--offline` 重跑成功。这是编译环境问题，不是产品测试失败。
+第 1 轮额外：`pnpm test:unit` 3 文件 **23 passed; 0 failed**（1.45s）。前端夹具与 #19 无关，第 2 轮未重跑。
+
+第 1 轮首次 `cargo test --lib --no-run --offline` 因空 registry 找不到 `arboard` 失败，去掉 `--offline` 后 2m 45s 编过。那是编译环境，不是产品测试失败。
 
 ---
 
-## E2E 断言（本次实际执行的那条）
+## E2E / enable / read 断言
 
-`pi_runtime::wsl_linux_harness::user_mirrored_firewall_dnstunnel_e2e_self_test` 在本机跑过并 **ok**：
+`user_mirrored_firewall_dnstunnel_e2e_self_test` 两轮都 **ok**：
 
 | 检查 | 期望 | 实测 |
 | --- | --- | --- |
 | 拓扑 | `networkingMode=mirrored` + firewall + dnsTunneling，distro `Ubuntu-22.04` | PASS |
 | Settings 快照 | `plan_ui_snapshot` 绿灯，不 multi-host curl WSL；host=`127.0.0.1`，strategy=`MirroredLoopback` | PASS |
 | 检测代理 | `resolve_gateway` 把 localhost HTTP 404 当成功；error 为空（不能 toast `no route`） | PASS |
-| 丢掉 `$1` 写 Pi `models.json` | `UserMirroredTopologyRunner.drop_write_args=true`；stdin→stage→sha256→`mv`；agent 与 top 双写一致 | PASS |
-| mktemp | `ATOMIC_STAGE_SNIPPET` 含 `mktemp /tmp/cc-switch-XXXXXX` 或 `mktemp -p`；不含 `$dir/.cc-switch-XXXXXX` | PASS |
-| 空 bash | runner 拒绝空脚本 / `''` | PASS（写入未触发 empty bash） |
+| 丢掉 `$1` 写 Pi `models.json` | `drop_write_args=true`；stdin→stage→sha256→`mv`；agent 与 top 双写一致 | PASS |
+| mktemp | snippet 含 `mktemp /tmp/cc-switch-XXXXXX` 或 `mktemp -p`；不含 `$dir/.cc-switch-XXXXXX` | PASS |
+
+第 2 轮新增（#19 合入后现场跑过）：
+
+| 测试 | 结果 |
+| --- | --- |
+| `enable_pi_provider_on_user_topology_survives_dropped_argv` | PASS（0.21s） |
+| `reading_survives_when_wsl_drops_positional_args` | PASS（0.13s） |
+| `plan_ui_snapshot_never_invokes_wsl_runner` | PASS |
+| `claude_codex_writes_survive_dropped_argv_on_user_topology` | PASS（含在 harness 23 条里） |
 
 ---
 
-## `wsl_linux_harness` 20 条逐条
+## `wsl_linux_harness` 第 2 轮 23 条逐条
 
-全部 **ok**（摘自 `04-wsl-linux-harness.txt`）：
+全部 **ok**（`docs/test-logs-live/tip/05-harness.txt`）：
 
 | 测试 | 结果 |
 | --- | --- |
 | `claude_and_codex_live_writes_use_wsl_runner_never_unc` | PASS |
+| `claude_codex_writes_survive_dropped_argv_on_user_topology` | PASS |
 | `cwd_encode_decode_round_trips_the_documented_pi_layout` | PASS |
 | `detect_treats_localhost_http_404_as_success_like_the_toast` | PASS |
+| `enable_pi_provider_on_user_topology_survives_dropped_argv` | PASS |
 | `jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json` | PASS |
 | `live_curl_404_on_loopback_is_a_reachable_route` | PASS（真 bind + curl） |
 | `mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead` | PASS |
 | `mocked_host_probe_prefers_mirrored_loopback_when_it_answers` | PASS |
 | `mocked_host_probe_treats_localhost_404_as_success_and_skips_nat_hosts` | PASS |
 | `models_json_write_survives_wsl_dropping_positional_args` | PASS |
+| `plan_ui_snapshot_never_invokes_wsl_runner` | PASS |
 | `probe_and_manifest_share_one_session_jsonl_maxdepth` | PASS |
 | `probe_session_count_includes_nested_jsonl_not_just_the_sessions_root` | PASS |
 | `project_and_restore_dual_write_wsl_agent_and_top_level_models` | PASS |
@@ -141,20 +174,9 @@ pnpm test:unit tests/pi-wsl-harness.test.ts tests/components/PiRuntimeSettings.t
 | `wsl_cli_rejects_unc_overrides_in_harness` | PASS |
 | `wsl_read_heals_identical_diverge_and_only_agent_models_mirrors` | PASS |
 
-`pi_runtime::` 另外还包括 detect / files / proxy / rewrite / sessions / wsl argv 等，合计 127，其中与本次修复直接相关的还有：
-
-- `files::tests::atomic_write_scripts_stage_under_tmp_never_at_root` … ok
-- `files::tests::empty_wsl_target_fails_without_mktemp_at_root` … ok
-- `proxy::tests::any_http_status_counts_as_reachable` … ok
-- `proxy::tests::ui_snapshot_does_not_need_a_wsl_probe` … ok
-- `proxy::tests::mirrored_firewall_dns_tunneling_topology_still_lists_localhost_first` … ok
-- `wsl::tests::dropped_arg_fallback_restores_positional_parameters` … ok
-- `wsl::tests::argv_rejects_an_empty_or_quote_only_script` … ok
-- `mirrored_topology::tests::default_profile_is_the_user_mirrored_firewall_dnstunnel_matrix` … ok
-
 ---
 
-## 附录：环境
+## 附录 A：环境（第 1 轮记录，机器未变）
 
 ```text
 ===== ENV =====
@@ -164,10 +186,8 @@ uname=Linux 6.12.94+ x86_64
 PRETTY_NAME="Ubuntu 24.04.4 LTS"
 VERSION_ID="24.04"
 pwd=/workspace
-user=uid=1000(ubuntu) gid=1000(ubuntu) groups=1000(ubuntu),4(adm),20(dialout),24(cdrom),25(floppy),27(sudo),29(audio),30(dip),44(video),46(plugdev)
 HOME=/home/ubuntu
 git=cursor/wsl-detect-mktemp-4.1.4-739a a7162776d815a95447c691171cedd8eaf8a034c4
-remote=a7162776d815a95447c691171cedd8eaf8a034c4
 rustc=rustc 1.95.0 (59807616e 2026-04-14)
 cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)
 node=v22.14.0
@@ -182,43 +202,65 @@ webkit=2.52.6
 gtk=3.24.41
 ```
 
-## 附录：E2E 全日志
+## 附录 B：第 2 轮关键命令全日志
+
+### B.1 E2E
 
 ```text
 ===== CMD =====
 cargo test --manifest-path src-tauri/Cargo.toml --lib user_mirrored_firewall_dnstunnel_e2e_self_test -- --nocapture --test-threads=1
-===== START 2026-09-09T03:18:07Z =====
+===== START 2026-09-09T03:20:42Z =====
    Compiling cc-switch v4.1.4 (/workspace/src-tauri)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.74s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.81s
      Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
 
 running 1 test
 test pi_runtime::wsl_linux_harness::user_mirrored_firewall_dnstunnel_e2e_self_test ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2989 filtered out; finished in 0.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2993 filtered out; finished in 0.05s
 
-===== EXIT=0 END 2026-09-09T03:18:21Z =====
+===== EXIT=0 END 2026-09-09T03:21:22Z =====
 ```
 
-## 附录：`wsl_linux_harness` 全日志
+### B.2 enable / read / snapshot
 
 ```text
-===== CMD =====
-cargo test --manifest-path src-tauri/Cargo.toml --lib wsl_linux_harness -- --nocapture --test-threads=1
-===== START 2026-09-09T03:18:21Z =====
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
-     Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
+===== START 2026-09-09T03:21:23Z =====
+running 1 test
+test pi_runtime::wsl_linux_harness::enable_pi_provider_on_user_topology_survives_dropped_argv ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2993 filtered out; finished in 0.21s
+===== EXIT=0 END 2026-09-09T03:21:23Z =====
 
-running 20 tests
+===== START 2026-09-09T03:21:24Z =====
+running 1 test
+test pi_runtime::files::tests::reading_survives_when_wsl_drops_positional_args ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2993 filtered out; finished in 0.13s
+===== EXIT=0 END 2026-09-09T03:21:24Z =====
+
+===== START 2026-09-09T03:21:24Z =====
+running 1 test
+test pi_runtime::wsl_linux_harness::plan_ui_snapshot_never_invokes_wsl_runner ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2993 filtered out; finished in 0.00s
+===== EXIT=0 END 2026-09-09T03:21:25Z =====
+```
+
+### B.3 harness 23 条
+
+```text
+===== START 2026-09-09T03:21:25Z =====
+running 23 tests
 test pi_runtime::wsl_linux_harness::claude_and_codex_live_writes_use_wsl_runner_never_unc ... ok
+test pi_runtime::wsl_linux_harness::claude_codex_writes_survive_dropped_argv_on_user_topology ... ok
 test pi_runtime::wsl_linux_harness::cwd_encode_decode_round_trips_the_documented_pi_layout ... ok
 test pi_runtime::wsl_linux_harness::detect_treats_localhost_http_404_as_success_like_the_toast ... ok
+test pi_runtime::wsl_linux_harness::enable_pi_provider_on_user_topology_survives_dropped_argv ... ok
 test pi_runtime::wsl_linux_harness::jsonl_line_parse_prices_zero_embedded_cost_from_wsl_models_json ... ok
 test pi_runtime::wsl_linux_harness::live_curl_404_on_loopback_is_a_reachable_route ... ok
 test pi_runtime::wsl_linux_harness::mocked_host_probe_falls_back_to_nat_gateway_when_loopback_is_dead ... ok
 test pi_runtime::wsl_linux_harness::mocked_host_probe_prefers_mirrored_loopback_when_it_answers ... ok
 test pi_runtime::wsl_linux_harness::mocked_host_probe_treats_localhost_404_as_success_and_skips_nat_hosts ... ok
 test pi_runtime::wsl_linux_harness::models_json_write_survives_wsl_dropping_positional_args ... ok
+test pi_runtime::wsl_linux_harness::plan_ui_snapshot_never_invokes_wsl_runner ... ok
 test pi_runtime::wsl_linux_harness::probe_and_manifest_share_one_session_jsonl_maxdepth ... ok
 test pi_runtime::wsl_linux_harness::probe_session_count_includes_nested_jsonl_not_just_the_sessions_root ... ok
 test pi_runtime::wsl_linux_harness::project_and_restore_dual_write_wsl_agent_and_top_level_models ... ok
@@ -231,92 +273,60 @@ test pi_runtime::wsl_linux_harness::writing_models_json_via_wsl_runner_round_tri
 test pi_runtime::wsl_linux_harness::wsl_cli_rejects_unc_overrides_in_harness ... ok
 test pi_runtime::wsl_linux_harness::wsl_read_heals_identical_diverge_and_only_agent_models_mirrors ... ok
 
-test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 2970 filtered out; finished in 2.79s
-
-===== EXIT=0 END 2026-09-09T03:18:24Z =====
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 2971 filtered out; finished in 3.09s
+===== EXIT=0 END 2026-09-09T03:21:28Z =====
 ```
 
-## 附录：`pi_runtime::` 结果行
-
-127 条全部 ok。完整名单见 `/opt/cursor/artifacts/logs/05-pi-runtime.txt`。结尾：
+### B.4 `pi_runtime::` / `wsl_cli::` 结尾
 
 ```text
-test pi_runtime::wsl_linux_harness::user_mirrored_firewall_dnstunnel_e2e_self_test ... ok
-test pi_runtime::wsl_linux_harness::writing_models_json_via_wsl_runner_round_trips_and_never_mktemps_at_root ... ok
-test pi_runtime::wsl_linux_harness::wsl_cli_rejects_unc_overrides_in_harness ... ok
-test pi_runtime::wsl_linux_harness::wsl_read_heals_identical_diverge_and_only_agent_models_mirrors ... ok
+test result: ok. 131 passed; 0 failed; 0 ignored; 0 measured; 2863 filtered out; finished in 4.63s
+===== EXIT=0 END 2026-09-09T03:21:34Z =====
 
-test result: ok. 127 passed; 0 failed; 0 ignored; 0 measured; 2863 filtered out; finished in 4.20s
-
-===== EXIT=0 END 2026-09-09T03:18:29Z =====
+running 4 tests
+test wsl_cli::tests::detects_wsl_unc_shapes ... ok
+test wsl_cli::tests::overwrite_script_stages_under_tmp_never_at_root ... ok
+test wsl_cli::tests::reject_unc_override_drops_wsl_paths ... ok
+test wsl_cli::tests::wsl_home_paths_stay_posix_and_never_unc ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2990 filtered out; finished in 0.00s
+===== EXIT=0 END 2026-09-09T03:21:34Z =====
 ```
 
-## 附录：`mirrored_topology`
+## 附录 C：第 1 轮（`a7162776`）E2E + harness + pnpm
+
+当时 harness 还是 20 条（没有 enable/read/snapshot 那 3 条）。全日志在 `docs/test-logs-live/`。
 
 ```text
-===== CMD =====
-cargo test --manifest-path src-tauri/Cargo.toml --lib mirrored_topology -- --nocapture --test-threads=1
-===== START 2026-09-09T03:18:30Z =====
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
-     Running unittests src/lib.rs (src-tauri/target/debug/deps/cc_switch_lib-64ddfb7ab989794f)
-
+===== START 2026-09-09T03:18:07Z =====
 running 1 test
-test pi_runtime::mirrored_topology::tests::default_profile_is_the_user_mirrored_firewall_dnstunnel_matrix ... ok
+test pi_runtime::wsl_linux_harness::user_mirrored_firewall_dnstunnel_e2e_self_test ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2989 filtered out; finished in 0.05s
+===== EXIT=0 END 2026-09-09T03:18:21Z =====
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2989 filtered out; finished in 0.00s
+===== START 2026-09-09T03:18:21Z =====
+running 20 tests
+…全部 ok…
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 2970 filtered out; finished in 2.79s
+===== EXIT=0 END 2026-09-09T03:18:24Z =====
 
-===== EXIT=0 END 2026-09-09T03:18:30Z =====
-```
+===== START 2026-09-09T03:18:25Z =====
+test result: ok. 127 passed; 0 failed; 0 ignored; 0 measured; 2863 filtered out; finished in 4.20s
+===== EXIT=0 END 2026-09-09T03:18:29Z =====
 
-## 附录：pnpm
-
-```text
-===== CMD =====
-pnpm test:unit tests/pi-wsl-harness.test.ts tests/components/PiRuntimeSettings.test.tsx tests/lib/proxyOffDetail.test.ts
-===== START 2026-09-09T03:15:15Z =====
-
-> cc-switch@4.1.4 test:unit /workspace
 > vitest run tests/pi-wsl-harness.test.ts tests/components/PiRuntimeSettings.test.tsx tests/lib/proxyOffDetail.test.ts
-
-
- RUN  v2.1.9 /workspace
-
-[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
  ✓ tests/pi-wsl-harness.test.ts (8 tests) 8ms
  ✓ tests/lib/proxyOffDetail.test.ts (3 tests) 5ms
  ✓ tests/components/PiRuntimeSettings.test.tsx (12 tests) 246ms
-
  Test Files  3 passed (3)
       Tests  23 passed (23)
-   Start at  03:15:16
-   Duration  1.45s (transform 201ms, setup 886ms, collect 399ms, tests 259ms, environment 995ms, prepare 167ms)
-
 ===== EXIT=0 END 2026-09-09T03:15:17Z =====
-```
-
-## 附录：编译（节选）
-
-`--offline` 第一次失败（空 cargo registry），随后联网编译成功：
-
-```text
-===== CARGO COMPILE 2026-09-09T03:15:15Z =====
-error: no matching package named `arboard` found
-location searched: crates.io index
-required by package `cc-switch v4.1.4 (/workspace/src-tauri)`
-As a reminder, you're using offline mode (--offline) which can sometimes cause surprising resolution failures, if this error is too confusing you may wish to retry without `--offline`.
-===== retry without --offline 2026-09-09T03:15:16Z =====
-    Updating crates.io index
- Downloading crates ...
-…
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 45s
-COMPILE_EXIT=0
 ```
 
 ---
 
 ## 结论
 
-1. **云端 Linux fixture 实测全表 PASS**（cargo 127 + pnpm 23）。  
+1. **云端 Linux fixture 实测两轮全表 PASS。** 第 2 轮：cargo e2e + harness 23 + `pi_runtime::` 131 + `wsl_cli::` 4；第 1 轮另有 pnpm 23。  
 2. 这 **不是** Windows MSI / 真 `wsl.exe` 验收；本机确认没有这两样东西。  
-3. #18 声称的 mirrored detect toast、Settings 不 curl WSL、丢掉 `$1` 仍能写 `models.json`、mktemp 只在 `/tmp` —— 在这套 harness 上成立。  
-4. **不要装正在打的 MSI。不要打 tag。** enable 路径的 `files::read` 回退以 [PR #19](https://github.com/kettybluce/cc-switch/pull/19) 的报告为准。
+3. mirrored detect toast、Settings 不 curl WSL、丢掉 `$1` 仍能写/读/`enable` Pi、mktemp 只在 `/tmp` —— 在这套 harness 上现场成立。  
+4. **本任务不打 tag、不发 MSI。**
