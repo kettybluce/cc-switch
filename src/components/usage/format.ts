@@ -1,3 +1,8 @@
+import { isSessionUsageSource } from "@/types/usage";
+
+/** Shown when session JSONL has no latency/TTFT (do not render a fake 0.0s). */
+export const UNKNOWN_REQUEST_TIMING = "—";
+
 export function parseFiniteNumber(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : null;
@@ -29,6 +34,70 @@ export function fmtUsd(
   const num = parseFiniteNumber(value);
   if (num == null) return fallback;
   return `$${num.toFixed(digits)}`;
+}
+
+function knownPositiveMs(value: unknown): number | null {
+  const num = parseFiniteNumber(value);
+  if (num == null || num <= 0) return null;
+  return num;
+}
+
+function formatSeconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function resolveTimingMs(
+  value: unknown,
+  dataSource?: string | null,
+): number | null {
+  return isSessionUsageSource(dataSource)
+    ? knownPositiveMs(value)
+    : parseFiniteNumber(value);
+}
+
+/** Latency for the request-log 用时 column. Session JSONL has none → em dash. */
+export function formatRequestLatency(
+  latencyMs: unknown,
+  dataSource?: string | null,
+  unknownLabel: string = UNKNOWN_REQUEST_TIMING,
+): string {
+  const latency = resolveTimingMs(latencyMs, dataSource);
+  return latency == null ? unknownLabel : formatSeconds(latency);
+}
+
+/**
+ * TTFT fragment without a leading slash, or null when the field is absent /
+ * unknown. Session `0`/`null` must not render as `/0.0s`.
+ */
+export function formatRequestFirstToken(
+  firstTokenMs: unknown,
+  dataSource?: string | null,
+): string | null {
+  if (firstTokenMs == null) return null;
+  const ttft = resolveTimingMs(firstTokenMs, dataSource);
+  return ttft == null ? null : formatSeconds(ttft);
+}
+
+/**
+ * Format the request-log 用时/首字 cell.
+ *
+ * Session imports (Pi / Claude / Codex / …) have no timing fields in JSONL.
+ * Stored `latency_ms=0` (SCHEMA 18 NOT NULL) must display as an em dash, not
+ * `0.0s`. Do not invent latency from timestamps.
+ */
+export function formatRequestTiming(
+  latencyMs: unknown,
+  firstTokenMs?: unknown | null,
+  dataSource?: string | null,
+  unknownLabel: string = UNKNOWN_REQUEST_TIMING,
+): string {
+  const latencyLabel = formatRequestLatency(
+    latencyMs,
+    dataSource,
+    unknownLabel,
+  );
+  const ttftLabel = formatRequestFirstToken(firstTokenMs, dataSource);
+  return ttftLabel == null ? latencyLabel : `${latencyLabel}/${ttftLabel}`;
 }
 
 function normalizeLanguageTag(language: string): string {

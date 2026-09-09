@@ -29,6 +29,8 @@ import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import {
   fmtInt,
   fmtUsd,
+  formatRequestFirstToken,
+  formatRequestLatency,
   getLocaleFromLanguage,
   parseFiniteNumber,
 } from "./format";
@@ -196,6 +198,10 @@ export function RequestLogTable({
                 ) : (
                   logs.map((log) => {
                     const unpriced = isUnpricedUsage(log);
+                    const firstToken = formatRequestFirstToken(
+                      log.firstTokenMs,
+                      log.dataSource,
+                    );
                     return (
                       <TableRow key={log.requestId}>
                         <TableCell className="text-center whitespace-nowrap text-xs px-1.5">
@@ -291,10 +297,10 @@ export function RequestLogTable({
                             )}
                         </TableCell>
                         <TableCell className="text-center whitespace-nowrap text-xs tabular-nums">
-                          {(log.latencyMs / 1000).toFixed(1)}s
-                          {log.firstTokenMs != null && (
+                          {formatRequestLatency(log.latencyMs, log.dataSource)}
+                          {firstToken != null && (
                             <span className="text-muted-foreground">
-                              /{(log.firstTokenMs / 1000).toFixed(1)}s
+                              /{firstToken}
                             </span>
                           )}
                         </TableCell>
