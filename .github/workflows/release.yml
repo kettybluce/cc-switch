@@ -1,5 +1,10 @@
 name: Release
 
+# This fork ships Windows x64 only:
+#   CC-Switch-v*-Windows.msi
+#   CC-Switch-v*-Windows-Portable.zip
+# Linux, macOS, and Windows ARM64 are not built.
+
 on:
   push:
     tags:
@@ -26,95 +31,22 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-2022
     environment: release
-    # This fork has no Apple signing secrets. A macOS failure must not block
-    # publishing Windows/Linux assets from the other matrix legs.
-    continue-on-error: ${{ matrix.os == 'macos-14' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-2022
-          - os: windows-11-arm
-            arch: arm64
-          - os: ubuntu-22.04
-          - os: ubuntu-22.04-arm
-            arch: arm64
-          - os: macos-14
 
     steps:
-      - name: Check Apple signing secrets
-        if: runner.os == 'macOS'
-        id: apple
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-        run: |
-          if [ -n "$APPLE_CERTIFICATE" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "APPLE_CERTIFICATE is not configured; skipping the macOS build so Windows/Linux can still publish."
-          fi
-
       - name: Checkout
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: actions/checkout@v6
 
       - name: Setup Node.js
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: '20'
 
       - name: Setup Rust
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add Windows ARM64 target
-        if: runner.os == 'Windows' && matrix.arch == 'arm64'
-        shell: pwsh
-        run: rustup target add aarch64-pc-windows-msvc
-
-      - name: Add macOS targets
-        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
-        run: |
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
-
-      - name: Install Linux system deps
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          # Core build tools and pkg-config
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            pkg-config \
-            curl \
-            wget \
-            file \
-            patchelf \
-            libssl-dev \
-            rpm \
-            flatpak \
-            flatpak-builder \
-            elfutils \
-            xdg-utils
-          # GTK/GLib stack for gdk-3.0, glib-2.0, gio-2.0
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            librsvg2-dev \
-            libayatana-appindicator3-dev
-          # WebKit2GTK (version differs across Ubuntu images; try 4.1 then 4.0)
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
-            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
-          # libsoup also changed major version; prefer 3.0 with fallback to 2.4
-          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
-            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
-
       - name: Setup pnpm
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         run: |
@@ -124,63 +56,40 @@ jobs:
           pnpm --version
 
       - name: Get pnpm store directory
-        if: (runner.os != 'macOS' || steps.apple.outputs.enabled == 'true') && (runner.os != 'Windows' || matrix.arch != 'arm64')
         id: pnpm-store
         shell: bash
         run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
 
       - name: Setup pnpm cache
-        if: (runner.os != 'macOS' || steps.apple.outputs.enabled == 'true') && (runner.os != 'Windows' || matrix.arch != 'arm64')
         uses: actions/cache@v5
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-
 
-      - name: Setup LLVM for Windows ARM64
-        if: runner.os == 'Windows' && matrix.arch == 'arm64'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $llvmRoot = 'C:\Program Files\LLVM'
-          if (-not (Test-Path $llvmRoot)) {
-            throw "LLVM not found at $llvmRoot"
-          }
-          $llvmBin = Join-Path $llvmRoot 'bin'
-          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CLANG_PATH=$(Join-Path $llvmBin 'clang.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
       - name: Install frontend deps
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Prepare Tauri signing key
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         shell: bash
         run: |
-          # 调试：检查 Secret 是否存在
           if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
             echo "❌ TAURI_SIGNING_PRIVATE_KEY Secret 为空或不存在" >&2
             echo "请检查 GitHub 仓库 Settings > Secrets and variables > Actions" >&2
             exit 1
           fi
-          
+
           RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
-          # 目标：提供正确的私钥“文件路径”给 Tauri CLI，避免内容解码歧义
           KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
-          # 情况 1：原始两行文本（第一行以 "untrusted comment:" 开头）
           if echo "$RAW" | head -n1 | grep -q '^untrusted comment:'; then
             printf '%s\n' "$RAW" > "$KEY_PATH"
             echo "✅ 使用原始两行密钥文件格式"
           else
-            # 情况 2：整体被 base64 包裹（解包后应当是两行）
             if DECODED=$(printf '%s' "$RAW" | (base64 --decode 2>/dev/null || base64 -D 2>/dev/null)) \
                && echo "$DECODED" | head -n1 | grep -q '^untrusted comment:'; then
               printf '%s\n' "$DECODED" > "$KEY_PATH"
               echo "✅ 成功解码 base64 包裹密钥，已还原为两行文件"
             else
-              # 情况 3：已是第二行（纯 Base64 一行）→ 构造两行文件
               if echo "$RAW" | grep -Eq '^[A-Za-z0-9+/=]+$'; then
                 ONE=$(printf '%s' "$RAW" | tr -d '\r\n')
                 printf '%s\n%s\n' "untrusted comment: tauri signing key" "$ONE" > "$KEY_PATH"
@@ -192,9 +101,6 @@ jobs:
               fi
             fi
           fi
-          # 将“完整两行内容”作为环境变量注入（Tauri 支持传入完整私钥文本或文件路径）
-          # 使用多行写入语法，保持换行以便解析
-          # 将完整两行私钥内容进行 base64 编码，作为单行内容注入环境变量
           if command -v base64 >/dev/null 2>&1; then
             KEY_B64=$(base64 < "$KEY_PATH" | tr -d '\r\n')
           elif command -v openssl >/dev/null 2>&1; then
@@ -212,384 +118,64 @@ jobs:
           fi
           echo "✅ Tauri signing key prepared"
 
-      - name: Import Apple signing certificate
-        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Decode .p12 certificate from base64
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
-
-          # Save original default keychain for cleanup
-          ORIGINAL_DEFAULT_KEYCHAIN=$(security default-keychain -d user | tr -d '"' | xargs)
-          echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
-
-          # Create temporary keychain
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security default-keychain -s "$KEYCHAIN_PATH"
-          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
-
-          # Import certificate
-          security import "$CERT_PATH" \
-            -k "$KEYCHAIN_PATH" \
-            -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
-
-          # Dynamically resolve signing identity (must be "Developer ID Application")
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
-            | grep "Developer ID Application" | grep -oE '"[^"]+"' | head -1 | tr -d '"')
-          if [ -z "$IDENTITY" ]; then
-            echo "❌ No 'Developer ID Application' identity found — listing all identities:" >&2
-            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-            exit 1
-          fi
-          echo "✅ Signing identity: $IDENTITY"
-          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
-
-          # Cleanup certificate file
-          rm -f "$CERT_PATH"
-
-      - name: Build Tauri App (macOS)
-        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
-        shell: bash
-        timeout-minutes: 60
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          max_attempts=3
-          for attempt in $(seq 1 "$max_attempts"); do
-            echo "=== macOS build/notarization attempt ${attempt}/${max_attempts} ==="
-            if pnpm tauri build --target universal-apple-darwin; then
-              echo "✅ macOS build/notarization succeeded"
-              exit 0
-            fi
-
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "❌ macOS build/notarization failed after ${max_attempts} attempts" >&2
-              exit 1
-            fi
-
-            sleep_seconds=$((attempt * 60))
-            echo "⚠️ macOS build/notarization failed, retrying in ${sleep_seconds}s..."
-            sleep "$sleep_seconds"
-          done
-
-      - name: Build Tauri App (Windows)
-        if: runner.os == 'Windows'
+      - name: Build Tauri App (Windows x64)
         shell: pwsh
-        env:
-          WINDOWS_RELEASE_ARCH: ${{ matrix.arch || 'x86_64' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:WINDOWS_RELEASE_ARCH -eq 'arm64') {
-            pnpm tauri build --target aarch64-pc-windows-msvc --bundles msi
-          } else {
-            pnpm tauri build
-          }
+        run: pnpm tauri build
 
-      - name: Build Tauri App (Linux)
-        if: runner.os == 'Linux'
-        run: pnpm tauri build --bundles appimage,deb,rpm
-
-      - name: Prepare macOS Assets
-        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p release-assets
-          VERSION="${RELEASE_TAG}"  # e.g., v3.5.0
-
-          # Locate bundle artifacts
-          TAR_GZ=""; APP_PATH=""
-          for path in \
-            "src-tauri/target/universal-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/x86_64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/release/bundle/macos"; do
-            if [ -d "$path" ]; then
-              [ -z "$TAR_GZ" ]   && TAR_GZ=$(find "$path" -maxdepth 1 -name "*.tar.gz" -type f | head -1 || true)
-              [ -z "$APP_PATH" ] && APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
-            fi
-          done
-
-          if [ -z "$TAR_GZ" ]; then
-            echo "❌ No macOS .tar.gz updater artifact found" >&2
-            exit 1
-          fi
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ No .app found" >&2
-            exit 1
-          fi
-
-          # Staple notarization ticket to .app (Tauri already notarized it)
-          xcrun stapler staple "$APP_PATH"
-          echo "✅ .app stapled"
-
-          # 1) Collect .tar.gz (updater artifact)
-          NEW_TAR_GZ="CC-Switch-${VERSION}-macOS.tar.gz"
-          cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
-          [ -f "$TAR_GZ.sig" ] && cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig" || echo ".sig for macOS not found yet"
-          echo "macOS updater artifact copied: $NEW_TAR_GZ"
-
-          # 2) Collect .app as zip
-          NEW_ZIP="CC-Switch-${VERSION}-macOS.zip"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release-assets/$NEW_ZIP"
-          echo "macOS zip ready: $NEW_ZIP"
-
-          # 3) Create styled DMG with create-dmg (Tauri's built-in DMG styling doesn't work on CI)
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            echo "❌ APPLE_SIGNING_IDENTITY is missing before DMG creation" >&2
-            exit 1
-          fi
-
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install create-dmg
-          NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
-          DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
-          rm -rf "$DMG_STAGE_DIR"
-          mkdir -p "$DMG_STAGE_DIR"
-          ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
-
-          create-dmg \
-            --volname "CC Switch" \
-            --background "src-tauri/icons/dmg-background.png" \
-            --window-size 660 400 \
-            --window-pos 200 120 \
-            --icon-size 80 \
-            --icon "CC Switch.app" 180 220 \
-            --hide-extension "CC Switch.app" \
-            --app-drop-link 480 220 \
-            --codesign "$APPLE_SIGNING_IDENTITY" \
-            --no-internet-enable \
-            "release-assets/$NEW_DMG" \
-            "$DMG_STAGE_DIR"
-
-          rm -rf "$DMG_STAGE_DIR"
-          echo "✅ Styled DMG created: $NEW_DMG"
-
-      - name: Notarize macOS DMG
-        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
-        shell: bash
-        timeout-minutes: 30
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-
-          DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
-          if [ -z "$DMG_PATH" ]; then
-            echo "❌ No .dmg found in release-assets/ to notarize" >&2
-            exit 1
-          fi
-
-          echo "=== Notarizing DMG: $DMG_PATH ==="
-          max_attempts=3
-          for attempt in $(seq 1 "$max_attempts"); do
-            echo "=== DMG notarization attempt ${attempt}/${max_attempts} ==="
-            if xcrun notarytool submit "$DMG_PATH" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait; then
-              echo "✅ DMG notarization succeeded"
-              xcrun stapler staple "$DMG_PATH"
-              echo "✅ DMG stapled"
-              break
-            fi
-
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "❌ DMG notarization failed after ${max_attempts} attempts" >&2
-              exit 1
-            fi
-
-            sleep_seconds=$((attempt * 60))
-            echo "⚠️ DMG notarization failed, retrying in ${sleep_seconds}s..."
-            sleep "$sleep_seconds"
-          done
-
-      - name: Verify macOS code signing and notarization
-        if: runner.os == 'macOS' && steps.apple.outputs.enabled == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Verify .app (from Tauri bundle)
-          APP_PATH=""
-          for path in \
-            "src-tauri/target/universal-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/x86_64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/release/bundle/macos"; do
-            if [ -d "$path" ]; then
-              [ -z "$APP_PATH" ] && APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
-            fi
-          done
-
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ No .app found for verification" >&2
-            exit 1
-          fi
-          echo "=== Verifying .app: $APP_PATH ==="
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          echo "✅ codesign verification passed"
-          spctl -a -t exec -vv "$APP_PATH"
-          echo "✅ spctl assessment passed"
-          xcrun stapler validate "$APP_PATH"
-          echo "✅ .app stapler validation passed"
-
-          # Verify .dmg (from release-assets/, created by create-dmg + notarized)
-          DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
-          if [ -n "$DMG_PATH" ]; then
-            echo "=== Verifying .dmg: $DMG_PATH ==="
-            codesign --verify --verbose=2 "$DMG_PATH"
-            echo "✅ .dmg codesign verification passed"
-            spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
-            echo "✅ .dmg spctl assessment passed"
-            xcrun stapler validate "$DMG_PATH"
-            echo "✅ .dmg stapler validation passed"
-          else
-            echo "❌ No .dmg found for verification — release would ship without verified DMG" >&2
-            exit 1
-          fi
-
-      - name: Prepare Windows Assets
-        if: runner.os == 'Windows'
+      - name: Prepare Windows x64 assets
         shell: pwsh
-        env:
-          WINDOWS_RELEASE_ARCH: ${{ matrix.arch || 'x86_64' }}
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          $VERSION = $env:RELEASE_TAG  # e.g., v3.5.0
-          $isArm64 = $env:WINDOWS_RELEASE_ARCH -eq 'arm64'
-          $targetRoot = if ($isArm64) { 'src-tauri/target/aarch64-pc-windows-msvc/release' } else { 'src-tauri/target/release' }
-          $assetSuffix = if ($isArm64) { '-arm64' } else { '' }
+          $VERSION = $env:RELEASE_TAG
+          $targetRoot = 'src-tauri/target/release'
 
-          # 仅打包 MSI 安装器 + .sig（用于 Updater）
           $msi = Get-ChildItem -Path (Join-Path $targetRoot 'bundle/msi') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($null -eq $msi) {
-            # 兜底：全局搜索 .msi
             $msi = Get-ChildItem -Path (Join-Path $targetRoot 'bundle') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
           }
-          if ($null -ne $msi) {
-            $dest = "CC-Switch-$VERSION-Windows$assetSuffix.msi"
-            Copy-Item $msi.FullName (Join-Path release-assets $dest)
-            Write-Host "Installer copied: $dest"
-            $sigPath = "$($msi.FullName).sig"
-            if (Test-Path $sigPath) {
-              Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
-              Write-Host "Signature copied: $dest.sig"
-            } elseif ($isArm64) {
-              throw "Signature not found for $($msi.Name)"
-            } else {
-              Write-Warning "Signature not found for $($msi.Name)"
-            }
-          } elseif ($isArm64) {
-            throw 'No Windows ARM64 MSI installer found'
+          if ($null -eq $msi) {
+            throw 'No Windows x64 MSI installer found'
+          }
+          $dest = "CC-Switch-$VERSION-Windows.msi"
+          Copy-Item $msi.FullName (Join-Path release-assets $dest)
+          Write-Host "Installer copied: $dest"
+          $sigPath = "$($msi.FullName).sig"
+          if (Test-Path $sigPath) {
+            Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
+            Write-Host "Signature copied: $dest.sig"
           } else {
-            Write-Warning 'No Windows MSI installer found'
+            Write-Warning "Signature not found for $($msi.Name)"
           }
 
-          # 绿色版（portable）：仅可执行文件打 zip（不参与 Updater）
-          $exeCandidates = if ($isArm64) {
-            @('src-tauri/target/aarch64-pc-windows-msvc/release/cc-switch.exe')
-          } else {
-            @(
-              'src-tauri/target/release/cc-switch.exe',
-              'src-tauri/target/x86_64-pc-windows-msvc/release/cc-switch.exe'
-            )
+          $exePath = @(
+            'src-tauri/target/release/cc-switch.exe',
+            'src-tauri/target/x86_64-pc-windows-msvc/release/cc-switch.exe'
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($null -eq $exePath) {
+            throw 'Portable exe not found'
           }
-          $exePath = $exeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if ($null -ne $exePath) {
-            $portableDir = 'release-assets/CC-Switch-Portable'
-            New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
-            Copy-Item $exePath $portableDir
-            $portableIniPath = Join-Path $portableDir 'portable.ini'
-            $portableContent = if ($isArm64) {
-              @(
-                '# CC Switch portable ARM64 build marker',
-                'portable=true',
-                'arch=arm64'
-              )
-            } else {
-              @(
-                '# CC Switch portable build marker',
-                'portable=true'
-              )
-            }
-            $portableContent | Set-Content -Path $portableIniPath -Encoding UTF8
-            $portableZip = "release-assets/CC-Switch-$VERSION-Windows$assetSuffix-Portable.zip"
-            Compress-Archive -Path "$portableDir/*" -DestinationPath $portableZip -Force
-            Remove-Item -Recurse -Force $portableDir
-            Write-Host "Windows portable zip created: CC-Switch-$VERSION-Windows$assetSuffix-Portable.zip"
-          } elseif ($isArm64) {
-            throw 'Portable ARM64 exe not found'
-          } else {
-            Write-Warning 'Portable exe not found'
-          }
-
-      - name: Prepare Linux Assets
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p release-assets
-          VERSION="${RELEASE_TAG}"  # e.g., v3.5.0
-          ARCH="${{ matrix.arch || 'x86_64' }}"
-          # Updater artifact: AppImage（含对应 .sig）
-          APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" | head -1 || true)
-          if [ -n "$APPIMAGE" ]; then
-            NEW_APPIMAGE="CC-Switch-${VERSION}-Linux-${ARCH}.AppImage"
-            cp "$APPIMAGE" "release-assets/$NEW_APPIMAGE"
-            [ -f "$APPIMAGE.sig" ] && cp "$APPIMAGE.sig" "release-assets/$NEW_APPIMAGE.sig" || echo ".sig for AppImage not found"
-            echo "AppImage copied: $NEW_APPIMAGE"
-          else
-            echo "No AppImage found under target/release/bundle" >&2
-          fi
-          # 额外上传 .deb（用于手动安装，不参与 Updater）
-          DEB=$(find src-tauri/target/release/bundle -name "*.deb" | head -1 || true)
-          if [ -n "$DEB" ]; then
-            cp "$DEB" "release-assets/CC-Switch-${VERSION}-Linux-${ARCH}.deb"
-            echo "Deb package copied: CC-Switch-${VERSION}-Linux-${ARCH}.deb"
-          else
-            echo "No .deb found (optional)"
-          fi
-          # 额外上传 .rpm（用于 Fedora/RHEL/openSUSE 等，不参与 Updater）
-          RPM=$(find src-tauri/target/release/bundle -name "*.rpm" | head -1 || true)
-          if [ -n "$RPM" ]; then
-            cp "$RPM" "release-assets/CC-Switch-${VERSION}-Linux-${ARCH}.rpm"
-            echo "RPM package copied: CC-Switch-${VERSION}-Linux-${ARCH}.rpm"
-          else
-            echo "No .rpm found (optional)"
-          fi
+          $portableDir = 'release-assets/CC-Switch-Portable'
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          Copy-Item $exePath $portableDir
+          @(
+            '# CC Switch portable build marker',
+            'portable=true'
+          ) | Set-Content -Path (Join-Path $portableDir 'portable.ini') -Encoding UTF8
+          $portableZip = "release-assets/CC-Switch-$VERSION-Windows-Portable.zip"
+          Compress-Archive -Path "$portableDir/*" -DestinationPath $portableZip -Force
+          Remove-Item -Recurse -Force $portableDir
+          Write-Host "Windows portable zip created: CC-Switch-$VERSION-Windows-Portable.zip"
 
       - name: List prepared assets
         shell: bash
         run: |
           ls -la release-assets || true
 
-      - name: Collect Signatures
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Collected signatures (if any alongside artifacts):"
-          ls -la release-assets/*.sig || echo "No signatures found"
-
       - name: Upload release artifacts to workflow
-        if: runner.os != 'macOS' || steps.apple.outputs.enabled == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: release-assets-${{ runner.os }}-${{ matrix.arch || runner.arch }}
+          name: release-assets-Windows-x64
           path: release-assets/*
           if-no-files-found: error
 
@@ -600,27 +186,17 @@ jobs:
           echo "Listing bundles in src-tauri/target..."
           find src-tauri/target -maxdepth 4 -type f -name "*.*" 2>/dev/null || true
 
-      - name: Clean up Apple signing keychain
-        if: runner.os == 'macOS' && always()
-        shell: bash
-        run: |
-          if [ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]; then
-            security default-keychain -s "$ORIGINAL_DEFAULT_KEYCHAIN" || true
-          fi
-          if [ -f "$RUNNER_TEMP/build.keychain-db" ]; then
-            security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
-          fi
-
   publish-release:
     name: Publish GitHub Release
     runs-on: ubuntu-22.04
     needs: release
-    # Matrix legs use fail-fast: false. Publish whatever platforms succeeded
-    # (Windows/Linux) even when macOS signing fails or is skipped.
-    if: ${{ always() && !cancelled() }}
+    if: ${{ always() && !cancelled() && needs.release.result == 'success' }}
     permissions:
       contents: write
     steps:
+      - name: Checkout notes
+        uses: actions/checkout@v6
+
       - name: Download built release artifacts
         uses: actions/download-artifact@v8
         with:
@@ -628,12 +204,14 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Require at least one platform artifact
+      - name: Require Windows x64 MSI
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -d release-assets ] || [ -z "$(ls -A release-assets 2>/dev/null || true)" ]; then
-            echo "No platform artifacts were uploaded; refusing to publish an empty release." >&2
+          TAG="${RELEASE_TAG}"
+          if [ ! -f "release-assets/CC-Switch-${TAG}-Windows.msi" ]; then
+            echo "Windows x64 MSI is required; refusing to publish." >&2
+            ls -la release-assets || true
             exit 1
           fi
           ls -la release-assets
@@ -643,33 +221,34 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${RELEASE_TAG}"
+          NOTES="docs/release-notes/${TAG}.md"
           {
-            echo "## CC Switch ${TAG}"
+            if [ -f "$NOTES" ]; then
+              cat "$NOTES"
+            else
+              echo "## CC Switch ${TAG}"
+              echo
+              echo "## 修复的问题 / Bug fixes"
+              echo
+              echo "- See the pull request for this tag."
+              echo
+              echo "## 优化 / Improvements"
+              echo
+              echo "- See the pull request for this tag."
+              echo
+              echo "## 自测 / Self-test"
+              echo
+              echo "- Cloud harness must cover the user's mirrored+firewall+dnsTunneling topology before this tag."
+            fi
+            echo
+            echo "---"
             echo
             echo "Independent fork build. App updater remains disabled."
             echo
-            echo "### Download"
+            echo "### Download (Windows x64 only)"
             echo
-            if ls release-assets/CC-Switch-"${TAG}"-Windows.msi >/dev/null 2>&1; then
-              echo "- **Windows (x86_64)**: \`CC-Switch-${TAG}-Windows.msi\` (installer) or \`CC-Switch-${TAG}-Windows-Portable.zip\`"
-            fi
-            if ls release-assets/CC-Switch-"${TAG}"-Windows-arm64.msi >/dev/null 2>&1; then
-              echo "- **Windows (ARM64)**: \`CC-Switch-${TAG}-Windows-arm64.msi\` or \`CC-Switch-${TAG}-Windows-arm64-Portable.zip\`"
-            fi
-            if ls release-assets/CC-Switch-"${TAG}"-Linux-x86_64.AppImage >/dev/null 2>&1; then
-              echo "- **Linux (x86_64)**: \`CC-Switch-${TAG}-Linux-x86_64.AppImage\` / \`.deb\` / \`.rpm\`"
-            fi
-            if ls release-assets/CC-Switch-"${TAG}"-Linux-arm64.AppImage >/dev/null 2>&1; then
-              echo "- **Linux (ARM64)**: \`CC-Switch-${TAG}-Linux-arm64.AppImage\` / \`.deb\` / \`.rpm\`"
-            fi
-            if ls release-assets/CC-Switch-"${TAG}"-macOS.dmg >/dev/null 2>&1; then
-              echo "- **macOS**: \`CC-Switch-${TAG}-macOS.dmg\` or \`CC-Switch-${TAG}-macOS.zip\`"
-              echo
-              echo "macOS assets in this build were Apple-signed and notarized."
-            else
-              echo
-              echo "macOS assets were not published (Apple signing certificate is not configured, or the macOS job did not succeed)."
-            fi
+            echo "- **Installer**: \`CC-Switch-${TAG}-Windows.msi\`"
+            echo "- **Portable**: \`CC-Switch-${TAG}-Windows-Portable.zip\`"
           } > release-notes.md
           cat release-notes.md
 
@@ -715,12 +294,7 @@ jobs:
           VERSION="${TAG#v}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           base_url="https://github.com/$REPO/releases/download/$TAG"
-          # 初始化空平台映射
-          mac_url=""; mac_sig=""
           win_x64_url=""; win_x64_sig=""
-          win_arm64_url=""; win_arm64_sig=""
-          linux_x64_url=""; linux_x64_sig=""
-          linux_arm64_url=""; linux_arm64_sig=""
           shopt -s nullglob
           for sig in dl/*.sig; do
             base=${sig%.sig}
@@ -728,20 +302,10 @@ jobs:
             url="$base_url/$fname"
             sig_content=$(cat "$sig")
             case "$fname" in
-              *.tar.gz)
-                # 视为 macOS updater artifact
-                mac_url="$url"; mac_sig="$sig_content";;
-              *-Windows-arm64.msi)
-                win_arm64_url="$url"; win_arm64_sig="$sig_content";;
               *-Windows.msi)
                 win_x64_url="$url"; win_x64_sig="$sig_content";;
-              *-Linux-arm64.AppImage|*-Linux-arm64.appimage)
-                linux_arm64_url="$url"; linux_arm64_sig="$sig_content";;
-              *-Linux-x86_64.AppImage|*-Linux-x86_64.appimage)
-                linux_x64_url="$url"; linux_x64_sig="$sig_content";;
             esac
           done
-          # 构造 JSON（仅包含存在的目标）
           tmp_json=$(mktemp)
           {
             echo '{'
@@ -749,34 +313,8 @@ jobs:
             echo "  \"notes\": \"Release $TAG\",";
             echo "  \"pub_date\": \"$PUB_DATE\",";
             echo '  "platforms": {'
-            first=1
-            if [ -n "$mac_url" ] && [ -n "$mac_sig" ]; then
-              # 为兼容 arm64 / x64，重复写入两个键，指向同一 universal 包
-              for key in darwin-aarch64 darwin-x86_64; do
-                [ $first -eq 0 ] && echo ','
-                echo "    \"$key\": {\"signature\": \"$mac_sig\", \"url\": \"$mac_url\"}"
-                first=0
-              done
-            fi
             if [ -n "$win_x64_url" ] && [ -n "$win_x64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
               echo "    \"windows-x86_64\": {\"signature\": \"$win_x64_sig\", \"url\": \"$win_x64_url\"}"
-              first=0
-            fi
-            if [ -n "$win_arm64_url" ] && [ -n "$win_arm64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"windows-aarch64\": {\"signature\": \"$win_arm64_sig\", \"url\": \"$win_arm64_url\"}"
-              first=0
-            fi
-            if [ -n "$linux_x64_url" ] && [ -n "$linux_x64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"linux-x86_64\": {\"signature\": \"$linux_x64_sig\", \"url\": \"$linux_x64_url\"}"
-              first=0
-            fi
-            if [ -n "$linux_arm64_url" ] && [ -n "$linux_arm64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"linux-aarch64\": {\"signature\": \"$linux_arm64_sig\", \"url\": \"$linux_arm64_url\"}"
-              first=0
             fi
             echo '  }'
             echo '}'

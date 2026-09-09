@@ -29,20 +29,7 @@ mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
 chmod 700 -- "$dir" 2>/dev/null || true
 umask 077
 "#,
-    r#"
-stage="${TMPDIR:-/tmp}"
-case "$stage" in
-  /*) ;;
-  *) stage=/tmp ;;
-esac
-if [ ! -d "$stage" ]; then
-  stage=/tmp
-fi
-mkdir -p -- "$stage" || { printf 'mkdir-failed\n' >&2; exit 1; }
-tmp=$(mktemp -p "$stage" cc-switch-XXXXXX 2>/dev/null) \
-  || tmp=$(mktemp /tmp/cc-switch-XXXXXX) \
-  || { printf 'mktemp-failed\n' >&2; exit 1; }
-"#,
+    crate::pi_runtime::files::atomic_stage_snippet!(),
     r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }

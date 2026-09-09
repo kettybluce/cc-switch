@@ -61,6 +61,7 @@ tmp=$(mktemp -p "$stage" cc-switch-XXXXXX 2>/dev/null) \
 }
 
 pub const ATOMIC_STAGE_SNIPPET: &str = atomic_stage_snippet!();
+pub(crate) use atomic_stage_snippet;
 
 /// `$1` target, `$2` expected revision, `$3` digest of the incoming payload.
 const WRITE_SCRIPT: &str = concat!(
@@ -966,6 +967,13 @@ mod tests {
             assert!(script.contains("empty-target"));
         }
         assert!(ATOMIC_STAGE_SNIPPET.contains("/tmp"));
+        // v3.0.1 write contract: stdin → stage → sha256 → mv. Do not replace
+        // this with a Windows-side copy or a non-atomic write.
+        for script in [WRITE_SCRIPT, OVERWRITE_SCRIPT] {
+            assert!(script.contains("cat > \"$tmp\""));
+            assert!(script.contains("sha256sum < \"$tmp\""));
+            assert!(script.contains("mv -f -- \"$tmp\" \"$target\""));
+        }
     }
 
     #[test]

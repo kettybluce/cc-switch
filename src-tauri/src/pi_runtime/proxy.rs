@@ -849,12 +849,10 @@ mod tests {
 
     #[test]
     fn mirrored_firewall_dns_tunneling_topology_still_lists_localhost_first() {
-        // User machine: WSL 2.7.10, networkingMode=mirrored, firewall=true,
-        // dnsTunneling=true. Default via 172.30.213.1 and nameserver
-        // 10.255.255.254 are *not* evidence of NAT.
+        let profile = crate::pi_runtime::mirrored_topology::USER_MIRRORED;
         let candidates = build_candidates(
-            Some(Ipv4Addr::new(172, 30, 213, 1)),
-            Some(Ipv4Addr::new(10, 255, 255, 254)),
+            Some(profile.eth1_gateway.parse().expect("gateway")),
+            Some(profile.dns_tunnel.parse().expect("nameserver")),
         );
         assert_eq!(candidates[0].host, "127.0.0.1");
         assert_eq!(candidates[0].strategy, HostStrategy::MirroredLoopback);
@@ -863,7 +861,7 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.host.as_str())
                 .collect::<Vec<_>>(),
-            ["127.0.0.1", "172.30.213.1", "10.255.255.254"]
+            ["127.0.0.1", profile.eth1_gateway, profile.dns_tunnel]
         );
     }
 

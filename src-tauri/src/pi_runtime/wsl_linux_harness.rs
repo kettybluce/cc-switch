@@ -8,12 +8,15 @@
 //! Covered here: nested session discovery through the runner `find` (not a
 //! flat glob), JSONL usage with `cost: 0` priced from `models.json` (including
 //! requested ≠ served), dual `models.json` heal/project/restore, cwd `--…--`
-//! encode/decode (test-only), and mocked proxy host candidates.
+//! encode/decode (test-only), and the default
+//! [`super::mirrored_topology::USER_MIRRORED`] host matrix (mirrored +
+//! firewall + dnsTunneling, not generic NAT).
 
 #![cfg(test)]
 
 use super::detect;
 use super::files::{self, PiFile, PiFileLocation};
+use super::mirrored_topology::{UserMirroredTopologyRunner, USER_MIRRORED};
 use super::proxy::{self, HostStrategy};
 use super::session_jsonl_maxdepth_str;
 use super::sessions;
@@ -839,6 +842,77 @@ transport_kind = "responses_http"
     assert!(toml.contains("172.30.208.1:15721"));
     assert!(!toml.contains(r"\\wsl"));
     assert!(!auth_path.to_string_lossy().contains(r"\\wsl"));
+}
+
+/// Full self-test on the user's mirrored+firewall+dnsTunneling matrix.
+///
+/// Settings snapshot must stay green without a multi-host WSL curl.
+/// 「检测代理」 must treat localhost HTTP 404 as success (same as Settings).
+/// Pi `models.json` write must keep the 3.0.1 stdin→stage→sha256→`mv`
+/// contract when WSL drops `$1`, never `bash -c ''`, never mktemp at `/`.
+#[test]
+#[serial]
+fn user_mirrored_firewall_dnstunnel_e2e_self_test() {
+    let profile = USER_MIRRORED;
+    assert_eq!(profile.networking_mode, "mirrored");
+    assert!(profile.firewall && profile.dns_tunneling);
+    assert_eq!(profile.distro, DISTRO);
+
+    let harness = WslHarness::install("identical");
+    let _topo = RunnerGuard::install(Arc::new(UserMirroredTopologyRunner::new(
+        LocalBashRunner::new(DISTRO, harness.wsl_home.clone()),
+    )));
+
+    let snapshot = proxy::plan_ui_snapshot(&harness.target, true, profile.proxy_port);
+    assert!(
+        snapshot.gateway.reachable,
+        "settings click must not curl WSL; snapshot is localhost-first"
+    );
+    assert_eq!(
+        snapshot.origin.as_deref(),
+        Some(profile.endpoint().as_str())
+    );
+    assert_eq!(snapshot.gateway.host.as_deref(), Some(profile.listen_host));
+    assert_eq!(
+        snapshot.gateway.strategy,
+        Some(HostStrategy::MirroredLoopback)
+    );
+
+    let health = proxy::resolve_gateway(DISTRO, profile.proxy_port).expect("detect");
+    assert!(
+        health.reachable,
+        "detect toast must match Settings: HTTP 404 on {} is success, got {health:?}",
+        profile.endpoint()
+    );
+    assert_eq!(health.host.as_deref(), Some(profile.listen_host));
+    assert_eq!(health.strategy, Some(HostStrategy::MirroredLoopback));
+    assert_eq!(
+        health.endpoint.as_deref(),
+        Some(profile.endpoint().as_str())
+    );
+    assert!(!proxy::looks_like_proxy_off(
+        health.error.as_deref().unwrap_or("")
+    ));
+    assert!(
+        health.error.as_deref().unwrap_or("").is_empty(),
+        "must not toast 'no route' when localhost already answered: {:?}",
+        health.error
+    );
+
+    let document = br#"{"providers":{"baisheng":{"name":"BaiSheng"}}}"#;
+    files::write(
+        PiFile::Models,
+        document,
+        &files::revision(&fs::read(harness.agent_models()).expect("current agent")),
+    )
+    .expect("models.json write must survive dropped $1 on the user topology");
+    assert_eq!(fs::read(harness.agent_models()).expect("agent"), document);
+    assert_eq!(fs::read(harness.top_models()).expect("top"), document);
+    assert!(
+        files::ATOMIC_STAGE_SNIPPET.contains("mktemp /tmp/cc-switch-XXXXXX")
+            || files::ATOMIC_STAGE_SNIPPET.contains("mktemp -p")
+    );
+    assert!(!files::ATOMIC_STAGE_SNIPPET.contains("$dir/.cc-switch-XXXXXX"));
 }
 
 #[test]

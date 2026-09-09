@@ -12,8 +12,11 @@
 //! `"$1"`, `"$2"`, … inside the script:
 //!
 //! ```text
-//! wsl.exe -d <distro> -- bash -lc '<our script>' cc-switch <arg1> <arg2>
+//! wsl.exe -d <distro> -e bash -c '<our script>' cc-switch <arg1> <arg2>
 //! ```
+//!
+//! `-e` / `--exec` runs bash directly. `wsl.exe -- bash -c` can go through
+//! the distro login shell, which expands `$1` before the script runs.
 //!
 //! `sh -c script name args...` assigns `name` to `$0`, so the first user value
 //! lands in `$1`.

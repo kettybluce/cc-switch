@@ -18,6 +18,8 @@
 pub mod detect;
 pub mod error;
 pub mod files;
+#[cfg(test)]
+mod mirrored_topology;
 pub mod proxy;
 pub mod rewrite;
 pub mod sessions;
