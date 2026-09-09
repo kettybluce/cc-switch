@@ -297,6 +297,16 @@ pub fn is_valid_linux_path(path: &str) -> bool {
         && !path.chars().any(char::is_control)
 }
 
+/// True when `script` is a real command body, not empty / quote-only.
+///
+/// `wsl.exe` wrapping a login shell around `bash -c` has been seen to
+/// collapse the body to `''`, which bash reports as
+/// `line 1: '': No such file or directory`.
+pub fn is_usable_wsl_script(script: &str) -> bool {
+    let trimmed = script.trim();
+    !trimmed.is_empty() && trimmed != "''" && trimmed != "\"\""
+}
+
 /// Build the `wsl.exe` argument vector for a script invocation.
 pub fn build_wsl_argv(request: &WslRequest) -> PiResult<Vec<String>> {
     if !is_valid_distro_name(&request.distro) {
@@ -305,12 +315,17 @@ pub fn build_wsl_argv(request: &WslRequest) -> PiResult<Vec<String>> {
             request.distro
         )));
     }
-    if request.script.is_empty() {
+    if !is_usable_wsl_script(&request.script) {
         return Err(PiRuntimeError::invalid_input(
             "WSL script cannot be empty".to_string(),
         ));
     }
     for arg in &request.args {
+        if arg.is_empty() {
+            return Err(PiRuntimeError::invalid_input(
+                "WSL argument cannot be empty".to_string(),
+            ));
+        }
         if arg.contains('\0') {
             return Err(PiRuntimeError::invalid_input(
                 "WSL argument cannot contain a NUL byte".to_string(),
@@ -318,10 +333,13 @@ pub fn build_wsl_argv(request: &WslRequest) -> PiResult<Vec<String>> {
         }
     }
 
+    // `-e` / `--exec` runs bash directly. `wsl.exe -- bash -c` can go through
+    // the distro login shell, which expands `$1` / `$dir` before our script
+    // runs (empty `$dir` → mktemp `/.cc-switch-XXXXXX`).
     let mut argv = vec![
         "-d".to_string(),
         request.distro.clone(),
-        "--".to_string(),
+        "-e".to_string(),
         "bash".to_string(),
         if request.login { "-lc" } else { "-c" }.to_string(),
         request.script.clone(),
@@ -591,7 +609,7 @@ mod tests {
             vec![
                 "-d",
                 "Ubuntu-22.04",
-                "--",
+                "-e",
                 "bash",
                 "-c",
                 "cat -- \"$1\"",
@@ -599,6 +617,21 @@ mod tests {
                 "/home/me/.pi/agent/models.json",
             ]
         );
+    }
+
+    #[test]
+    fn argv_rejects_an_empty_or_quote_only_script() {
+        assert!(build_wsl_argv(&WslRequest::new("Ubuntu-22.04", "")).is_err());
+        assert!(build_wsl_argv(&WslRequest::new("Ubuntu-22.04", "   ")).is_err());
+        assert!(build_wsl_argv(&WslRequest::new("Ubuntu-22.04", "''")).is_err());
+        assert!(is_usable_wsl_script("printf 'ok\\n'"));
+    }
+
+    #[test]
+    fn argv_rejects_empty_positional_arguments() {
+        let error = build_wsl_argv(&WslRequest::new("Ubuntu-22.04", "true").arg(""))
+            .expect_err("empty argv must not reach bash");
+        assert!(error.to_string().contains("cannot be empty"));
     }
 
     #[test]

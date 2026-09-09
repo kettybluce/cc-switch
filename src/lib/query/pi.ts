@@ -135,7 +135,20 @@ export function useSyncPiWslSessions() {
   });
 }
 
+export function isProxyOffDetail(detail: string): boolean {
+  const lower = detail.toLowerCase();
+  return (
+    lower.includes("please start the local proxy") ||
+    lower.includes("local proxy is not running") ||
+    lower.includes("connection refused") ||
+    lower.includes("/ping") ||
+    detail.includes("请先开启本地代理") ||
+    detail.includes("請先開啟本機代理")
+  );
+}
+
 export function useTestPiProxy() {
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
 
   return useMutation({
@@ -147,18 +160,25 @@ export function useTestPiProxy() {
             latency: health.latencyMs ?? 0,
           }),
         );
-      } else {
-        toast.error(
-          t("settings.piRuntime.proxyUnreachable", {
-            error: health.error ?? "",
-          }),
-        );
+        void queryClient.invalidateQueries({ queryKey: piKeys.proxyPlan });
+        return;
       }
+      const raw = health.error ?? "";
+      toast.error(
+        t("settings.piRuntime.proxyUnreachable", {
+          error: isProxyOffDetail(raw)
+            ? t("settings.piRuntime.proxyStartFirst")
+            : raw || t("settings.piRuntime.proxyStartFirst"),
+        }),
+      );
     },
     onError: (error: unknown) => {
+      const raw = extractErrorMessage(error);
       toast.error(
         t("settings.piRuntime.proxyTestFailed", {
-          error: extractErrorMessage(error),
+          error: isProxyOffDetail(raw)
+            ? t("settings.piRuntime.proxyStartFirst")
+            : raw,
         }),
       );
     },

@@ -820,7 +820,8 @@
       "syncFailed": "重新整理 WSL 工作階段失敗：{{error}}",
       "proxyReachable": "代理可用，耗時 {{latency}} 毫秒",
       "proxyUnreachable": "代理不可用：{{error}}",
-      "proxyTestFailed": "檢測代理失敗：{{error}}"
+      "proxyTestFailed": "檢測代理失敗：{{error}}",
+      "proxyStartFirst": "請先開啟本機代理"
     },
     "cliRuntime": {
       "sharedRuntime": "Claude、Codex 與 Pi 共用同一 WSL 發行版，一律走 wsl.exe。",

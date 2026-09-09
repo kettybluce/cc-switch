@@ -290,8 +290,10 @@ impl ProxyServer {
 
     fn build_router(&self) -> Router {
         Router::new()
-            // 健康检查
+            // 健康检查。`/ping` is the same listener so a Windows-side
+            // GET /ping cannot disagree with the WSL `/` / `/health` probe.
             .route("/health", get(handlers::health_check))
+            .route("/ping", get(handlers::health_check))
             .route("/status", get(handlers::get_status))
             // Claude API (支持带前缀和不带前缀两种格式)
             .route("/v1/messages", post(handlers::handle_messages))

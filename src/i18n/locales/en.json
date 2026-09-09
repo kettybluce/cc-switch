@@ -820,7 +820,8 @@
       "syncFailed": "Could not refresh WSL sessions: {{error}}",
       "proxyReachable": "Proxy reachable in {{latency}} ms",
       "proxyUnreachable": "Proxy unreachable: {{error}}",
-      "proxyTestFailed": "Could not test the proxy: {{error}}"
+      "proxyTestFailed": "Could not test the proxy: {{error}}",
+      "proxyStartFirst": "Please start the local proxy first"
     },
     "cliRuntime": {
       "sharedRuntime": "Claude, Codex, and Pi share one WSL distribution and are reached only through wsl.exe.",

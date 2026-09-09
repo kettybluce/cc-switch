@@ -38,10 +38,33 @@ printf 'ok %s\n' "$(sha256sum < "$1" | cut -d' ' -f1)"
 cat -- "$1"
 "#;
 
+/// Stage the payload under `$TMPDIR` or `/tmp`. Never `mktemp` at `/` — an
+/// empty `$1` used to expand `"$dir/.cc-switch-XXXXXX"` into
+/// `/.cc-switch-XXXXXX` (Codex WSL write on Ubuntu-22.04).
+pub const ATOMIC_STAGE_SNIPPET: &str = r#"
+stage="${TMPDIR:-/tmp}"
+case "$stage" in
+  /*) ;;
+  *) stage=/tmp ;;
+esac
+if [ ! -d "$stage" ]; then
+  stage=/tmp
+fi
+mkdir -p -- "$stage" || { printf 'mkdir-failed\n' >&2; exit 1; }
+tmp=$(mktemp -p "$stage" cc-switch-XXXXXX 2>/dev/null) \
+  || tmp=$(mktemp /tmp/cc-switch-XXXXXX) \
+  || { printf 'mktemp-failed\n' >&2; exit 1; }
+"#;
+
 /// `$1` target, `$2` expected revision, `$3` digest of the incoming payload.
-const WRITE_SCRIPT: &str = r#"
+const WRITE_SCRIPT: &str = concat!(
+    r#"
 set -u
-target="$1"; expected="$2"; payload="$3"
+target="${1:-}"; expected="${2:-}"; payload="${3:-}"
+if [ -z "$target" ] || [ "$target" = "/" ]; then
+  printf 'empty-target\n' >&2
+  exit 1
+fi
 dir=$(dirname -- "$target")
 mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
 chmod 700 -- "$dir" 2>/dev/null || true
@@ -54,7 +77,9 @@ else
 fi
 if [ "$actual" != "$expected" ]; then printf 'revision-mismatch\n'; exit 0; fi
 umask 077
-tmp=$(mktemp -- "$dir/.cc-switch-XXXXXX") || { printf 'mktemp-failed\n' >&2; exit 1; }
+"#,
+    ATOMIC_STAGE_SNIPPET,
+    r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }
 chmod 600 -- "$tmp"
@@ -65,18 +90,26 @@ trap - EXIT HUP INT TERM
 verify=$(sha256sum < "$target" | cut -d' ' -f1)
 if [ "$verify" != "$payload" ]; then printf 'verify-mismatch\n' >&2; exit 1; fi
 printf 'ok\n'
-"#;
+"#
+);
 
 /// `$1` target, `$2` digest of the incoming payload. No revision check: the
 /// top-level `~/.pi/models.json` mirror is overwritten to match the agent file.
-const OVERWRITE_SCRIPT: &str = r#"
+const OVERWRITE_SCRIPT: &str = concat!(
+    r#"
 set -u
-target="$1"; payload="$2"
+target="${1:-}"; payload="${2:-}"
+if [ -z "$target" ] || [ "$target" = "/" ]; then
+  printf 'empty-target\n' >&2
+  exit 1
+fi
 dir=$(dirname -- "$target")
 mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
 chmod 700 -- "$dir" 2>/dev/null || true
 umask 077
-tmp=$(mktemp -- "$dir/.cc-switch-XXXXXX") || { printf 'mktemp-failed\n' >&2; exit 1; }
+"#,
+    ATOMIC_STAGE_SNIPPET,
+    r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }
 chmod 600 -- "$tmp"
@@ -87,7 +120,8 @@ trap - EXIT HUP INT TERM
 verify=$(sha256sum < "$target" | cut -d' ' -f1)
 if [ "$verify" != "$payload" ]; then printf 'verify-mismatch\n' >&2; exit 1; fi
 printf 'ok\n'
-"#;
+"#
+);
 
 /// Pi's native configuration files that CC Switch reads or writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -897,6 +931,44 @@ mod tests {
         assert!(agent_text.contains("canonical"));
         assert!(!agent_text.contains("stale"));
         assert_eq!(agent_text, top_text);
+    }
+
+    #[test]
+    fn atomic_write_scripts_stage_under_tmp_never_at_root() {
+        for script in [WRITE_SCRIPT, OVERWRITE_SCRIPT] {
+            assert!(
+                script.contains("mktemp -p") || script.contains("mktemp /tmp/cc-switch-XXXXXX"),
+                "atomic write must mktemp under /tmp"
+            );
+            assert!(
+                !script.contains("$dir/.cc-switch-XXXXXX"),
+                "empty $dir must not expand to /.cc-switch-XXXXXX"
+            );
+            assert!(script.contains("empty-target"));
+        }
+        assert!(ATOMIC_STAGE_SNIPPET.contains("/tmp"));
+    }
+
+    #[test]
+    #[serial]
+    fn empty_wsl_target_fails_without_mktemp_at_root() {
+        let _fixture = wsl_fixture();
+        let output = wsl::run(
+            &WslRequest::guarded("Ubuntu-22.04", WRITE_SCRIPT)
+                .stdin(b"{}\n".to_vec())
+                .timeout(wsl::DEFAULT_TIMEOUT),
+        )
+        .expect("run write script without $1");
+        assert!(!output.succeeded(), "empty target must fail");
+        let detail = format!("{}{}", output.stderr, output.payload_lossy());
+        assert!(
+            detail.contains("empty-target"),
+            "expected empty-target, got {detail}"
+        );
+        assert!(
+            !detail.contains("/.cc-switch-XXXXXX"),
+            "must not mktemp at /: {detail}"
+        );
     }
 
     #[test]

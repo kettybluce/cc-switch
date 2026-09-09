@@ -121,9 +121,11 @@ pub(crate) async fn get_pi_proxy_plan(state: State<'_, AppState>) -> Result<PiPr
     Ok(plan)
 }
 
-/// Verify that this runtime can reach the CC Switch local proxy (`/health`).
+/// Verify that this runtime can reach the CC Switch local proxy.
 ///
-/// A reachable proxy is not a successful provider call — 401s belong to the
+/// Same success rule as the WSL probe: any HTTP 1xx–5xx (including 404 on
+/// `/`) means reachable. A stopped listener is 「请先开启本地代理」, not a
+/// Windows-only `/ping` connection-refused toast. 401s belong to the
 /// upstream, not to this check.
 #[tauri::command]
 pub(crate) async fn test_pi_proxy(state: State<'_, AppState>) -> Result<ProxyHealth, String> {

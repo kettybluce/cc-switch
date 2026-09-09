@@ -820,7 +820,8 @@
       "syncFailed": "WSL セッションを更新できませんでした: {{error}}",
       "proxyReachable": "プロキシに {{latency}} ms で到達しました",
       "proxyUnreachable": "プロキシに到達できません: {{error}}",
-      "proxyTestFailed": "プロキシを確認できませんでした: {{error}}"
+      "proxyTestFailed": "プロキシを確認できませんでした: {{error}}",
+      "proxyStartFirst": "先にローカルプロキシを起動してください"
     },
     "cliRuntime": {
       "sharedRuntime": "Claude、Codex、Pi は同じ WSL ディストリビューションを共有し、wsl.exe 経由のみです。",

@@ -16,14 +16,21 @@ use crate::pi_runtime::wsl::{self, WslRequest};
 use crate::pi_runtime::{self, PiRuntimeTarget};
 
 /// `$1` target, `$2` digest of the incoming payload. Atomic `mv` replace.
-const OVERWRITE_SCRIPT: &str = r#"
+const OVERWRITE_SCRIPT: &str = concat!(
+    r#"
 set -u
-target="$1"; payload="$2"
+target="${1:-}"; payload="${2:-}"
+if [ -z "$target" ] || [ "$target" = "/" ]; then
+  printf 'empty-target\n' >&2
+  exit 1
+fi
 dir=$(dirname -- "$target")
 mkdir -p -- "$dir" || { printf 'mkdir-failed\n' >&2; exit 1; }
 chmod 700 -- "$dir" 2>/dev/null || true
 umask 077
-tmp=$(mktemp -- "$dir/.cc-switch-XXXXXX") || { printf 'mktemp-failed\n' >&2; exit 1; }
+"#,
+    files::ATOMIC_STAGE_SNIPPET,
+    r#"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 cat > "$tmp" || { printf 'write-failed\n' >&2; exit 1; }
 chmod 600 -- "$tmp"
@@ -34,7 +41,8 @@ trap - EXIT HUP INT TERM
 verify=$(sha256sum < "$target" | cut -d' ' -f1)
 if [ "$verify" != "$payload" ]; then printf 'verify-mismatch\n' >&2; exit 1; fi
 printf 'ok\n'
-"#;
+"#
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WslHome {
@@ -309,6 +317,16 @@ mod tests {
             Some("/home/u/.claude".to_string())
         );
         assert_eq!(reject_unc_override(Some("   ")), None);
+    }
+
+    #[test]
+    fn overwrite_script_stages_under_tmp_never_at_root() {
+        assert!(
+            OVERWRITE_SCRIPT.contains("mktemp /tmp/cc-switch-XXXXXX")
+                || OVERWRITE_SCRIPT.contains("mktemp -p")
+        );
+        assert!(!OVERWRITE_SCRIPT.contains("$dir/.cc-switch-XXXXXX"));
+        assert!(OVERWRITE_SCRIPT.contains("empty-target"));
     }
 
     #[test]

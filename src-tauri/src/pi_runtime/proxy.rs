@@ -42,21 +42,29 @@ printf 'gateway=%s\n' "$(ip route show default 2>/dev/null | awk '/^default/ {pr
 printf 'nameserver=%s\n' "$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null)"
 "#;
 
+/// Shown when the local proxy is stopped (port 0) or every probe is
+/// connection-refused. The settings toast maps this to 「请先开启本地代理」.
+pub const PROXY_NOT_RUNNING: &str = "please start the local proxy";
+
 /// `$1` port, `$2` per-probe timeout in seconds, `$3..` candidate hosts.
 ///
 /// One `wsl.exe` call. `/` is probed first: mirrored WSL often gets HTTP 404
 /// on the root (the listener answered) while `/health` can hang or be
-/// mis-parsed. Any 1xx–5xx is success; `000` is timeout / refused / reset.
+/// mis-parsed. `/ping` is the same listener (Windows-side health alias).
+/// Any 1xx–5xx is success; `000` is timeout / refused / reset.
 /// The first reachable host (usually `127.0.0.1`) stops the loop so NAT
 /// candidates are not required when localhost already works.
-const PROBE_SCRIPT: &str = r#"
+///
+/// Port / hosts are also embedded as fallbacks: some `wsl.exe -- bash -c`
+/// wrappers drop `$1` so `curl http://127.0.0.1:` never hits the listener
+/// and the UI toasts "no route" while Settings already shows green.
+const PROBE_SCRIPT_BODY: &str = r#"
 set +e
-port="$1"; timeout="$2"; shift 2
 if ! command -v curl >/dev/null 2>&1; then printf 'no-curl\n'; exit 0; fi
 for host in "$@"; do
   code="000"
   start=$(date +%s 2>/dev/null || printf '0')
-  for path in / /health; do
+  for path in / /health /ping; do
     raw=$(curl -sS -o /dev/null -m "$timeout" -w '%{http_code}' "http://$host:$port$path" 2>/dev/null)
     raw=$(printf '%s' "$raw" | tr -cd '0-9')
     case "$raw" in
@@ -368,7 +376,7 @@ pub fn plan_ui_snapshot(
 ) -> PiProxyPlan {
     let origin = (local_proxy_port != 0).then(|| format!("http://127.0.0.1:{local_proxy_port}"));
     let gateway = if local_proxy_port == 0 {
-        ProxyHealth::unreachable("the CC Switch local proxy is not running")
+        ProxyHealth::unreachable(PROXY_NOT_RUNNING)
     } else {
         ProxyHealth {
             reachable: true,
@@ -395,9 +403,7 @@ pub fn plan_ui_snapshot(
 
 fn local_gateway(target: &super::PiRuntimeTarget, local_proxy_port: u16) -> PiResult<ProxyHealth> {
     if local_proxy_port == 0 {
-        return Ok(ProxyHealth::unreachable(
-            "the CC Switch local proxy is not running",
-        ));
+        return Ok(ProxyHealth::unreachable(PROXY_NOT_RUNNING));
     }
     match target.distro() {
         Some(distro) => resolve_gateway(distro, local_proxy_port),
@@ -422,9 +428,7 @@ pub async fn verify(
     local_proxy_port: u16,
 ) -> PiResult<ProxyHealth> {
     if local_proxy_port == 0 {
-        return Ok(ProxyHealth::unreachable(
-            "the CC Switch local proxy is not running",
-        ));
+        return Ok(ProxyHealth::unreachable(PROXY_NOT_RUNNING));
     }
     match target.distro() {
         Some(distro) => resolve_gateway(distro, local_proxy_port),
@@ -433,7 +437,10 @@ pub async fn verify(
 }
 
 async fn probe_local_health(port: u16) -> PiResult<ProxyHealth> {
-    let url = format!("http://127.0.0.1:{port}/health");
+    // Same success rule as the WSL probe: any HTTP status means the
+    // listener answered. Do not require `/ping` (Windows-only 404/refused
+    // used to disagree with a working WSL curl to `/`).
+    let url = format!("http://127.0.0.1:{port}/");
     let start = std::time::Instant::now();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
@@ -445,7 +452,7 @@ async fn probe_local_health(port: u16) -> PiResult<ProxyHealth> {
     match client.get(&url).send().await {
         Ok(response) => {
             let latency = start.elapsed().as_millis() as u32;
-            if response.status().is_success() || response.status().as_u16() < 500 {
+            if is_reachable(response.status().as_u16() as u32) {
                 Ok(ProxyHealth {
                     reachable: true,
                     endpoint: Some(format!("http://127.0.0.1:{port}")),
@@ -462,10 +469,28 @@ async fn probe_local_health(port: u16) -> PiResult<ProxyHealth> {
                 )))
             }
         }
-        Err(error) => Ok(ProxyHealth::unreachable(format!(
-            "local proxy health check failed: {error}"
-        ))),
+        Err(error) => {
+            let detail = error.to_string();
+            if looks_like_proxy_off(&detail) {
+                Ok(ProxyHealth::unreachable(PROXY_NOT_RUNNING))
+            } else {
+                Ok(ProxyHealth::unreachable(format!(
+                    "local proxy health check failed: {error}"
+                )))
+            }
+        }
     }
+}
+
+/// Connection-refused / `/ping` / "not running" all mean the listener is off.
+pub fn looks_like_proxy_off(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("please start the local proxy")
+        || lower.contains("local proxy is not running")
+        || lower.contains("connection refused")
+        || lower.contains("error sending request")
+        || lower.contains("/ping")
+        || lower.contains("请先开启本地代理")
 }
 
 /// A loopback proxy has to be rewritten to the address WSL can route to.
@@ -610,10 +635,46 @@ fn is_reachable(code: u32) -> bool {
     (100..600).contains(&code)
 }
 
+fn is_safe_probe_host(host: &str) -> bool {
+    host.parse::<Ipv4Addr>().is_ok() || host.eq_ignore_ascii_case("localhost")
+}
+
+/// Probe body with integer port / validated hosts baked in so a dropped `$1`
+/// still curls `http://127.0.0.1:<port>/` instead of `http://127.0.0.1:`.
+fn probe_script(port: u16, hosts: &[HostCandidate]) -> String {
+    let fallback_hosts: Vec<&str> = hosts
+        .iter()
+        .map(|candidate| candidate.host.as_str())
+        .filter(|host| is_safe_probe_host(host))
+        .collect();
+    let fallback = if fallback_hosts.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        fallback_hosts.join(" ")
+    };
+    format!(
+        r#"
+set +e
+port="${{1:-{port}}}"
+timeout="${{2:-{timeout}}}"
+if [ -n "${{3:-}}" ]; then
+  shift 2
+else
+  set -- {fallback}
+fi
+{body}
+"#,
+        port = port,
+        timeout = PROBE_TIMEOUT_SECONDS,
+        fallback = fallback,
+        body = PROBE_SCRIPT_BODY,
+    )
+}
+
 /// Find the address WSL can use to reach CC Switch's local endpoint on `port`.
 pub fn resolve_gateway(distro: &str, port: u16) -> PiResult<ProxyHealth> {
     let candidates = host_candidates(distro)?;
-    let mut request = WslRequest::guarded(distro, PROBE_SCRIPT)
+    let mut request = WslRequest::guarded(distro, &probe_script(port, &candidates))
         .arg(port.to_string())
         .arg(PROBE_TIMEOUT_SECONDS.to_string())
         .timeout(wsl::DEFAULT_TIMEOUT);
@@ -657,14 +718,26 @@ pub fn resolve_gateway(distro: &str, port: u16) -> PiResult<ProxyHealth> {
         });
     }
 
-    let attempted = candidates
-        .iter()
-        .map(|candidate| candidate.host.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(ProxyHealth::unreachable(format!(
-        "no route from WSL '{distro}' to CC Switch on port {port} (tried {attempted}). Under mirrored networking, any HTTP status on 127.0.0.1 means the listener answered; the default-route and dnsTunneling addresses are optional. Confirm the local proxy is running."
-    )))
+    // A 1xx–5xx on any probed host is success even if the host string
+    // did not match the candidate list (dropped argv / fallback `set --`).
+    if let Some(result) = results.iter().find(|result| is_reachable(result.code)) {
+        let strategy = candidates
+            .iter()
+            .find(|candidate| candidate.host == result.host)
+            .map(|candidate| candidate.strategy)
+            .unwrap_or(HostStrategy::MirroredLoopback);
+        return Ok(ProxyHealth {
+            reachable: true,
+            endpoint: Some(format!("http://{}:{port}", result.host)),
+            host: Some(result.host.clone()),
+            strategy: Some(strategy),
+            latency_ms: Some(result.latency_ms),
+            protocol: Some(ProxyProtocol::Http),
+            error: None,
+        });
+    }
+
+    Ok(ProxyHealth::unreachable(PROXY_NOT_RUNNING))
 }
 
 /// Verify that Pi can actually reach the internet through `endpoint` (§50–51).
@@ -972,6 +1045,33 @@ mod tests {
         assert!(!plan.enabled);
         assert!(!plan.projected);
         assert!(plan.origin.is_none());
+        assert_eq!(plan.gateway.error.as_deref(), Some(PROXY_NOT_RUNNING));
+    }
+
+    #[test]
+    fn connection_refused_and_ping_errors_mean_start_the_proxy() {
+        assert!(looks_like_proxy_off(
+            r#"Get "http://127.0.0.1:15721/ping": connection refused"#
+        ));
+        assert!(looks_like_proxy_off(PROXY_NOT_RUNNING));
+        assert!(looks_like_proxy_off(
+            "the CC Switch local proxy is not running"
+        ));
+        assert!(!looks_like_proxy_off("HTTP 401 from the upstream provider"));
+    }
+
+    #[test]
+    fn probe_script_embeds_port_so_dropped_argv_still_hits_localhost() {
+        let candidates = build_candidates(
+            Some(Ipv4Addr::new(172, 30, 213, 1)),
+            Some(Ipv4Addr::new(10, 255, 255, 254)),
+        );
+        let script = probe_script(15721, &candidates);
+        assert!(script.contains(r#"port="${1:-15721}""#) || script.contains("15721"));
+        assert!(script.contains("/health"));
+        assert!(script.contains("/ping"));
+        assert!(script.contains("127.0.0.1"));
+        assert!(script.contains("for host in"));
     }
 
     #[test]
