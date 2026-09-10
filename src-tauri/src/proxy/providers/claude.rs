@@ -728,6 +728,7 @@ impl ProviderAdapter for ClaudeAdapter {
         if let Some(url) = provider
             .settings_config
             .get("baseURL")
+            .or_else(|| provider.settings_config.get("baseUrl"))
             .and_then(|v| v.as_str())
         {
             return Ok(url.trim_end_matches('/').to_string());
@@ -1068,6 +1069,21 @@ mod tests {
 
         let url = adapter.extract_base_url(&provider).unwrap();
         assert_eq!(url, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn test_extract_base_url_from_pi_native_base_url() {
+        let adapter = ClaudeAdapter::new();
+        let provider = create_provider(json!({
+            "api": "anthropic-messages",
+            "baseUrl": "https://api.anthropic.com",
+            "apiKey": "sk-ant-live"
+        }));
+
+        let url = adapter.extract_base_url(&provider).unwrap();
+        assert_eq!(url, "https://api.anthropic.com");
+        let auth = adapter.extract_auth(&provider).unwrap();
+        assert_eq!(auth.api_key, "sk-ant-live");
     }
 
     #[test]

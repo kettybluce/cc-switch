@@ -39,7 +39,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
   usage_app_type_from_headers \
   projection_ \
   default_session_root \
-  pi_takeover_projects
+  pi_takeover_projects \
+  pi_header_selects \
+  pi_selection_
 # Full crate (CI equivalent) when time allows:
 # cargo test --manifest-path src-tauri/Cargo.toml
 ```
@@ -72,6 +74,7 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 - Projection injects `headers["x-cc-switch-app"] = "pi"`; existing `headers` preserved.
 - `usage_app_type_from_headers` → logging `app_type=pi` without calling `get_proxy_config_for_app("pi")`.
 - Header stripped hop-by-hop in `forwarder.rs` (not sent upstream).
+- Shared listen still uses Claude / Codex / Gemini handlers; `x-cc-switch-app: pi` selects forwardable Pi catalog providers (not Claude/Codex current). Projected `PROXY_MANAGED` nodes are skipped.
 - Session importer already writes `app_type = "pi"` from agent JSONL (`session_usage_pi.rs`). `proxy_request_logs.app_type` has no CHECK; SCHEMA stays 18.
 
 ### 5. Claude-parity local proxy projection
@@ -82,6 +85,9 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
   - `models.json` projected onto existing Claude listen (`0.0.0.0` → `127.0.0.1`)
   - `auth.json` / `settings.json` defaults untouched
   - `x-cc-switch-app: pi` present on projected Anthropic node
+- `pi_header_selects_pi_providers_not_claude_or_codex`: header routes Claude listen → Pi anthropic card, Codex listen → Pi openai card; without header Claude current stays selected.
+- `pi_selection_skips_projected_placeholder_and_prefers_model`
+- `pi_selection_does_not_read_or_insert_proxy_config_pi_row` (`SCHEMA_VERSION == 18`)
 
 ### 6. MSI Error 5
 

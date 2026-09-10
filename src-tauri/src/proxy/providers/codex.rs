@@ -974,10 +974,11 @@ impl ProviderAdapter for CodexAdapter {
             return Ok(url.trim_end_matches('/').to_string());
         }
 
-        // 2. 尝试 baseURL
+        // 2. 尝试 baseURL / Pi native baseUrl
         if let Some(url) = provider
             .settings_config
             .get("baseURL")
+            .or_else(|| provider.settings_config.get("baseUrl"))
             .and_then(|v| v.as_str())
         {
             return Ok(url.trim_end_matches('/').to_string());
@@ -1368,6 +1369,21 @@ wire_api = "responses"
 
         let url = adapter.extract_base_url(&provider).unwrap();
         assert_eq!(url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_extract_base_url_from_pi_native_base_url() {
+        let adapter = CodexAdapter::new();
+        let provider = create_provider(json!({
+            "api": "openai-completions",
+            "baseUrl": "https://api.openai.com/v1",
+            "apiKey": "sk-openai-live"
+        }));
+
+        let url = adapter.extract_base_url(&provider).unwrap();
+        assert_eq!(url, "https://api.openai.com/v1");
+        let auth = adapter.extract_auth(&provider).unwrap();
+        assert_eq!(auth.api_key, "sk-openai-live");
     }
 
     #[test]
