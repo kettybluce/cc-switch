@@ -5,6 +5,19 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.8] - 2026-09-10
+
+Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #35). Saving or opening the Pi provider list pins `compat.supportsDeveloperRole: false` on managed `openai-completions` cards (百胜 / yum 1214「角色信息不正确」). Chat Completions outbound remaps leftover `developer` → `system`. `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- **百胜 1214 角色信息不正确**: 保存/打开 Pi 供应商列表时自动为 `openai-completions` 补 `supportsDeveloperRole: false`（显式 `true` 不覆盖）；接管投影同样写入。代理 Chat Completions 出站再把 `developer` 改成 `system` 兜底。不把 prompt 写入 `user`。Live 文件是 `~/.pi/agent/models.json`。
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+
 ## [3.20.7] - 2026-09-10
 
 Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #33). After Pi local-proxy takeover, shared Claude listen identifies `x-cc-switch-app: pi` and forwards with Pi catalog providers instead of the Claude/Codex current card (which caused HTTP 500). `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
