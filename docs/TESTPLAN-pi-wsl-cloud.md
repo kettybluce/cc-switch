@@ -104,22 +104,22 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 | Live Pi CLI traffic through the shared listen on Windows | E2E projection + header logging unit tests only |
 | GitHub Actions `cargo test` full crate on this PR | Recorded in the PR after this VM run; Actions may still re-run |
 
-## Recorded on this cloud Linux VM (2026-09-09)
+## Recorded on this cloud Linux VM (2026-09-10, Pi provider select)
 
 | Command | Result |
 | --- | --- |
-| `pnpm typecheck` | pass |
-| `pnpm format:check` | pass (via `pnpm format` then typecheck; src formatted) |
-| `pnpm test:unit` | **1094 passed**, 135 files |
 | `cargo fmt --check --manifest-path src-tauri/Cargo.toml` | pass |
 | `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` | pass |
-| `cargo test --lib wsl_distro_from_path_str` | ok (1) |
-| `cargo test --lib canonicalize_dot_pi` | ok (1) |
-| `cargo test --lib wsl_localhost` | ok (3) |
+| `cargo test --lib pi_header_selects` | ok (1) |
+| `cargo test --lib pi_selection_` | ok (2) |
+| `cargo test --lib pi_api_matches` | ok (1) |
+| `cargo test --lib pi_forwardable` | ok (1) |
+| `cargo test --lib copy_pi_base_url` | ok (1) |
+| `cargo test --lib extract_base_url_from_pi_native` | ok (3) |
 | `cargo test --lib usage_app_type_from_headers` | ok (1) |
 | `cargo test --lib projection_` | ok (8) |
-| `cargo test --lib default_session_root` | ok (1) |
 | `cargo test --lib pi_takeover_projects` | ok (1) |
+| `cargo test --lib provider_router` | ok (11) |
 
 Full `cargo test --manifest-path src-tauri/Cargo.toml` (lib + integration, ~2800+ lib tests) was **not** re-run in full on this VM after the last fixture-string edit; clippy rebuilt the lib cleanly and the mapped tests above passed. GitHub Actions CI on the PR is the full crate gate.
 
