@@ -5,6 +5,19 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.7] - 2026-09-10
+
+Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #33). After Pi local-proxy takeover, shared Claude listen identifies `x-cc-switch-app: pi` and forwards with Pi catalog providers instead of the Claude/Codex current card (which caused HTTP 500). `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- **Pi 接管后误用 Claude/Codex 供应商导致 500**: 共享 listen 按 `x-cc-switch-app: pi` 选用可转发的 Pi 目录供应商（真实 `apiKey` / `baseUrl`），不再走 Claude/Codex 当前卡。
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+
 ## [3.20.6] - 2026-09-10
 
 Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #31). Session manager copy-resume for Pi is `pi --session <会话id>` (JSONL header id), not a jsonl/UNC path. `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
