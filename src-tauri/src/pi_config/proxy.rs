@@ -574,7 +574,7 @@ mod tests {
         let mut node = json!({
             "name": "baisheng",
             "api": "openai-completions",
-            "baseUrl": "https://llm.yum.example/v1",
+            "baseUrl": "http://api.llm.prd.yumc.local/v1",
             "models": [
                 { "id": "glm-5.2", "reasoning": true },
                 { "id": "kimi-k2.7-code" }
