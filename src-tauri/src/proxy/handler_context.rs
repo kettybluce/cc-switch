@@ -96,7 +96,8 @@ impl RequestContext {
         let start_time = Instant::now();
 
         // 从数据库读取应用级代理配置（per-app）
-        let app_config = state
+        // SCHEMA 18: Pi reuses Claude/Codex/Gemini listen config; never read proxy_config('pi').
+        let mut app_config = state
             .db
             .get_proxy_config_for_app(app_type_str)
             .await
@@ -107,15 +108,20 @@ impl RequestContext {
         let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
         let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
 
-        let current_provider_id =
-            crate::settings::get_current_provider(&app_type).unwrap_or_default();
-
         // 从请求体提取模型名称
         let request_model = body
             .get("model")
             .and_then(|m| m.as_str())
             .unwrap_or("unknown")
             .to_string();
+
+        let request_is_pi = crate::pi_config::request_is_pi_client(headers);
+        if request_is_pi {
+            // Pi has no failover queue. Do not inherit Claude/Codex failover
+            // or hot-switch their current card after a successful Pi request.
+            app_config.auto_failover_enabled = false;
+        }
+        let tag = if request_is_pi { "Pi" } else { tag };
 
         // 提取 Session ID
         let session_result = extract_session_id(headers, body, app_type_str);
@@ -131,9 +137,10 @@ impl RequestContext {
 
         // 使用共享的 ProviderRouter 选择 Provider（熔断器状态跨请求保持）
         // 注意：只在这里调用一次，结果传递给 forwarder，避免重复消耗 HalfOpen 名额
+        // Pi clients share this Claude listen but must use Pi catalog credentials.
         let providers = state
             .provider_router
-            .select_providers(app_type_str)
+            .select_providers_for_request(app_type_str, headers, &request_model)
             .await
             .map_err(|e| match e {
                 crate::error::AppError::AllProvidersCircuitOpen => {
@@ -142,6 +149,15 @@ impl RequestContext {
                 crate::error::AppError::NoProvidersConfigured => ProxyError::NoProvidersConfigured,
                 _ => ProxyError::DatabaseError(e.to_string()),
             })?;
+
+        let current_provider_id = if request_is_pi {
+            providers
+                .first()
+                .map(|provider| provider.id.clone())
+                .unwrap_or_default()
+        } else {
+            crate::settings::get_current_provider(&app_type).unwrap_or_default()
+        };
 
         let provider = providers
             .first()

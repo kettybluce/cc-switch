@@ -230,6 +230,100 @@ pub(crate) fn usage_app_type_from_headers(
     }
 }
 
+pub(crate) fn pi_provider_api(config: &Value) -> Option<&str> {
+    config.get("api").and_then(Value::as_str)
+}
+
+/// Shared Claude listen still uses Claude / Codex / Gemini handlers.
+/// Pick the Pi `api` family that belongs on that handler so we do not
+/// forward an Anthropic Pi card through Codex (or the reverse).
+pub(crate) fn pi_api_matches_listen_app(api: Option<&str>, listen_app: &str) -> bool {
+    match listen_app {
+        "claude" => matches!(
+            api,
+            Some("anthropic-messages") | Some("bedrock-converse-stream") | None
+        ),
+        "codex" => matches!(api, Some("openai-completions") | Some("openai-responses")),
+        "gemini" => matches!(api, Some("google-generative-ai")),
+        _ => false,
+    }
+}
+
+pub(crate) fn pi_provider_has_model(config: &Value, model: &str) -> bool {
+    let model = model.trim();
+    if model.is_empty() || model == "unknown" {
+        return false;
+    }
+    config
+        .get("models")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|entry| {
+                entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id == model)
+                    || entry.as_str() == Some(model)
+            })
+        })
+}
+
+/// Real upstream credentials live in the Pi provider catalog. Projected
+/// `models.json` nodes (`PROXY_MANAGED` / local listen URL) cannot be forwarded.
+pub(crate) fn pi_provider_is_forwardable(config: &Value) -> bool {
+    if is_projected_provider_node(config) {
+        return false;
+    }
+    config
+        .get("apiKey")
+        .or_else(|| config.get("api_key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|key| !key.is_empty() && key != PI_PROXY_API_KEY_PLACEHOLDER)
+}
+
+/// Claude / Codex / Gemini adapters look up `base_url` / `baseURL`.
+/// Pi's native schema uses `baseUrl`; copy it so the shared adapters work.
+pub(crate) fn copy_pi_base_url_for_adapters(config: &mut Value) {
+    let Some(object) = config.as_object_mut() else {
+        return;
+    };
+    if object
+        .get("base_url")
+        .and_then(Value::as_str)
+        .is_some_and(|url| !url.trim().is_empty())
+    {
+        return;
+    }
+    if let Some(url) = object
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+    {
+        object.insert("base_url".to_string(), Value::String(url));
+        return;
+    }
+    let model_url = object
+        .get("models")
+        .and_then(Value::as_array)
+        .and_then(|models| {
+            models.iter().find_map(|model| {
+                model
+                    .get("baseUrl")
+                    .or_else(|| model.get("base_url"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_string)
+            })
+        });
+    if let Some(url) = model_url {
+        object.insert("base_url".to_string(), Value::String(url));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +490,70 @@ mod tests {
         assert!(request_is_pi_client(&headers));
         assert_eq!(usage_app_type_from_headers(&headers, "claude"), "pi");
         assert_eq!(usage_app_type_from_headers(&headers, "codex"), "pi");
+    }
+
+    #[test]
+    fn pi_api_matches_shared_listen_handlers() {
+        assert!(pi_api_matches_listen_app(
+            Some("anthropic-messages"),
+            "claude"
+        ));
+        assert!(pi_api_matches_listen_app(
+            Some("bedrock-converse-stream"),
+            "claude"
+        ));
+        assert!(pi_api_matches_listen_app(None, "claude"));
+        assert!(!pi_api_matches_listen_app(
+            Some("openai-completions"),
+            "claude"
+        ));
+        assert!(pi_api_matches_listen_app(
+            Some("openai-completions"),
+            "codex"
+        ));
+        assert!(pi_api_matches_listen_app(Some("openai-responses"), "codex"));
+        assert!(!pi_api_matches_listen_app(
+            Some("anthropic-messages"),
+            "codex"
+        ));
+        assert!(pi_api_matches_listen_app(
+            Some("google-generative-ai"),
+            "gemini"
+        ));
+        assert!(!pi_api_matches_listen_app(
+            Some("anthropic-messages"),
+            "gemini"
+        ));
+    }
+
+    #[test]
+    fn pi_forwardable_skips_projected_placeholder() {
+        let live = json!({
+            "api": "anthropic-messages",
+            "baseUrl": "https://api.anthropic.com",
+            "apiKey": "sk-ant-live"
+        });
+        assert!(pi_provider_is_forwardable(&live));
+        assert!(pi_provider_has_model(
+            &json!({"models":[{"id":"claude-sonnet-4"}]}),
+            "claude-sonnet-4"
+        ));
+
+        let projected = project_provider_node(&live, "http://127.0.0.1:15721");
+        assert!(!pi_provider_is_forwardable(&projected));
+        assert_eq!(projected["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
+    }
+
+    #[test]
+    fn copy_pi_base_url_exposes_native_field_to_adapters() {
+        let mut config = json!({
+            "api": "anthropic-messages",
+            "baseUrl": "https://api.anthropic.com",
+            "apiKey": "sk-ant-live"
+        });
+        copy_pi_base_url_for_adapters(&mut config);
+        assert_eq!(config["base_url"], json!("https://api.anthropic.com"));
+        assert_eq!(config["baseUrl"], json!("https://api.anthropic.com"));
     }
 
     #[test]

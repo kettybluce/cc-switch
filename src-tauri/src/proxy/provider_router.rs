@@ -7,7 +7,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::circuit_breaker::{AllowResult, CircuitBreaker, CircuitBreakerConfig};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -128,6 +128,83 @@ impl ProviderRouter {
         }
 
         Ok(result)
+    }
+
+    /// Shared Claude listen: Pi clients (`x-cc-switch-app: pi`) use the Pi
+    /// catalog. Everyone else keeps the listen app's current/failover chain.
+    pub async fn select_providers_for_request(
+        &self,
+        listen_app: &str,
+        headers: &http::HeaderMap,
+        request_model: &str,
+    ) -> Result<Vec<Provider>, AppError> {
+        if crate::pi_config::request_is_pi_client(headers) {
+            self.select_pi_providers(listen_app, request_model)
+        } else {
+            self.select_providers(listen_app).await
+        }
+    }
+
+    /// Select forwardable Pi providers for a request arriving on the shared
+    /// Claude / Codex / Gemini listen. Does not read `proxy_config` for `pi`.
+    pub fn select_pi_providers(
+        &self,
+        listen_app: &str,
+        request_model: &str,
+    ) -> Result<Vec<Provider>, AppError> {
+        let all = self.db.get_all_providers(AppType::Pi.as_str())?;
+        let enabled_ids = crate::pi_config::read_pi_native_providers()
+            .ok()
+            .map(|native| native.into_keys().collect::<HashSet<String>>());
+
+        let mut candidates: Vec<Provider> = all
+            .into_values()
+            .filter(|provider| {
+                crate::pi_config::pi_provider_is_forwardable(&provider.settings_config)
+            })
+            .filter(|provider| {
+                crate::pi_config::pi_api_matches_listen_app(
+                    crate::pi_config::pi_provider_api(&provider.settings_config),
+                    listen_app,
+                )
+            })
+            .collect();
+
+        if let Some(enabled) = enabled_ids.as_ref() {
+            let live: Vec<Provider> = candidates
+                .iter()
+                .filter(|provider| enabled.contains(&provider.id))
+                .cloned()
+                .collect();
+            if !live.is_empty() {
+                candidates = live;
+            }
+        }
+
+        let model = request_model.trim();
+        if !model.is_empty() && model != "unknown" {
+            let matched: Vec<Provider> = candidates
+                .iter()
+                .filter(|provider| {
+                    crate::pi_config::pi_provider_has_model(&provider.settings_config, model)
+                })
+                .cloned()
+                .collect();
+            if !matched.is_empty() {
+                candidates = matched;
+            }
+        }
+
+        if candidates.is_empty() {
+            log::warn!("[pi] [FO-005] 未配置可转发的 Pi 供应商 (listen={listen_app})");
+            return Err(AppError::NoProvidersConfigured);
+        }
+
+        for provider in &mut candidates {
+            crate::pi_config::copy_pi_base_url_for_adapters(&mut provider.settings_config);
+        }
+
+        Ok(candidates)
     }
 
     /// 请求执行前获取熔断器“放行许可”
@@ -633,5 +710,210 @@ mod tests {
         let third = router.allow_provider_request("a", "claude").await;
         assert!(third.allowed);
         assert!(third.used_half_open_permit);
+    }
+
+    fn pi_header() -> http::HeaderMap {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            crate::pi_config::PI_CLIENT_APP_HEADER,
+            http::HeaderValue::from_static(crate::pi_config::PI_CLIENT_APP_VALUE),
+        );
+        headers
+    }
+
+    fn pi_provider(id: &str, api: &str, model: &str, base_url: &str, api_key: &str) -> Provider {
+        Provider::with_id(
+            id.to_string(),
+            id.to_string(),
+            json!({
+                "api": api,
+                "baseUrl": base_url,
+                "apiKey": api_key,
+                "models": [{ "id": model }]
+            }),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_header_selects_pi_providers_not_claude_or_codex() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        db.save_provider(
+            "claude",
+            &Provider::with_id(
+                "claude-current".to_string(),
+                "Claude Current".to_string(),
+                json!({
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                        "ANTHROPIC_API_KEY": "sk-claude"
+                    }
+                }),
+                None,
+            ),
+        )
+        .unwrap();
+        db.set_current_provider("claude", "claude-current").unwrap();
+
+        db.save_provider(
+            "codex",
+            &Provider::with_id(
+                "codex-current".to_string(),
+                "Codex Current".to_string(),
+                json!({ "base_url": "https://api.openai.com/v1", "apiKey": "sk-codex" }),
+                None,
+            ),
+        )
+        .unwrap();
+        db.set_current_provider("codex", "codex-current").unwrap();
+
+        db.save_provider(
+            "pi",
+            &pi_provider(
+                "anthropic",
+                "anthropic-messages",
+                "claude-sonnet-4",
+                "https://api.anthropic.com",
+                "sk-ant-live",
+            ),
+        )
+        .unwrap();
+        db.save_provider(
+            "pi",
+            &pi_provider(
+                "openai",
+                "openai-completions",
+                "gpt-4o",
+                "https://api.openai.com/v1",
+                "sk-openai-live",
+            ),
+        )
+        .unwrap();
+
+        let router = ProviderRouter::new(db);
+
+        let claude_without_header = router
+            .select_providers_for_request("claude", &http::HeaderMap::new(), "claude-sonnet-4")
+            .await
+            .unwrap();
+        assert_eq!(claude_without_header.len(), 1);
+        assert_eq!(claude_without_header[0].id, "claude-current");
+
+        let pi_on_claude = router
+            .select_providers_for_request("claude", &pi_header(), "claude-sonnet-4")
+            .await
+            .unwrap();
+        assert_eq!(pi_on_claude.len(), 1);
+        assert_eq!(pi_on_claude[0].id, "anthropic");
+        assert_eq!(
+            pi_on_claude[0].settings_config["apiKey"],
+            json!("sk-ant-live")
+        );
+        assert_eq!(
+            pi_on_claude[0].settings_config["base_url"],
+            json!("https://api.anthropic.com")
+        );
+        assert_ne!(pi_on_claude[0].id, "claude-current");
+
+        let pi_on_codex = router
+            .select_providers_for_request("codex", &pi_header(), "gpt-4o")
+            .await
+            .unwrap();
+        assert_eq!(pi_on_codex.len(), 1);
+        assert_eq!(pi_on_codex[0].id, "openai");
+        assert_ne!(pi_on_codex[0].id, "codex-current");
+
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_selection_skips_projected_placeholder_and_prefers_model() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        db.save_provider(
+            "pi",
+            &pi_provider(
+                "anthropic",
+                "anthropic-messages",
+                "claude-sonnet-4",
+                "https://api.anthropic.com",
+                "sk-ant-live",
+            ),
+        )
+        .unwrap();
+        db.save_provider(
+            "pi",
+            &pi_provider(
+                "other-claude",
+                "anthropic-messages",
+                "claude-opus-4",
+                "https://other.example/anthropic",
+                "sk-other",
+            ),
+        )
+        .unwrap();
+        db.save_provider(
+            "pi",
+            &Provider::with_id(
+                "projected".to_string(),
+                "Projected".to_string(),
+                json!({
+                    "api": "anthropic-messages",
+                    "baseUrl": "http://127.0.0.1:15721",
+                    "apiKey": crate::pi_config::PI_PROXY_API_KEY_PLACEHOLDER,
+                    "models": [{ "id": "claude-sonnet-4" }]
+                }),
+                None,
+            ),
+        )
+        .unwrap();
+
+        let router = ProviderRouter::new(db);
+        let selected = router
+            .select_pi_providers("claude", "claude-sonnet-4")
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "anthropic");
+        assert_eq!(selected[0].settings_config["apiKey"], json!("sk-ant-live"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_selection_does_not_read_or_insert_proxy_config_pi_row() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_provider(
+            "pi",
+            &pi_provider(
+                "anthropic",
+                "anthropic-messages",
+                "claude-sonnet-4",
+                "https://api.anthropic.com",
+                "sk-ant-live",
+            ),
+        )
+        .unwrap();
+
+        let router = ProviderRouter::new(db.clone());
+        router
+            .select_pi_providers("claude", "claude-sonnet-4")
+            .unwrap();
+
+        let pi_rows: i64 = {
+            let conn = db.conn.lock().expect("db lock");
+            conn.query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count pi rows")
+        };
+        assert_eq!(pi_rows, 0);
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
     }
 }

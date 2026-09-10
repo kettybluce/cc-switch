@@ -182,6 +182,7 @@ impl ProviderAdapter for GeminiAdapter {
         if let Some(url) = provider
             .settings_config
             .get("baseURL")
+            .or_else(|| provider.settings_config.get("baseUrl"))
             .and_then(|v| v.as_str())
         {
             return Ok(url.trim_end_matches('/').to_string());
@@ -289,6 +290,21 @@ mod tests {
 
         let url = adapter.extract_base_url(&provider).unwrap();
         assert_eq!(url, "https://generativelanguage.googleapis.com/v1beta");
+    }
+
+    #[test]
+    fn test_extract_base_url_from_pi_native_base_url() {
+        let adapter = GeminiAdapter::new();
+        let provider = create_provider(json!({
+            "api": "google-generative-ai",
+            "baseUrl": "https://generativelanguage.googleapis.com",
+            "apiKey": "gemini-key"
+        }));
+
+        let url = adapter.extract_base_url(&provider).unwrap();
+        assert_eq!(url, "https://generativelanguage.googleapis.com");
+        let auth = adapter.extract_auth(&provider).unwrap();
+        assert_eq!(auth.api_key, "gemini-key");
     }
 
     #[test]
