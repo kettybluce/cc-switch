@@ -8,8 +8,15 @@ use serde_json::Value;
 
 const PI_APP: &str = "pi";
 
+fn heal_live_openai_system_roles() {
+    if let Err(error) = crate::pi_config::heal_live_openai_completions_system_roles() {
+        log::warn!("Failed to pin openai-completions system role in models.json: {error}");
+    }
+}
+
 pub(super) fn list(state: &AppState) -> Result<IndexMap<String, Provider>, AppError> {
     let _guard = futures::executor::block_on(state.proxy_service.lock_switch_for_app(PI_APP));
+    heal_live_openai_system_roles();
     match crate::pi_config::read_pi_native_providers() {
         Ok(native) => {
             if let Err(error) = sync_native_locked(state, &native) {
@@ -25,6 +32,7 @@ pub(super) fn list(state: &AppState) -> Result<IndexMap<String, Provider>, AppEr
 
 pub(super) fn import_from_live(state: &AppState) -> Result<usize, AppError> {
     let _guard = futures::executor::block_on(state.proxy_service.lock_switch_for_app(PI_APP));
+    heal_live_openai_system_roles();
     let native = crate::pi_config::read_pi_native_providers()?;
     sync_native_locked(state, &native)
 }
@@ -213,6 +221,7 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
         .get_provider_by_id(id, app_type.as_str())?
         .ok_or_else(|| AppError::InvalidInput(format!("Pi provider '{id}' not found")))?;
 
+    heal_live_openai_system_roles();
     if let Some(native) = crate::pi_config::read_pi_native_provider(id)? {
         let mut synced = provider;
         merge_native_config(&mut synced, native);
@@ -446,6 +455,67 @@ mod tests {
 
     #[test]
     #[serial]
+    fn list_heals_live_baisheng_without_touching_fengwind_or_opencode_go() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        let agent_dir = crate::pi_config::get_pi_agent_dir().expect("agent directory");
+        fs::create_dir_all(&agent_dir).expect("create agent directory");
+        fs::write(
+            agent_dir.join("models.json"),
+            r#"{
+              "providers": {
+                "fengwind": {
+                  "name": "fengwind",
+                  "api": "anthropic-messages",
+                  "baseUrl": "https://api.fengwind.example"
+                },
+                "cc-switch-open-code-go": {
+                  "name": "OpenCode Go",
+                  "api": "openai-completions",
+                  "models": [{
+                    "id": "glm-5.2",
+                    "compat": { "supportsDeveloperRole": false }
+                  }]
+                },
+                "baisheng": {
+                  "name": "baisheng",
+                  "api": "openai-completions",
+                  "baseUrl": "http://api.llm.prd.yumc.local/v1",
+                  "models": [
+                    { "id": "glm-5.2", "reasoning": true },
+                    { "id": "kimi-k2.7-code" },
+                    { "id": "deepseek-v4-pro" }
+                  ]
+                }
+              }
+            }"#,
+        )
+        .expect("write live catalog");
+
+        ProviderService::list(&state, AppType::Pi).expect("list heals live file");
+
+        let live = crate::pi_config::read_pi_native_providers().expect("read models.json");
+        assert!(live["fengwind"].get("compat").is_none());
+        assert_eq!(
+            live["cc-switch-open-code-go"]["models"][0]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(
+            live["baisheng"]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(live["baisheng"]["models"].as_array().unwrap().len(), 3);
+        for model in live["baisheng"]["models"].as_array().unwrap() {
+            assert_eq!(model["compat"]["supportsDeveloperRole"], json!(false));
+        }
+        assert_eq!(
+            live["baisheng"]["baseUrl"],
+            json!("http://api.llm.prd.yumc.local/v1")
+        );
+    }
+
+    #[test]
+    #[serial]
     fn default_selection_does_not_block_membership_changes() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -577,15 +647,14 @@ mod tests {
         let baseline = input("model-a");
         ProviderService::add(&state, AppType::Pi, baseline.clone(), true).expect("add provider");
 
-        let mut external = baseline.settings_config.clone();
+        let written = crate::pi_config::read_pi_native_provider("cc-switch-test")
+            .expect("read written provider")
+            .expect("native provider");
+        let mut external = written.clone();
         external["apiKey"] = json!("rotated-outside");
         external["futureField"] = json!({ "preserve": true });
-        crate::pi_config::replace_pi_provider(
-            "cc-switch-test",
-            &baseline.settings_config,
-            &external,
-        )
-        .expect("edit native provider");
+        crate::pi_config::replace_pi_provider("cc-switch-test", &written, &external)
+            .expect("edit native provider");
 
         let listed = ProviderService::list(&state, AppType::Pi).expect("refresh native provider");
         let mut local = listed["cc-switch-test"].clone();
@@ -612,6 +681,7 @@ mod tests {
         ProviderService::update(&state, AppType::Pi, Some("cc-switch-test"), edited.clone())
             .expect("edit enabled provider");
 
+        crate::pi_config::ensure_openai_completions_system_role(&mut edited.settings_config);
         assert_eq!(
             crate::pi_config::read_pi_native_provider("cc-switch-test")
                 .expect("read native provider")
@@ -733,15 +803,14 @@ mod tests {
         let baseline = input("model-a");
         ProviderService::add(&state, AppType::Pi, baseline.clone(), true).expect("add provider");
 
-        let mut external = baseline.settings_config.clone();
+        let written = crate::pi_config::read_pi_native_provider("cc-switch-test")
+            .expect("read written provider")
+            .expect("native provider");
+        let mut external = written.clone();
         external["apiKey"] = json!("rotated-outside");
         external["futureField"] = json!({ "preserve": true });
-        crate::pi_config::replace_pi_provider(
-            "cc-switch-test",
-            &baseline.settings_config,
-            &external,
-        )
-        .expect("edit native provider");
+        crate::pi_config::replace_pi_provider("cc-switch-test", &written, &external)
+            .expect("edit native provider");
 
         update_usage_script(&state, "cc-switch-test", usage_script("return {}"))
             .expect("save usage metadata");

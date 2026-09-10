@@ -148,6 +148,33 @@ fn insert_supports_developer_role_false(object: &mut Map<String, Value>) -> bool
     true
 }
 
+/// Pin every `openai-completions` node in a models.json document.
+/// Fengwind-style `anthropic-messages` cards are left untouched.
+pub(crate) fn heal_openai_completions_system_roles(document: &mut Value) -> bool {
+    let Some(providers) = document.get_mut("providers").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for node in providers.values_mut() {
+        changed |= ensure_openai_completions_system_role(node);
+    }
+    changed
+}
+
+/// Rewrite `~/.pi/agent/models.json` in place when a managed openai-completions
+/// card (e.g. baisheng / yum) is missing `supportsDeveloperRole`.
+/// No-op when the file is missing or already pinned. Never writes `~/.pi/models.json`.
+pub(crate) fn heal_live_openai_completions_system_roles() -> Result<bool, AppError> {
+    let _guard = lock_models_file()?;
+    let path = get_pi_models_path()?;
+    let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
+    if !heal_openai_completions_system_roles(&mut document) {
+        return Ok(false);
+    }
+    write_models_document(&path, &document, &expected_revision)?;
+    Ok(true)
+}
+
 pub(crate) fn project_provider_node(node: &Value, proxy_origin: &str) -> Value {
     let mut projected = node.clone();
     ensure_openai_completions_system_role(&mut projected);
@@ -577,14 +604,65 @@ mod tests {
             "baseUrl": "http://api.llm.prd.yumc.local/v1",
             "models": [
                 { "id": "glm-5.2", "reasoning": true },
-                { "id": "kimi-k2.7-code" }
+                { "id": "kimi-k2.7-code" },
+                { "id": "deepseek-v4-pro" }
             ]
         });
         assert!(ensure_openai_completions_system_role(&mut node));
         assert_eq!(node["compat"]["supportsDeveloperRole"], json!(false));
+        assert_eq!(node["models"].as_array().unwrap().len(), 3);
         for model in node["models"].as_array().unwrap() {
             assert_eq!(model["compat"]["supportsDeveloperRole"], json!(false));
         }
+    }
+
+    #[test]
+    fn live_catalog_heals_baisheng_only() {
+        let mut document = json!({
+            "providers": {
+                "fengwind": {
+                    "name": "fengwind",
+                    "api": "anthropic-messages",
+                    "baseUrl": "https://api.fengwind.example"
+                },
+                "cc-switch-open-code-go": {
+                    "name": "OpenCode Go",
+                    "api": "openai-completions",
+                    "models": [{
+                        "id": "glm-5.2",
+                        "compat": { "supportsDeveloperRole": false }
+                    }]
+                },
+                "baisheng": {
+                    "name": "baisheng",
+                    "api": "openai-completions",
+                    "baseUrl": "http://api.llm.prd.yumc.local/v1",
+                    "models": [
+                        { "id": "glm-5.2", "reasoning": true },
+                        { "id": "kimi-k2.7-code" },
+                        { "id": "deepseek-v4-pro" }
+                    ]
+                }
+            }
+        });
+        assert!(heal_openai_completions_system_roles(&mut document));
+        assert!(document["providers"]["fengwind"].get("compat").is_none());
+        assert_eq!(
+            document["providers"]["cc-switch-open-code-go"]["models"][0]["compat"]
+                ["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(
+            document["providers"]["baisheng"]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        for model in document["providers"]["baisheng"]["models"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(model["compat"]["supportsDeveloperRole"], json!(false));
+        }
+        assert!(!heal_openai_completions_system_roles(&mut document));
     }
 
     #[test]
