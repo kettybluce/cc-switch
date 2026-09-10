@@ -1627,6 +1627,21 @@ impl RequestForwarder {
             mapped_body
         };
 
+        // Chat Completions only: Pi/Codex may emit role=developer for the
+        // system prompt. Zhipu/intranet gateways reject that with 1214.
+        // Do not touch Responses `input[]` (developer is valid there).
+        let outbound_is_chat_completions = codex_responses_to_chat
+            || effective_endpoint.contains("chat/completions")
+            || matches!(resolved_claude_api_format.as_deref(), Some("openai_chat"));
+        if outbound_is_chat_completions
+            && super::providers::transform::remap_chat_developer_role_to_system(&mut request_body)
+        {
+            log::debug!(
+                "[Proxy] Remapped Chat Completions developer role to system (provider={})",
+                provider.id
+            );
+        }
+
         // Native Responses passthrough to a strict third-party gateway (xAI).
         // One gate so rebase conflicts stay here plus the isolate file, not
         // scattered across sanitizers. Flatten namespaces first; then apply

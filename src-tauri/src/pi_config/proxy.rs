@@ -100,8 +100,84 @@ pub(crate) fn document_has_proxy_projection(document: &Value) -> bool {
     }
 }
 
+/// Pi defaults `supportsDeveloperRole` to true for openai-completions reasoning
+/// models, which emits the system/custom prompt as `role=developer`. Strict
+/// OpenAI-compatible gateways (Zhipu GLM 1214「角色信息不正确」, intranet yum /
+/// baisheng, vLLM, Ollama) only accept `system` / `user` / `assistant` / `tool`.
+///
+/// OpenCode Go presets already pin this per model; custom/yum cards edited in
+/// CC Switch often omit it. Write the flag on both the provider and every
+/// model so Pi inherits it regardless of merge-vs-replace compat semantics.
+///
+/// SCHEMA 18: write the existing `compat` field only; never invent a new column.
+/// Live file is `~/.pi/agent/models.json` (not `~/.pi/models.json`).
+/// An explicit `true` is left untouched so official OpenAI cards can opt in.
+pub(crate) fn ensure_openai_completions_system_role(node: &mut Value) -> bool {
+    let Some(object) = node.as_object_mut() else {
+        return false;
+    };
+    if object.get("api").and_then(Value::as_str) != Some("openai-completions") {
+        return false;
+    }
+
+    let mut changed = false;
+    changed |= insert_supports_developer_role_false(object);
+
+    if let Some(Value::Array(models)) = object.get_mut("models") {
+        for model in models {
+            let Some(model_object) = model.as_object_mut() else {
+                continue;
+            };
+            changed |= insert_supports_developer_role_false(model_object);
+        }
+    }
+    changed
+}
+
+fn insert_supports_developer_role_false(object: &mut Map<String, Value>) -> bool {
+    let compat = object
+        .entry("compat")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(compat) = compat.as_object_mut() else {
+        return false;
+    };
+    if compat.contains_key("supportsDeveloperRole") {
+        return false;
+    }
+    compat.insert("supportsDeveloperRole".to_string(), Value::Bool(false));
+    true
+}
+
+/// Pin every `openai-completions` node in a models.json document.
+/// Fengwind-style `anthropic-messages` cards are left untouched.
+pub(crate) fn heal_openai_completions_system_roles(document: &mut Value) -> bool {
+    let Some(providers) = document.get_mut("providers").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for node in providers.values_mut() {
+        changed |= ensure_openai_completions_system_role(node);
+    }
+    changed
+}
+
+/// Rewrite `~/.pi/agent/models.json` in place when a managed openai-completions
+/// card (e.g. baisheng / yum) is missing `supportsDeveloperRole`.
+/// No-op when the file is missing or already pinned. Never writes `~/.pi/models.json`.
+pub(crate) fn heal_live_openai_completions_system_roles() -> Result<bool, AppError> {
+    let _guard = lock_models_file()?;
+    let path = get_pi_models_path()?;
+    let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
+    if !heal_openai_completions_system_roles(&mut document) {
+        return Ok(false);
+    }
+    write_models_document(&path, &document, &expected_revision)?;
+    Ok(true)
+}
+
 pub(crate) fn project_provider_node(node: &Value, proxy_origin: &str) -> Value {
     let mut projected = node.clone();
+    ensure_openai_completions_system_role(&mut projected);
     let Some(object) = projected.as_object_mut() else {
         return projected;
     };
@@ -460,6 +536,147 @@ mod tests {
         );
         assert!(is_projected_provider_node(anthropic));
         assert!(document_has_proxy_projection(&document));
+    }
+
+    #[test]
+    fn openai_completions_default_compat_writes_system_not_developer() {
+        let mut node = json!({
+            "name": "Intranet",
+            "api": "openai-completions",
+            "baseUrl": "https://llm.intranet.example/v1",
+            "models": [
+                { "id": "glm-5.1", "reasoning": true },
+                {
+                    "id": "kimi-k3",
+                    "compat": { "thinkingFormat": "openai" }
+                }
+            ]
+        });
+        assert!(ensure_openai_completions_system_role(&mut node));
+        assert_eq!(node["compat"]["supportsDeveloperRole"], json!(false));
+        assert_eq!(
+            node["models"][0]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(
+            node["models"][1]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(
+            node["models"][1]["compat"]["thinkingFormat"],
+            json!("openai")
+        );
+        assert!(!ensure_openai_completions_system_role(&mut node));
+    }
+
+    #[test]
+    fn openai_completions_preserves_explicit_developer_role_opt_in() {
+        let mut node = json!({
+            "api": "openai-completions",
+            "compat": { "supportsDeveloperRole": true },
+            "models": [{
+                "id": "gpt-5.4",
+                "compat": { "supportsDeveloperRole": true }
+            }]
+        });
+        assert!(!ensure_openai_completions_system_role(&mut node));
+        assert_eq!(node["compat"]["supportsDeveloperRole"], json!(true));
+        assert_eq!(
+            node["models"][0]["compat"]["supportsDeveloperRole"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn anthropic_and_responses_apis_are_not_rewritten() {
+        for api in ["anthropic-messages", "openai-responses"] {
+            let mut node = json!({ "api": api, "models": [{ "id": "m" }] });
+            assert!(!ensure_openai_completions_system_role(&mut node));
+            assert!(node.get("compat").is_none());
+        }
+    }
+
+    #[test]
+    fn baisheng_yum_style_card_gets_system_role_compat_like_opencode_go() {
+        let mut node = json!({
+            "name": "baisheng",
+            "api": "openai-completions",
+            "baseUrl": "http://api.llm.prd.yumc.local/v1",
+            "models": [
+                { "id": "glm-5.2", "reasoning": true },
+                { "id": "kimi-k2.7-code" },
+                { "id": "deepseek-v4-pro" }
+            ]
+        });
+        assert!(ensure_openai_completions_system_role(&mut node));
+        assert_eq!(node["compat"]["supportsDeveloperRole"], json!(false));
+        assert_eq!(node["models"].as_array().unwrap().len(), 3);
+        for model in node["models"].as_array().unwrap() {
+            assert_eq!(model["compat"]["supportsDeveloperRole"], json!(false));
+        }
+    }
+
+    #[test]
+    fn live_catalog_heals_baisheng_only() {
+        let mut document = json!({
+            "providers": {
+                "fengwind": {
+                    "name": "fengwind",
+                    "api": "anthropic-messages",
+                    "baseUrl": "https://api.fengwind.example"
+                },
+                "cc-switch-open-code-go": {
+                    "name": "OpenCode Go",
+                    "api": "openai-completions",
+                    "models": [{
+                        "id": "glm-5.2",
+                        "compat": { "supportsDeveloperRole": false }
+                    }]
+                },
+                "baisheng": {
+                    "name": "baisheng",
+                    "api": "openai-completions",
+                    "baseUrl": "http://api.llm.prd.yumc.local/v1",
+                    "models": [
+                        { "id": "glm-5.2", "reasoning": true },
+                        { "id": "kimi-k2.7-code" },
+                        { "id": "deepseek-v4-pro" }
+                    ]
+                }
+            }
+        });
+        assert!(heal_openai_completions_system_roles(&mut document));
+        assert!(document["providers"]["fengwind"].get("compat").is_none());
+        assert_eq!(
+            document["providers"]["cc-switch-open-code-go"]["models"][0]["compat"]
+                ["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(
+            document["providers"]["baisheng"]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        for model in document["providers"]["baisheng"]["models"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(model["compat"]["supportsDeveloperRole"], json!(false));
+        }
+        assert!(!heal_openai_completions_system_roles(&mut document));
+    }
+
+    #[test]
+    fn projection_injects_system_role_compat_for_openai_completions() {
+        let node = project_provider_node(
+            &json!({
+                "api": "openai-completions",
+                "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+                "apiKey": "sk-live"
+            }),
+            "http://127.0.0.1:15721",
+        );
+        assert_eq!(node["compat"]["supportsDeveloperRole"], json!(false));
+        assert_eq!(node["baseUrl"], json!("http://127.0.0.1:15721/v1"));
     }
 
     #[test]

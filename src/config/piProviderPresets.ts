@@ -985,6 +985,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
       api: "openai-completions",
       apiKey: "",
+      compat: { ...OPENAI_COMPLETIONS_COMPAT },
       models: [
         piModel("zai/glm-5.1", {
           id: "glm-5.1",
@@ -1005,6 +1006,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       baseUrl: "https://api.z.ai/api/coding/paas/v4",
       api: "openai-completions",
       apiKey: "",
+      compat: { ...OPENAI_COMPLETIONS_COMPAT },
       models: [
         piModel("zai/glm-5.1", {
           id: "glm-5.1",
