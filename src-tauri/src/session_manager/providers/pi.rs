@@ -343,7 +343,7 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         .filter(|message| !message.is_empty());
     Ok(SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
-        session_id: header.id,
+        session_id: header.id.clone(),
         title,
         summary: summary_text,
         project_dir: (!header.cwd.trim().is_empty()).then(|| header.cwd.clone()),
