@@ -114,6 +114,17 @@ describe("Pi provider presets", () => {
       return found;
     };
 
+    expect(preset("Zhipu GLM").settingsConfig.compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+    });
+    expect(preset("Zhipu GLM en").settingsConfig.compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+    });
+
     expect(model("Kimi", "kimi-k3").compat).toEqual({
       supportsStore: false,
       supportsDeveloperRole: false,

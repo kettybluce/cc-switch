@@ -584,6 +584,22 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn models_json_lives_under_agent_not_pi_root() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_models_path().expect("models path");
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        assert!(
+            normalized.ends_with("/agent/models.json"),
+            "takeover must write ~/.pi/agent/models.json, not ~/.pi/models.json: {normalized}"
+        );
+        assert!(
+            !normalized.ends_with("/.pi/models.json"),
+            "must not write the Pi-root models.json: {normalized}"
+        );
+    }
+
+    #[test]
     fn canonicalize_dot_pi_to_agent_dir() {
         assert_eq!(
             canonicalize_pi_agent_dir(PathBuf::from("/home/user/.pi")),

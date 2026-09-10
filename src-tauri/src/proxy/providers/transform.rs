@@ -245,6 +245,32 @@ pub fn anthropic_to_openai_with_reasoning_content(
     Ok(result)
 }
 
+/// Rewrite Chat Completions `role=developer` to `role=system`.
+///
+/// Pi / Codex reasoning models emit the system prompt as `developer`. Zhipu GLM
+/// and many intranet OpenAI-compatible gateways reject that with 1214
+/// 「角色信息不正确」. Official OpenAI still accepts `system`.
+///
+/// Only walks `messages[]` (Chat Completions). Responses `input[]` is left
+/// alone so native Responses upstreams keep a valid developer role.
+pub fn remap_chat_developer_role_to_system(body: &mut Value) -> bool {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return false;
+    };
+
+    let mut changed = false;
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("developer") {
+            continue;
+        }
+        if let Some(object) = message.as_object_mut() {
+            object.insert("role".to_string(), json!("system"));
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 为 OpenAI Chat Completions 流式请求注入 `stream_options.include_usage`。
 ///
 /// OpenAI 兼容上游在流式下默认不在 SSE 里返回 usage，必须显式声明 include_usage
@@ -1972,6 +1998,23 @@ mod tests {
     fn tool_choice_object_auto_and_none_collapse_to_string() {
         assert_eq!(run_tool_choice(json!({"type": "auto"})), json!("auto"));
         assert_eq!(run_tool_choice(json!({"type": "none"})), json!("none"));
+    }
+
+    #[test]
+    fn remap_chat_developer_role_leaves_responses_input_alone() {
+        let mut body = json!({
+            "input": [{"role": "developer", "content": "Keep me"}],
+            "messages": [
+                {"role": "developer", "content": "You are GLM."},
+                {"role": "user", "content": "hi"}
+            ]
+        });
+        assert!(remap_chat_developer_role_to_system(&mut body));
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][0]["content"], "You are GLM.");
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert!(!remap_chat_developer_role_to_system(&mut body));
     }
 
     #[test]

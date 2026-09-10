@@ -38,6 +38,7 @@ pub(super) fn add(
     let _guard =
         futures::executor::block_on(state.proxy_service.lock_switch_for_app(app_type.as_str()));
     strip_unsupported_pi_metadata(&mut provider);
+    crate::pi_config::ensure_openai_completions_system_role(&mut provider.settings_config);
     ProviderService::validate_provider_settings(&app_type, &provider)?;
     align_native_display_name(&mut provider);
     ProviderService::normalize_usage_script_credential_overrides(&app_type, &mut provider);
@@ -132,6 +133,7 @@ pub(super) fn update(
         .get_provider_by_id(&original_id, app_type.as_str())?
         .ok_or_else(|| AppError::InvalidInput(format!("Pi provider '{original_id}' not found")))?;
     strip_unsupported_pi_metadata(&mut provider);
+    crate::pi_config::ensure_openai_completions_system_role(&mut provider.settings_config);
     ProviderService::validate_provider_settings(&app_type, &provider)?;
     ProviderService::normalize_usage_script_credential_overrides(&app_type, &mut provider);
 
@@ -261,12 +263,14 @@ fn sync_native_locked(
 }
 
 fn native_config_for_live(state: &AppState, config: &Value) -> Result<Value, AppError> {
+    let mut config = config.clone();
+    crate::pi_config::ensure_openai_completions_system_role(&mut config);
     if !state.db.is_pi_takeover_enabled().unwrap_or(false) {
-        return Ok(config.clone());
+        return Ok(config);
     }
     let origin = futures::executor::block_on(state.proxy_service.client_proxy_origin())
         .map_err(AppError::Config)?;
-    Ok(crate::pi_config::project_node_if_object(config, &origin))
+    Ok(crate::pi_config::project_node_if_object(&config, &origin))
 }
 
 fn merge_native_config(provider: &mut Provider, config: Value) {
@@ -407,6 +411,37 @@ mod tests {
             .get_provider_by_id("cc-switch-test", "pi")
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    #[serial]
+    fn openai_completions_write_defaults_system_role_compat() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+
+        ProviderService::add(&state, AppType::Pi, input("glm-5.1"), true)
+            .expect("add live openai-completions provider");
+
+        let saved = state
+            .db
+            .get_provider_by_id("cc-switch-test", "pi")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            saved.settings_config["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(
+            saved.settings_config["models"][0]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+
+        let live = crate::pi_config::read_pi_native_providers().expect("read models.json");
+        assert_eq!(
+            live["cc-switch-test"]["compat"]["supportsDeveloperRole"],
+            json!(false)
+        );
+        assert_eq!(live["cc-switch-test"]["api"], json!("openai-completions"));
     }
 
     #[test]

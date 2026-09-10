@@ -234,10 +234,91 @@ pub fn normalize_anthropic_messages_for_provider(
         return false;
     }
 
-    let mut changed =
-        normalize_anthropic_tool_thinking_history_for_provider(body, provider, api_format);
+    let mut changed = hoist_anthropic_developer_messages_to_system(body);
+    changed |= normalize_anthropic_tool_thinking_history_for_provider(body, provider, api_format);
     changed |= normalize_deepseek_thinking_disabled_strip_effort(body, provider);
     changed
+}
+
+/// Anthropic Messages only allows user/assistant in `messages[]`. Pi or a
+/// Chat-shaped client may still send `role=developer` for the system prompt;
+/// hoist that text into the top-level `system` field (never user/other).
+/// Mid-conversation `role=system` messages stay put (#3775 / #6941).
+fn hoist_anthropic_developer_messages_to_system(body: &mut Value) -> bool {
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return false;
+    };
+
+    let mut developer_texts = Vec::new();
+    let mut kept = Vec::new();
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) == Some("developer") {
+            if let Some(text) = anthropic_message_plain_text(message) {
+                if !text.trim().is_empty() {
+                    developer_texts.push(text);
+                }
+            }
+        } else {
+            kept.push(message.clone());
+        }
+    }
+
+    if developer_texts.is_empty() && kept.len() == messages.len() {
+        return false;
+    }
+
+    append_anthropic_system_texts(body, &developer_texts);
+    body["messages"] = json!(kept);
+    true
+}
+
+fn anthropic_message_plain_text(message: &Value) -> Option<String> {
+    let content = message.get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let parts = content.as_array()?;
+    let mut texts = Vec::new();
+    for part in parts {
+        if let Some(text) = part.as_str() {
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+        }
+    }
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join("\n"))
+    }
+}
+
+fn append_anthropic_system_texts(body: &mut Value, texts: &[String]) {
+    if texts.is_empty() {
+        return;
+    }
+    let extra = texts.join("\n\n");
+    match body.get("system") {
+        Some(Value::String(existing)) if !existing.is_empty() => {
+            body["system"] = json!(format!("{existing}\n\n{extra}"));
+        }
+        Some(Value::Array(existing)) => {
+            let mut blocks = existing.clone();
+            for text in texts {
+                blocks.push(json!({ "type": "text", "text": text }));
+            }
+            body["system"] = json!(blocks);
+        }
+        _ => {
+            body["system"] = json!(extra);
+        }
+    }
 }
 
 fn normalize_anthropic_tool_thinking_history(body: &mut Value) -> bool {
@@ -2290,6 +2371,39 @@ mod tests {
         assert_eq!(content[0]["thinking"], ANTHROPIC_THINKING_PLACEHOLDER);
         assert_eq!(content[1]["type"], "text");
         assert_eq!(content[2]["type"], "tool_use");
+    }
+
+    #[test]
+    fn test_anthropic_developer_messages_are_hoisted_into_top_level_system() {
+        let provider = create_provider(json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                "ANTHROPIC_API_KEY": "test-key"
+            }
+        }));
+        let mut body = json!({
+            "system": "Existing top-level system.",
+            "model": "glm-5.1",
+            "messages": [
+                { "role": "developer", "content": "Custom prompt." },
+                { "role": "user", "content": "hello" },
+                {
+                    "role": "developer",
+                    "content": [{ "type": "text", "text": "More prompt." }]
+                }
+            ]
+        });
+
+        let changed = normalize_anthropic_messages_for_provider(&mut body, &provider, "anthropic");
+
+        assert!(changed);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(
+            body["system"],
+            "Existing top-level system.\n\nCustom prompt.\n\nMore prompt."
+        );
     }
 
     #[test]
