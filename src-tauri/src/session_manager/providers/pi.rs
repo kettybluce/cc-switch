@@ -349,12 +349,15 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         project_dir: (!header.cwd.trim().is_empty()).then(|| header.cwd.clone()),
         created_at: header.timestamp,
         last_active_at: summary.last_active_at.or(header.timestamp),
-        source_path: Some(source_path.clone()),
-        resume_command: Some(format!(
-            "pi --session {}",
-            crate::session_manager::terminal::shell_escape(&source_path)
-        )),
+        source_path: Some(source_path),
+        resume_command: Some(build_resume_command(&header.id)),
     })
+}
+
+/// Official Pi CLI: `--session <path|id>` resolves an id (or partial UUID) without
+/// treating it as a file. Copy the header session id, not the jsonl/UNC path.
+fn build_resume_command(session_id: &str) -> String {
+    format!("pi --session {session_id}")
 }
 
 fn read_tree(path: &Path) -> Result<SessionTree, String> {
@@ -1012,11 +1015,16 @@ mod tests {
         // Pi's session picker prefers the message timestamp over the enclosing
         // entry timestamp when both are present.
         assert_eq!(session.last_active_at, Some(1_700_000_001_000));
-        // Pi resumes a session by its exact file path.
-        assert!(session
+        // Official Pi UX: `--session <path|id>` — copy the header id, not the jsonl path.
+        assert_eq!(
+            session.resume_command.as_deref(),
+            Some("pi --session cc-switch-capture-session")
+        );
+        assert!(!session
             .resume_command
             .as_deref()
-            .is_some_and(|command| command.starts_with("pi --session ")));
+            .unwrap_or_default()
+            .contains(".jsonl"));
 
         let messages =
             load_messages_with_layout(&root, &path, SessionLayout::Flat).expect("load messages");
@@ -1119,5 +1127,22 @@ mod tests {
             SessionLayout::ProjectDirectories
         )
         .expect("delete project session"));
+    }
+
+    #[test]
+    fn resume_command_uses_session_id_not_file_path() {
+        assert_eq!(
+            build_resume_command("019e1ad3-cd93-7537-a208-ee8acf2b9a94"),
+            "pi --session 019e1ad3-cd93-7537-a208-ee8acf2b9a94"
+        );
+        assert_eq!(
+            build_resume_command("cc-switch-capture-session"),
+            "pi --session cc-switch-capture-session"
+        );
+        let command = build_resume_command("019e1ad3-cd93-7537-a208-ee8acf2b9a94");
+        assert!(!command.contains(".jsonl"));
+        assert!(!command.contains(r"\\"));
+        assert!(!command.contains("/home/"));
+        assert!(!command.contains("wsl.localhost"));
     }
 }
