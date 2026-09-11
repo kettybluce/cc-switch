@@ -5,6 +5,21 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.9] - 2026-09-11
+
+Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #37). Pi 拉取模型对齐 Claude（供应商 URL / 预设 modelsUrl + `global_proxy_url`）；CRUD 同步 WSL live `models.json` 并刷新/作废接管备份；卡片「设为默认」写 `settings.json`，删除当前默认时改派或清除。`SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
+
+### Added
+
+- **Pi 拉取模型 Option A**: 走供应商 URL 或预设 `modelsUrl`，不改写 Claude listen `15721`；`global_proxy_url` 有值则出站走全局代理，为空则直连/系统代理。聚合商列表默认 Bearer。
+- **WSL live models.json CRUD**: 创建/更新/删除原子写入 `get_pi_agent_dir()/models.json`；关闭接管时不会从备份还原已删节点。
+- **Pi 默认供应商**: 「设为默认」写 `defaultProvider` + 合理 `defaultModel`；删除/移除当前默认时自动改派或清除。
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+
 ## [3.20.8] - 2026-09-10
 
 Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #35). Saving or opening the Pi provider list pins `compat.supportsDeveloperRole: false` on managed `openai-completions` cards (百胜 / yum 1214「角色信息不正确」). Chat Completions outbound remaps leftover `developer` → `system`. `SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
