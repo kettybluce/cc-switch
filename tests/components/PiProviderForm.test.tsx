@@ -980,8 +980,8 @@ describe("PiProviderForm", () => {
       expect(requestBody).toEqual({
         baseUrl: "https://models.example/v1",
         apiKey: "literal-key",
+        isFullUrl: false,
         customUserAgent: "pi-test-agent/1.0",
-        apiFormat: "openai-completions",
         requestHeaders: {
           "user-agent": "pi-test-agent/1.0",
         },
@@ -1302,6 +1302,47 @@ describe("PiProviderForm", () => {
     expect(
       screen.queryByRole("button", { name: "pi.form.restoreModelAutofill" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("uses the preset modelsUrl and Bearer for aggregator list fetch, not the Pi api field", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        `${TAURI_ENDPOINT}/fetch_models_for_config`,
+        async ({ request }) => {
+          requestBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json([{ id: "deepseek-v4-flash" }]);
+        },
+      ),
+    );
+
+    render(
+      <PiProviderForm
+        appId="pi"
+        submitLabel="Save DeepSeek provider"
+        onSubmit={vi.fn()}
+        onCancel={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("DeepSeek", { selector: "span" }));
+    fireEvent.change(screen.getByLabelText("pi.form.credential"), {
+      target: { value: "literal-key" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerForm.fetchModels" }),
+    );
+
+    await waitFor(() =>
+      expect(requestBody).toEqual({
+        baseUrl: "https://api.deepseek.com/v1",
+        apiKey: "literal-key",
+        isFullUrl: false,
+        modelsUrl: "https://api.deepseek.com/models",
+      }),
+    );
+    expect(requestBody?.apiFormat).toBeUndefined();
+    expect(String(requestBody?.baseUrl ?? "")).not.toContain("15721");
   });
 
   it("keeps a preset thinking map when the user changes the API", async () => {

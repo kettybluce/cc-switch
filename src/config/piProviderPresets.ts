@@ -45,6 +45,7 @@ export interface PiProviderPreset {
   theme?: PresetTheme;
   icon?: string;
   iconColor?: string;
+  modelsUrl?: string;
 }
 
 const OPENAI_COMPLETIONS_COMPAT = {
@@ -528,6 +529,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     partnerPromotionKey: "ppio",
     icon: "ppio",
     iconColor: "#2874FF",
+    modelsUrl: "https://api.ppio.com/openai/v1/models",
   },
   {
     name: "ClaudeCN",
@@ -974,6 +976,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     category: "cn_official",
     icon: "deepseek",
     iconColor: "#1E88E5",
+    modelsUrl: "https://api.deepseek.com/models",
   },
   {
     name: "Zhipu GLM",
@@ -1517,6 +1520,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     category: "aggregator",
     icon: "novita",
     iconColor: "#000000",
+    modelsUrl: "https://api.novita.ai/openai/v1/models",
   },
   {
     name: "Nvidia",
@@ -1693,6 +1697,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     category: "cn_official",
     icon: "tencent",
     iconColor: "#00A4FF",
+    modelsUrl: "https://api.lkeap.cloud.tencent.com/plan/v3/models",
   },
   {
     name: "Tencent Token Plan (Intl)",

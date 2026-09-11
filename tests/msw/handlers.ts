@@ -325,6 +325,8 @@ export const handlers = [
     }),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/set_pi_default_provider`, () => success(null)),
+
   // Proxy status (for SettingsPage / ProxyPanel hooks)
   http.post(`${TAURI_ENDPOINT}/get_proxy_status`, () =>
     success({

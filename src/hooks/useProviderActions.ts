@@ -426,6 +426,32 @@ export function useProviderActions(
   // Set provider as default model (OpenClaw only)
   const setAsDefaultModel = useCallback(
     async (provider: Provider, modelId?: string) => {
+      if (activeApp === "pi") {
+        try {
+          await piApi.setDefaultProvider(provider.id);
+          await queryClient.invalidateQueries({
+            queryKey: ["providers", "pi"],
+          });
+          await queryClient.invalidateQueries({
+            queryKey: ["pi", "currentState"],
+          });
+          toast.success(
+            t("notifications.piDefaultProviderSet", {
+              defaultValue: "已设为 Pi 默认供应商",
+            }),
+            { closeButton: true },
+          );
+        } catch (error) {
+          const detail =
+            extractErrorMessage(error) ||
+            t("notifications.piDefaultProviderSetFailed", {
+              defaultValue: "设置 Pi 默认供应商失败",
+            });
+          toast.error(detail);
+        }
+        return;
+      }
+
       const config = provider.settingsConfig as OpenClawProviderConfig;
       if (!config.models || config.models.length === 0) {
         toast.error(
@@ -483,7 +509,7 @@ export function useProviderActions(
         toast.error(detail);
       }
     },
-    [queryClient, t],
+    [activeApp, queryClient, t],
   );
 
   return {

@@ -57,6 +57,14 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 - Tests: `wsl_distro_from_path_str_parses_claude_and_pi_unc` (includes `home\tfdx8045\.claude` and `…\.pi\agent`).
 - Windows-only: `wsl_distro_from_path_uses_official_unc_components`.
 
+### 1b. Pi live models.json WSL home + default provider (this PR)
+
+- Path order: `pi_config_dir` → `PI_CODING_AGENT_DIR` → inferred WSL UNC home from Claude/Codex override → `~/.pi/agent`.
+- Tests: `wsl_unc_home_follows_claude_or_codex_home_style_dirs`, `pi_config_dir_still_wins_over_inferred_wsl_home`.
+- Live CRUD writes `get_pi_agent_dir()/models.json`; optional legacy `~/.pi/models.json` mirror only if that file already exists (`legacy_root_models_json_is_mirrored_only_when_it_already_exists`).
+- Delete/update refresh Pi full-file takeover backup: `live_delete_refreshes_takeover_backup_without_restoring_deleted_nodes`, `live_update_refreshes_takeover_backup_with_unprojected_url`.
+- Default provider: `write_defaults_preserves_unknown_settings_fields`, `removing_the_default_reassigns_or_clears`, `set_default_provider_writes_settings_and_a_model_id`. SCHEMA 18: no `proxy_config` `pi` row; takeover remains `settings.proxy_takeover_pi`. `auth.json` untouched.
+
 ### 2. Pi Usage Stats entry always visible
 
 - `appHasUsageDashboard("pi")` — not gated on takeover.
@@ -127,6 +135,6 @@ Full `cargo test --manifest-path src-tauri/Cargo.toml` (lib + integration, ~2800
 
 - No `SCHEMA_VERSION` 19 / `migrate_v18_to_v19`
 - No `/pi/` gateway or extra listen port
-- No writes to `defaultProvider` / `defaultModel` / `auth.json`
+- No writes to `auth.json`
 - No C: session mirror directory
 - No release tag / MSI / Portable artifact from this change

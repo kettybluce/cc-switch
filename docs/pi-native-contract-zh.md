@@ -13,7 +13,7 @@
 | 资源                            | CC Switch 行为                                                | 状态来源         |
 | ------------------------------- | ------------------------------------------------------------- | ---------------- |
 | `models.json`                   | 管理 `providers` 中的全部显式供应商节点；精确新增、替换和移除 | 文件中的实际条目 |
-| 全局 `settings.json`            | 只读 `defaultProvider`、`defaultModel`、`sessionDir`          | Pi 原生设置      |
+| 全局 `settings.json`            | 读写 `defaultProvider`、`defaultModel`；只读 `sessionDir` | Pi 原生设置      |
 | `auth.json`                     | 不读、不写、不刷新                                            | Pi `/login`      |
 | `AGENTS.md`                     | 提示库中与文件内容精确匹配的项视为正在使用                    | 文件存在及内容   |
 | `SYSTEM.md`、`APPEND_SYSTEM.md` | 直接编辑固定原生文件；不存在即未配置                          | 文件存在         |
@@ -30,7 +30,7 @@
 
 已有配置中的其他字段原样保留。供应商是否可管理只取决于节点是否显式存在于 `models.json.providers`：`anthropic`、`openai`、`deepseek` 等 Pi 内置 ID，以及带有未知字段的节点，都按普通显式配置同步。CC Switch 不把 Pi 运行时合并出的内置模型复制回配置，也不解析或执行 `apiKey`、Header 中的环境变量和命令表达式。请求仍由 Pi 自己发出。
 
-Pi 在全局设置中保存的当前供应商和模型不进入供应商列表状态。启用供应商只把条目加入 `models.json`，不会写 `defaultProvider` 或 `defaultModel`。移除或删除全局默认供应商时，前端在原有确认框内给出非阻塞提醒，后端允许继续且不改写默认项。编辑显式供应商同样不修改当前供应商或模型；失效引用和回退由 Pi 原生处理。
+Pi 在全局设置中保存的当前供应商和模型由供应商页「设为默认」写入 `settings.json` 的 `defaultProvider` 与合理的 `defaultModel`（该节点第一个模型 ID），并保留未知字段。启用供应商仍只把条目加入 `models.json`。移除或删除当前默认供应商时，同一次操作会把默认改到另一个仍启用的节点；若没有其他启用项则清除默认。高亮使用 `piCurrentState.defaultProviderId`，不使用 Claude 的 `currentProviderId`。编辑显式供应商不修改当前默认。项目级 `.pi/settings.json` 会按启动 Pi 时的工作目录覆盖全局默认项。供应商页没有项目上下文，因此不扫描项目目录或猜测活动会话；默认读写只针对全局 `settings.json`。
 
 项目级 `.pi/settings.json` 会按启动 Pi 时的工作目录覆盖全局默认项。供应商页没有项目上下文，因此不扫描项目目录或猜测活动会话；条件提醒只读取全局默认供应商。项目级默认项继续由对应 Pi 会话和 `/model` 管理。
 
@@ -51,8 +51,7 @@ Pi 在全局设置中保存的当前供应商和模型不进入供应商列表�
 ## 明确不做
 
 - Pi `/login`、`auth.json` 中的 OAuth/API Key 登录、令牌保存和刷新
-- 默认供应商或默认模型写入
-- 路由、网关、代理、故障转移和请求头合成
+- 路由、网关、独立 Pi 监听端口和请求头合成
 - Pi 运行时内置供应商与内置模型目录的复制
 - 完整 `compat`、`modelOverrides` 和费用编辑器；思考档位只提供 Pi 原生 `thinkingLevelMap` 的轻量入口
 - 相对会话目录的全局猜测

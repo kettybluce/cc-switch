@@ -10,6 +10,7 @@ function renderPiActions({
   isStateChangeProtected = false,
   isAutoFailoverEnabled = false,
   isInFailoverQueue = false,
+  isDefaultModel = false,
   onSwitch = vi.fn(),
   onEdit = vi.fn(),
   onRemoveFromConfig = vi.fn(),
@@ -23,6 +24,7 @@ function renderPiActions({
   isStateChangeProtected?: boolean;
   isAutoFailoverEnabled?: boolean;
   isInFailoverQueue?: boolean;
+  isDefaultModel?: boolean;
   onSwitch?: ReturnType<typeof vi.fn>;
   onEdit?: ReturnType<typeof vi.fn>;
   onRemoveFromConfig?: ReturnType<typeof vi.fn>;
@@ -39,6 +41,7 @@ function renderPiActions({
       isStateChangeProtected={isStateChangeProtected}
       isAutoFailoverEnabled={isAutoFailoverEnabled}
       isInFailoverQueue={isInFailoverQueue}
+      isDefaultModel={isDefaultModel}
       onToggleFailover={onToggleFailover}
       onSwitch={onSwitch}
       onRemoveFromConfig={onRemoveFromConfig}
@@ -78,32 +81,30 @@ describe("ProviderActions Pi provider switching", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("offers removal without a default-selection action", async () => {
+  it("offers set-as-default for an enabled Pi provider", async () => {
     const user = userEvent.setup();
-    const { onRemoveFromConfig, onSetAsDefault, onSwitch } = renderPiActions({
+    const { onSetAsDefault, onRemoveFromConfig } = renderPiActions({
       isInConfig: true,
+      onSetAsDefault: vi.fn(),
     });
 
-    await user.click(screen.getByRole("button", { name: "移除" }));
+    await user.click(screen.getByRole("button", { name: "设为默认" }));
 
-    expect(onRemoveFromConfig).toHaveBeenCalledTimes(1);
-    expect(onSetAsDefault).not.toHaveBeenCalled();
-    expect(onSwitch).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: "设为默认" }),
-    ).not.toBeInTheDocument();
+    expect(onSetAsDefault).toHaveBeenCalledTimes(1);
+    expect(onRemoveFromConfig).not.toHaveBeenCalled();
   });
 
-  it("does not turn Pi's current selection into a UI state", () => {
+  it("shows the current Pi default without blocking remove or delete", () => {
     renderPiActions({
       isCurrent: true,
       isInConfig: true,
+      isDefaultModel: true,
     });
 
     expect(screen.getByRole("button", { name: "移除" })).toBeEnabled();
     expect(
-      screen.queryByRole("button", { name: "当前默认" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "当前默认" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "common.delete" })).toBeEnabled();
   });
 

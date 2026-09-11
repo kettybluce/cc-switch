@@ -286,6 +286,8 @@
     "openclawModelsRegistered": "模型已注册到 /model 列表",
     "openclawDefaultModelSet": "已设为默认模型",
     "openclawDefaultModelSetFailed": "设置默认模型失败",
+    "piDefaultProviderSet": "已设为 Pi 默认供应商",
+    "piDefaultProviderSetFailed": "设置 Pi 默认供应商失败",
     "openclawNoModels": "该供应商没有配置模型",
     "openclawModelNotFound": "所选模型已不存在，请刷新后重试",
     "backfillWarning": "切换成功，但旧供应商配置回填失败，您手动修改的配置可能未保存",
@@ -300,7 +302,7 @@
     "deleteProviderMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。",
     "removeProvider": "移除供应商",
     "removeProviderMessage": "确定要从配置中移除供应商 \"{{name}}\" 吗？\n\n移除后该供应商将不再生效，但配置数据会保留在 CC Switch 中，您可以随时重新添加。",
-    "piDefaultProviderWarning": "Pi 的全局默认项当前指向此供应商。继续后，Pi 会尝试其他可用模型；你可以在 Pi 中使用 /model 重新选择，或使用 /login 登录其他供应商。",
+    "piDefaultProviderWarning": "Pi 的全局默认项当前指向此供应商。继续后，CC Switch 会把默认改到另一个仍启用的供应商；若没有其他启用项则清除默认。auth.json 不会改动。",
     "proxy": {
       "title": "启用本地路由服务",
       "message": "本地路由是一项高级功能，启用前请确保您已了解其工作原理。\n\n建议先查阅相关文档或咨询您的供应商，以获取正确的配置方式。",

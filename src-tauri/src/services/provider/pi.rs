@@ -74,6 +74,7 @@ pub(super) fn add(
     } else {
         None
     };
+    let backup_config = add_to_live.then(|| provider.settings_config.clone());
     let native_inserted = if let Some(native_config) = native_config.as_ref() {
         crate::pi_config::insert_pi_provider(&provider.id, native_config)?
     } else {
@@ -93,6 +94,17 @@ pub(super) fn add(
             }
         }
         return Err(error);
+    }
+    if native_inserted {
+        if let Some(backup_config) = backup_config {
+            refresh_pi_takeover_backup(
+                state,
+                BackupOp::Upsert {
+                    id: provider.id.clone(),
+                    config: backup_config,
+                },
+            );
+        }
     }
     Ok(true)
 }
@@ -160,6 +172,15 @@ pub(super) fn update(
         }
         return Err(error);
     }
+    if previous_native.is_some() {
+        refresh_pi_takeover_backup(
+            state,
+            BackupOp::Upsert {
+                id: original_id,
+                config: provider.settings_config.clone(),
+            },
+        );
+    }
     Ok(true)
 }
 
@@ -185,6 +206,10 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
         }
         return Err(error);
     }
+    if removed.is_some() {
+        crate::pi_config::reassign_pi_default_if_current(id)?;
+        refresh_pi_takeover_backup(state, BackupOp::Remove { id: id.to_string() });
+    }
     Ok(())
 }
 
@@ -209,6 +234,8 @@ pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
         }
         return Err(error);
     }
+    crate::pi_config::reassign_pi_default_if_current(id)?;
+    refresh_pi_takeover_backup(state, BackupOp::Remove { id: id.to_string() });
     Ok(())
 }
 
@@ -234,6 +261,13 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
         id,
         &native_config_for_live(state, &provider.settings_config)?,
     )?;
+    refresh_pi_takeover_backup(
+        state,
+        BackupOp::Upsert {
+            id: id.to_string(),
+            config: provider.settings_config,
+        },
+    );
     Ok(SwitchResult::default())
 }
 
@@ -314,8 +348,89 @@ fn strip_unsupported_pi_metadata(provider: &mut Provider) {
         usage_script: meta.usage_script,
         is_partner: meta.is_partner,
         partner_promotion_key: meta.partner_promotion_key,
+        is_full_url: meta.is_full_url,
         ..ProviderMeta::default()
     });
+}
+
+enum BackupOp {
+    Upsert { id: String, config: Value },
+    Remove { id: String },
+}
+
+/// Keep the whole-file Pi takeover backup in sync so disabling takeover cannot
+/// restore deleted/stale provider nodes. Invalidates the backup if it cannot
+/// be parsed. Never fails the caller's live write.
+fn refresh_pi_takeover_backup(state: &AppState, op: BackupOp) {
+    let backup = match futures::executor::block_on(state.db.get_live_backup("pi")) {
+        Ok(backup) => backup,
+        Err(error) => {
+            log::warn!("Failed to read Pi takeover backup: {error}");
+            return;
+        }
+    };
+    let Some(backup) = backup else {
+        return;
+    };
+
+    let parsed = serde_json::from_str::<Value>(&backup.original_config);
+    let mut document = match parsed {
+        Ok(Value::Object(map)) => Value::Object(map),
+        Ok(_) | Err(_) => {
+            log::warn!("Pi takeover backup is not a JSON object; invalidating it");
+            if let Err(error) = futures::executor::block_on(state.db.delete_live_backup("pi")) {
+                log::warn!("Failed to invalidate Pi takeover backup: {error}");
+            }
+            return;
+        }
+    };
+
+    let Some(root) = document.as_object_mut() else {
+        return;
+    };
+    let providers = root
+        .entry("providers".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let Some(providers) = providers.as_object_mut() else {
+        log::warn!("Pi takeover backup providers is not an object; invalidating it");
+        if let Err(error) = futures::executor::block_on(state.db.delete_live_backup("pi")) {
+            log::warn!("Failed to invalidate Pi takeover backup: {error}");
+        }
+        return;
+    };
+
+    match op {
+        BackupOp::Upsert { id, config } => {
+            providers.insert(id, config);
+        }
+        BackupOp::Remove { id } => {
+            providers.remove(&id);
+        }
+    }
+
+    let json = match serde_json::to_string(&document) {
+        Ok(json) => json,
+        Err(error) => {
+            log::warn!("Failed to serialize Pi takeover backup: {error}");
+            return;
+        }
+    };
+    if let Err(error) = futures::executor::block_on(state.db.save_live_backup("pi", &json)) {
+        log::warn!("Failed to refresh Pi takeover backup: {error}");
+        if let Err(delete_error) = futures::executor::block_on(state.db.delete_live_backup("pi")) {
+            log::warn!("Failed to invalidate Pi takeover backup: {delete_error}");
+        }
+    }
+}
+
+pub(super) fn set_default_provider(state: &AppState, id: &str) -> Result<(), AppError> {
+    let _guard = futures::executor::block_on(state.proxy_service.lock_switch_for_app(PI_APP));
+    if state.db.get_provider_by_id(id, PI_APP)?.is_none() {
+        return Err(AppError::InvalidInput(format!(
+            "Pi provider '{id}' not found"
+        )));
+    }
+    crate::pi_config::set_pi_default_provider(id)
 }
 
 #[cfg(test)]
@@ -521,19 +636,28 @@ mod tests {
         let state = state();
         let original = input("model-a");
         ProviderService::add(&state, AppType::Pi, original.clone(), true).expect("add provider");
-        let settings_path = crate::pi_config::get_pi_settings_path().unwrap();
-        fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-        fs::write(
-            &settings_path,
-            r#"{"defaultProvider":"cc-switch-test","defaultModel":"model-a"}"#,
-        )
-        .unwrap();
+        let mut other = input("other-model");
+        other.id = "keep-me".to_string();
+        other.name = "Keep me".to_string();
+        other.settings_config["name"] = json!("Keep me");
+        ProviderService::add(&state, AppType::Pi, other, true).expect("add second provider");
+        crate::pi_config::write_pi_native_defaults(Some("cc-switch-test"), Some("model-a"))
+            .expect("set default");
 
         update(&state, Some("cc-switch-test"), input("model-b"))
             .expect("global default must not block model edits");
+        let after_edit = crate::pi_config::read_pi_native_defaults().expect("read after edit");
+        assert_eq!(
+            after_edit.default_provider.as_deref(),
+            Some("cc-switch-test")
+        );
+
         ProviderService::remove_from_live_config(&state, AppType::Pi, "cc-switch-test")
             .expect("global default must not block removal");
         assert!(!crate::pi_config::pi_provider_exists("cc-switch-test").unwrap());
+        let after_remove = crate::pi_config::read_pi_native_defaults().expect("read after remove");
+        assert_eq!(after_remove.default_provider.as_deref(), Some("keep-me"));
+        assert_eq!(after_remove.default_model.as_deref(), Some("other-model"));
 
         ProviderService::switch(&state, AppType::Pi, "cc-switch-test").expect("re-enable provider");
         ProviderService::delete(&state, AppType::Pi, "cc-switch-test")
@@ -543,16 +667,14 @@ mod tests {
             .get_provider_by_id("cc-switch-test", "pi")
             .unwrap()
             .is_none());
-        assert_eq!(
-            fs::read_to_string(settings_path).unwrap(),
-            r#"{"defaultProvider":"cc-switch-test","defaultModel":"model-a"}"#
-        );
+        let after_delete = crate::pi_config::read_pi_native_defaults().expect("read after delete");
+        assert_eq!(after_delete.default_provider.as_deref(), Some("keep-me"));
         assert!(!crate::pi_config::pi_provider_exists("cc-switch-test").unwrap());
     }
 
     #[test]
     #[serial]
-    fn provider_membership_never_changes_pi_auth_or_defaults() {
+    fn provider_membership_never_changes_pi_auth() {
         let _agent = TestAgentDir::new();
         let state = state();
         let agent_dir = crate::pi_config::get_pi_agent_dir().expect("agent directory");
@@ -563,20 +685,26 @@ mod tests {
             "anthropic": {"type":"oauth","refresh":"native-secret"},
             "openai": {"type":"api_key","key":"native-api-key"}
         }"#;
-        let settings_contents =
-            br#"{"defaultProvider":"anthropic","defaultModel":"claude-opus-4-6"}"#;
         fs::write(&auth_path, auth_contents).expect("write auth");
-        fs::write(&settings_path, settings_contents).expect("write settings");
+        fs::write(
+            &settings_path,
+            r#"{"defaultProvider":"anthropic","defaultModel":"claude-opus-4-6","theme":"dark"}"#,
+        )
+        .expect("write settings");
         let models_path = agent_dir.join("models.json");
         fs::write(
             &models_path,
-            r#"{"providers":{"anthropic":{"futureField":{"keep":true}}}}"#,
+            r#"{"providers":{"anthropic":{"futureField":{"keep":true}},"keep-me":{"name":"Keep","models":[{"id":"kept-model"}]}}}"#,
         )
         .expect("write explicit provider");
 
         ProviderService::list(&state, AppType::Pi).expect("import explicit provider");
         ProviderService::remove_from_live_config(&state, AppType::Pi, "anthropic")
             .expect("remove explicit provider");
+        let after_remove = crate::pi_config::read_pi_native_defaults().expect("reassigned");
+        assert_eq!(after_remove.default_provider.as_deref(), Some("keep-me"));
+        assert_eq!(after_remove.default_model.as_deref(), Some("kept-model"));
+
         ProviderService::switch(&state, AppType::Pi, "anthropic")
             .expect("enable explicit provider");
         let mut edited = state
@@ -588,10 +716,12 @@ mod tests {
         update(&state, Some("anthropic"), edited).expect("edit explicit provider");
 
         assert_eq!(fs::read(auth_path).expect("read auth"), auth_contents);
-        assert_eq!(
-            fs::read(settings_path).expect("read settings"),
-            settings_contents
-        );
+        let after_edit = crate::pi_config::read_pi_native_defaults().expect("read after edit");
+        assert_eq!(after_edit.default_provider.as_deref(), Some("keep-me"));
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(settings_path).expect("read settings"))
+                .expect("parse settings");
+        assert_eq!(settings["theme"], json!("dark"));
     }
 
     #[test]
@@ -982,5 +1112,113 @@ mod tests {
         ProviderService::delete(&state, AppType::Pi, "cc-switch-test")
             .expect("global selection is advisory for deletion");
         assert!(!crate::pi_config::pi_provider_exists("cc-switch-test").unwrap());
+    }
+
+    #[test]
+    #[serial]
+    fn preserves_full_url_metadata_for_model_fetch() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        let mut provider = input("model-a");
+        provider.meta = Some(ProviderMeta {
+            is_full_url: Some(true),
+            is_partner: Some(true),
+            ..ProviderMeta::default()
+        });
+        ProviderService::add(&state, AppType::Pi, provider, false).expect("add");
+        let saved = state
+            .db
+            .get_provider_by_id("cc-switch-test", "pi")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.meta.unwrap().is_full_url, Some(true));
+    }
+
+    #[test]
+    #[serial]
+    fn set_default_provider_writes_settings_and_a_model_id() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        ProviderService::add(&state, AppType::Pi, input("model-a"), true).expect("add");
+        set_default_provider(&state, "cc-switch-test").expect("set default");
+        let defaults = crate::pi_config::read_pi_native_defaults().expect("read");
+        assert_eq!(defaults.default_provider.as_deref(), Some("cc-switch-test"));
+        assert_eq!(defaults.default_model.as_deref(), Some("model-a"));
+    }
+
+    #[test]
+    #[serial]
+    fn live_delete_refreshes_takeover_backup_without_restoring_deleted_nodes() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        let mut keep = input("keep-model");
+        keep.id = "keep".to_string();
+        keep.name = "Keep".to_string();
+        keep.settings_config["name"] = json!("Keep");
+        let mut gone = input("gone-model");
+        gone.id = "gone".to_string();
+        gone.name = "Gone".to_string();
+        gone.settings_config["name"] = json!("Gone");
+        ProviderService::add(&state, AppType::Pi, keep.clone(), true).expect("add keep");
+        ProviderService::add(&state, AppType::Pi, gone.clone(), true).expect("add gone");
+
+        let backup_doc = json!({
+            "providers": {
+                "keep": keep.settings_config,
+                "gone": gone.settings_config,
+                "unknown": { "keep": true }
+            }
+        });
+        futures::executor::block_on(state.db.save_live_backup("pi", &backup_doc.to_string()))
+            .expect("seed backup");
+
+        ProviderService::delete(&state, AppType::Pi, "gone").expect("delete live node");
+
+        let backup = futures::executor::block_on(state.db.get_live_backup("pi"))
+            .expect("read backup")
+            .expect("backup still exists");
+        let parsed: Value = serde_json::from_str(&backup.original_config).expect("parse backup");
+        assert!(parsed["providers"].get("gone").is_none());
+        assert!(parsed["providers"].get("keep").is_some());
+        assert_eq!(parsed["providers"]["unknown"], json!({ "keep": true }));
+        assert!(!crate::pi_config::pi_provider_exists("gone").unwrap());
+    }
+
+    #[test]
+    #[serial]
+    fn live_update_refreshes_takeover_backup_with_unprojected_url() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        ProviderService::add(&state, AppType::Pi, input("model-a"), true).expect("add");
+        let backup_doc = json!({
+            "providers": {
+                "cc-switch-test": {
+                    "baseUrl": "https://old.example/v1",
+                    "models": [{ "id": "model-a" }]
+                }
+            }
+        });
+        futures::executor::block_on(state.db.save_live_backup("pi", &backup_doc.to_string()))
+            .expect("seed backup");
+
+        let mut updated = input("model-b");
+        updated.settings_config["baseUrl"] = json!("https://api.example.com/v1");
+        update(&state, Some("cc-switch-test"), updated).expect("update live");
+
+        let backup = futures::executor::block_on(state.db.get_live_backup("pi"))
+            .expect("read backup")
+            .expect("backup still exists");
+        let parsed: Value = serde_json::from_str(&backup.original_config).expect("parse backup");
+        assert_eq!(
+            parsed["providers"]["cc-switch-test"]["baseUrl"],
+            json!("https://api.example.com/v1")
+        );
+        assert!(
+            !parsed["providers"]["cc-switch-test"]["baseUrl"]
+                .as_str()
+                .unwrap_or("")
+                .contains("15721"),
+            "backup must store the real upstream, not the Claude listen port"
+        );
     }
 }

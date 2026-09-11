@@ -417,7 +417,7 @@ export function ProviderList({
         {piStateErrorNotice}
         <ProviderEmptyState
           appId={appId}
-          onCreate={appId === "pi" ? undefined : onCreate}
+          onCreate={onCreate}
           onImport={appId === "pi" ? undefined : () => importMutation.mutate()}
         />
       </div>
@@ -445,7 +445,7 @@ export function ProviderList({
               appId === "hermes" && hermesCurrentProviderId === provider.id;
             const isCurrent =
               appId === "pi"
-                ? false
+                ? piCurrentState?.defaultProviderId === provider.id
                 : isOmo
                   ? isOmoCurrent
                   : isOmoSlim
@@ -492,9 +492,11 @@ export function ProviderList({
                   supportsFailover ? activeProviderId : undefined
                 }
                 isDefaultModel={
-                  appId === "hermes"
-                    ? isHermesCurrent
-                    : isProviderDefaultModel(provider.id)
+                  appId === "pi"
+                    ? piCurrentState?.defaultProviderId === provider.id
+                    : appId === "hermes"
+                      ? isHermesCurrent
+                      : isProviderDefaultModel(provider.id)
                 }
                 isRemovalProtected={
                   appId === "pi"

@@ -1153,7 +1153,7 @@ function App() {
                       }
                       onCreate={() => setIsAddOpen(true)}
                       onSetAsDefault={
-                        activeApp === "openclaw"
+                        activeApp === "openclaw" || activeApp === "pi"
                           ? setAsDefaultModel
                           : activeApp === "hermes"
                             ? switchProvider

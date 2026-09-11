@@ -4930,6 +4930,10 @@ impl ProviderService {
         pi::update_usage_script(state, id, script)
     }
 
+    pub(crate) fn set_pi_default_provider(state: &AppState, id: &str) -> Result<(), AppError> {
+        pi::set_default_provider(state, id)
+    }
+
     /// Delete a provider
     ///
     /// 同时检查本地 settings 和数据库的当前供应商，防止删除任一端正在使用的供应商。
