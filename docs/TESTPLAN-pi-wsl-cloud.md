@@ -112,6 +112,20 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 | Live Pi CLI traffic through the shared listen on Windows | E2E projection + header logging unit tests only |
 | GitHub Actions `cargo test` full crate on this PR | Recorded in the PR after this VM run; Actions may still re-run |
 
+## Recorded on this cloud Linux VM (2026-09-11, Pi CRUD / fetch A / default)
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | pass |
+| `pnpm format:check` (`src/**`) | pass |
+| `pnpm test:unit` | 135 files / 1102 tests pass |
+| `cargo fmt --check --manifest-path src-tauri/Cargo.toml` | pass |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` | pass |
+| `cargo test --lib pi_config::` | ok (33) |
+| `cargo test --lib services::provider::pi::` | ok (21) |
+
+Full `cargo test --manifest-path src-tauri/Cargo.toml` was **not** re-run in full on this VM; GitHub Actions CI on the PR is the full crate gate.
+
 ## Recorded on this cloud Linux VM (2026-09-10, Pi provider select)
 
 | Command | Result |
