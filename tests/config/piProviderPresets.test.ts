@@ -159,4 +159,24 @@ describe("Pi provider presets", () => {
       });
     }
   });
+
+  it("carries Claude-parity modelsUrl overrides for aggregator list fetch", () => {
+    const preset = (name: string) => {
+      const found = piProviderPresets.find((item) => item.name === name);
+      if (!found) throw new Error(`Missing Pi preset: ${name}`);
+      return found;
+    };
+
+    expect(preset("DeepSeek").modelsUrl).toBe("https://api.deepseek.com/models");
+    expect(preset("PPIO").modelsUrl).toBe(
+      "https://api.ppio.com/openai/v1/models",
+    );
+    expect(preset("Novita AI").modelsUrl).toBe(
+      "https://api.novita.ai/openai/v1/models",
+    );
+    expect(preset("Tencent Token Plan").modelsUrl).toBe(
+      "https://api.lkeap.cloud.tencent.com/plan/v3/models",
+    );
+    expect(preset("Tencent Token Plan (Intl)").modelsUrl).toBeUndefined();
+  });
 });

@@ -56,6 +56,7 @@ vi.mock("@/lib/query", () => ({
 const providersApiUpdateMock = vi.fn();
 const providersApiUpdateTrayMenuMock = vi.fn();
 const piApiUpdateProviderUsageScriptMock = vi.fn();
+const piApiSetDefaultProviderMock = vi.fn();
 const settingsApiGetMock = vi.fn();
 const settingsApiApplyMock = vi.fn();
 const openclawApiGetModelCatalogMock = vi.fn();
@@ -66,6 +67,8 @@ vi.mock("@/lib/api", () => ({
   piApi: {
     updateProviderUsageScript: (...args: unknown[]) =>
       piApiUpdateProviderUsageScriptMock(...args),
+    setDefaultProvider: (...args: unknown[]) =>
+      piApiSetDefaultProviderMock(...args),
   },
   providersApi: {
     update: (...args: unknown[]) => providersApiUpdateMock(...args),
@@ -119,6 +122,7 @@ beforeEach(() => {
   providersApiUpdateMock.mockReset();
   providersApiUpdateTrayMenuMock.mockReset();
   piApiUpdateProviderUsageScriptMock.mockReset();
+  piApiSetDefaultProviderMock.mockReset();
   settingsApiGetMock.mockReset();
   settingsApiApplyMock.mockReset();
   openclawApiGetModelCatalogMock.mockReset();
@@ -792,6 +796,25 @@ describe("useProviderActions", () => {
     });
     expect(toastSuccessMock).toHaveBeenCalledTimes(1);
     expect(toastSuccessMock.mock.calls[0]?.[1]).toEqual({ closeButton: true });
+  });
+
+  it("sets the Pi default provider from the card action", async () => {
+    piApiSetDefaultProviderMock.mockResolvedValueOnce(undefined);
+
+    const { wrapper } = createWrapper();
+    const provider = createProvider({ id: "cc-switch-test" });
+
+    const { result } = renderHook(() => useProviderActions("pi"), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await result.current.setAsDefaultModel(provider);
+    });
+
+    expect(piApiSetDefaultProviderMock).toHaveBeenCalledWith("cc-switch-test");
+    expect(openclawApiSetDefaultModelMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1);
   });
 
   it("sets the explicitly selected OpenClaw model and preserves existing fallbacks", async () => {

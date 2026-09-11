@@ -1,7 +1,8 @@
 //! Thin adapter for Pi's native files.
 //!
-//! Pi owns account login and the active provider/model in `settings.json`.
-//! CC Switch only manages explicit provider entries in `models.json`.
+//! CC Switch manages explicit provider entries in `models.json` and may write
+//! global `defaultProvider` / `defaultModel` in `settings.json`. Pi `/login`
+//! credentials in `auth.json` stay untouched.
 
 mod proxy;
 
@@ -20,7 +21,9 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 const MAX_PI_FILE_BYTES: u64 = 1024 * 1024;
 const MISSING_MODELS_REVISION: &str = "missing";
+const MISSING_SETTINGS_REVISION: &str = "missing";
 static MODELS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static SETTINGS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 #[cfg(test)]
 static TEST_AGENT_DIR: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -48,8 +51,76 @@ pub(crate) fn get_pi_agent_dir() -> Result<PathBuf, AppError> {
     resolve_pi_agent_dir(
         crate::settings::get_pi_override_dir(),
         std::env::var_os("PI_CODING_AGENT_DIR"),
-        get_home_dir().join(".pi").join("agent"),
+        default_pi_agent_dir(),
     )
+}
+
+/// Local `~/.pi/agent`, or the same WSL distro home Claude/Codex already use.
+fn default_pi_agent_dir() -> PathBuf {
+    inferred_wsl_pi_agent_dir(
+        crate::settings::get_claude_override_dir().as_deref(),
+        crate::settings::get_codex_override_dir().as_deref(),
+    )
+    .unwrap_or_else(|| get_home_dir().join(".pi").join("agent"))
+}
+
+/// When `pi_config_dir` is unset, follow Claude/Codex WSL UNC home to
+/// `\\wsl.localhost\<distro>\home\<user>\.pi\agent` (or `root\.pi\agent`).
+pub(crate) fn inferred_wsl_pi_agent_dir(
+    claude_override: Option<&Path>,
+    codex_override: Option<&Path>,
+) -> Option<PathBuf> {
+    for dir in [claude_override, codex_override].into_iter().flatten() {
+        if let Some(home) = wsl_unc_home_from_app_config_dir(dir) {
+            return Some(home.join(".pi").join("agent"));
+        }
+    }
+    None
+}
+
+/// Home of a WSL UNC app dir such as `\\wsl.localhost\Ubuntu\home\user\.claude`.
+pub(crate) fn wsl_unc_home_from_app_config_dir(dir: &Path) -> Option<PathBuf> {
+    wsl_unc_home_from_app_config_dir_str(&dir.to_string_lossy()).map(PathBuf::from)
+}
+
+fn wsl_unc_home_from_app_config_dir_str(raw: &str) -> Option<String> {
+    let normalized = raw.replace('/', r"\");
+    let lower = normalized.to_ascii_lowercase();
+    let prefix_len = if lower.starts_with(r"\\?\unc\") {
+        r"\\?\unc\".len()
+    } else if lower.starts_with(r"\\") {
+        2
+    } else {
+        return None;
+    };
+    let stripped = &normalized[prefix_len..];
+    let parts: Vec<&str> = stripped
+        .split('\\')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let server = parts.first()?;
+    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
+        return None;
+    }
+    let last = *parts.last()?;
+    if !last.starts_with('.') {
+        return None;
+    }
+    let home_parts =
+        if parts.len() == 5 && parts[2].eq_ignore_ascii_case("home") && !parts[3].is_empty() {
+            &parts[..4]
+        } else if parts.len() == 4 && parts[2].eq_ignore_ascii_case("root") {
+            &parts[..3]
+        } else {
+            return None;
+        };
+
+    let mut home = String::from(r"\\");
+    if lower.starts_with(r"\\?\unc\") {
+        home = String::from(r"\\?\UNC\");
+    }
+    home.push_str(home_parts.join(r"\").as_str());
+    Some(home)
 }
 
 pub(crate) fn resolve_pi_agent_dir(
@@ -121,6 +192,145 @@ pub(crate) fn read_pi_native_defaults() -> Result<PiNativeDefaults, AppError> {
         default_model: optional_string(object, "defaultModel", &path)?,
         session_dir: optional_string(object, "sessionDir", &path)?,
     })
+}
+
+/// First explicit model id on a `models.json` provider node.
+pub(crate) fn first_model_id(config: &Value) -> Option<String> {
+    config
+        .get("models")
+        .and_then(Value::as_array)
+        .and_then(|models| {
+            models
+                .iter()
+                .find_map(|model| nonempty_string(model.get("id")).map(str::to_string))
+        })
+}
+
+/// Write Pi global default provider/model, preserving unknown settings fields.
+pub(crate) fn write_pi_native_defaults(
+    default_provider: Option<&str>,
+    default_model: Option<&str>,
+) -> Result<(), AppError> {
+    let _guard = lock_settings_file()?;
+    let path = get_pi_settings_path()?;
+    let (mut document, expected_revision) = read_settings_document_with_revision(&path)?;
+    let root = document.as_object_mut().ok_or_else(|| {
+        AppError::Config(format!(
+            "Pi settings root must be an object: {}",
+            path.display()
+        ))
+    })?;
+
+    match default_provider.filter(|value| !value.is_empty()) {
+        Some(provider) => {
+            root.insert(
+                "defaultProvider".to_string(),
+                Value::String(provider.to_string()),
+            );
+        }
+        None => {
+            root.remove("defaultProvider");
+        }
+    }
+    match default_model.filter(|value| !value.is_empty()) {
+        Some(model) => {
+            root.insert("defaultModel".to_string(), Value::String(model.to_string()));
+        }
+        None => {
+            root.remove("defaultModel");
+        }
+    }
+
+    write_settings_document(&path, &document, &expected_revision)
+}
+
+/// Point Pi's global default at an enabled live provider node.
+pub(crate) fn set_pi_default_provider(provider_key: &str) -> Result<(), AppError> {
+    let config = read_pi_native_provider(provider_key)?.ok_or_else(|| {
+        AppError::InvalidInput(format!(
+            "Pi provider '{provider_key}' is not enabled in models.json"
+        ))
+    })?;
+    write_pi_native_defaults(Some(provider_key), first_model_id(&config).as_deref())
+}
+
+/// After deleting/removing the current default, pick another live node or clear.
+pub(crate) fn reassign_pi_default_if_current(removed_id: &str) -> Result<(), AppError> {
+    let defaults = match read_pi_native_defaults() {
+        Ok(defaults) => defaults,
+        Err(error) => {
+            log::warn!(
+                "Failed to read Pi settings while reassigning default after '{removed_id}': {error}"
+            );
+            return Ok(());
+        }
+    };
+    if defaults.default_provider.as_deref() != Some(removed_id) {
+        return Ok(());
+    }
+
+    let remaining = read_pi_native_providers()?;
+    if let Some((next_id, config)) = remaining.first() {
+        write_pi_native_defaults(Some(next_id.as_str()), first_model_id(config).as_deref())
+    } else {
+        write_pi_native_defaults(None, None)
+    }
+}
+
+fn lock_settings_file() -> Result<MutexGuard<'static, ()>, AppError> {
+    SETTINGS_FILE_LOCK
+        .lock()
+        .map_err(|error| AppError::Config(format!("Pi settings file lock is poisoned: {error}")))
+}
+
+fn read_settings_document_with_revision(path: &Path) -> Result<(Value, String), AppError> {
+    if !path.exists() {
+        return Ok((
+            Value::Object(Map::new()),
+            MISSING_SETTINGS_REVISION.to_string(),
+        ));
+    }
+    let bytes = read_file_limited(path, "Pi settings")?;
+    let revision = revision(&bytes);
+    let document = parse_json5_value(path, "Pi settings", bytes)?;
+    if !document.is_object() {
+        return Err(AppError::Config(format!(
+            "Pi settings root must be an object: {}",
+            path.display()
+        )));
+    }
+    Ok((document, revision))
+}
+
+fn write_settings_document(
+    path: &Path,
+    document: &Value,
+    expected_revision: &str,
+) -> Result<(), AppError> {
+    let mut bytes =
+        serde_json::to_vec_pretty(document).map_err(|source| AppError::JsonSerialize { source })?;
+    bytes.push(b'\n');
+    ensure_private_models_parent(path)?;
+    ensure_settings_revision(path, expected_revision)?;
+    atomic_write_private(path, &bytes)
+}
+
+fn ensure_settings_revision(path: &Path, expected_revision: &str) -> Result<(), AppError> {
+    let actual_revision = match fs::File::open(path) {
+        Ok(_) => revision(&read_file_limited(path, "Pi settings")?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            MISSING_SETTINGS_REVISION.to_string()
+        }
+        Err(error) => return Err(AppError::io(path, error)),
+    };
+    if actual_revision == expected_revision {
+        Ok(())
+    } else {
+        Err(AppError::Conflict(format!(
+            "Pi settings.json changed outside CC Switch: {}",
+            path.display()
+        )))
+    }
 }
 
 pub(crate) fn read_pi_native_providers() -> Result<IndexMap<String, Value>, AppError> {
@@ -426,7 +636,58 @@ pub(crate) fn write_models_document(
     bytes.push(b'\n');
     ensure_private_models_parent(path)?;
     ensure_models_revision(path, expected_revision)?;
-    atomic_write_private(path, &bytes)
+    atomic_write_private(path, &bytes)?;
+    maybe_mirror_legacy_models_json(path, &bytes);
+    Ok(())
+}
+
+/// Mirror the agent file to `~/.pi/models.json` only when that legacy file already exists.
+fn maybe_mirror_legacy_models_json(agent_models_path: &Path, bytes: &[u8]) {
+    let Some(legacy) = legacy_pi_root_models_path(agent_models_path) else {
+        return;
+    };
+    if !legacy.exists() || path_eq_ignore_separators(agent_models_path, &legacy) {
+        return;
+    }
+    if let Err(error) = atomic_write_private(&legacy, bytes) {
+        log::warn!(
+            "Failed to mirror Pi models.json to legacy {}: {error}",
+            legacy.display()
+        );
+    }
+}
+
+fn legacy_pi_root_models_path(agent_models_path: &Path) -> Option<PathBuf> {
+    legacy_pi_root_models_path_str(&agent_models_path.to_string_lossy()).map(PathBuf::from)
+}
+
+fn legacy_pi_root_models_path_str(raw: &str) -> Option<String> {
+    let normalized = raw.replace('\\', "/");
+    const SUFFIX: &str = "/agent/models.json";
+    let trimmed = normalized.trim_end_matches('/');
+    if trimmed.len() <= SUFFIX.len() || !trimmed.to_ascii_lowercase().ends_with(SUFFIX) {
+        return None;
+    }
+    // Mirror next to the agent parent (`~/.pi/models.json`), including older
+    // layouts that used a non-`.pi` directory name.
+    let root = &trimmed[..trimmed.len() - SUFFIX.len()];
+    let slash = if raw.contains('\\') && !raw.contains('/') {
+        "\\"
+    } else {
+        "/"
+    };
+    let mut legacy = root.to_string();
+    legacy.push_str(slash);
+    legacy.push_str("models.json");
+    if slash == "\\" {
+        Some(legacy.replace('/', r"\"))
+    } else {
+        Some(legacy)
+    }
+}
+
+fn path_eq_ignore_separators(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy().replace('\\', "/") == right.to_string_lossy().replace('\\', "/")
 }
 
 fn ensure_models_revision(path: &Path, expected_revision: &str) -> Result<(), AppError> {
@@ -707,5 +968,125 @@ mod tests {
             fs::read_to_string(path).expect("read external models"),
             external
         );
+    }
+
+    #[test]
+    fn wsl_unc_home_follows_claude_or_codex_home_style_dirs() {
+        let claude = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude");
+        let inferred = inferred_wsl_pi_agent_dir(Some(&claude), None).expect("infer from Claude");
+        let normalized = inferred.to_string_lossy().replace('/', r"\");
+        assert!(
+            normalized.ends_with(r"home\tfdx8045\.pi\agent"),
+            "Claude WSL home must map to the same distro .pi/agent: {normalized}"
+        );
+
+        let codex = PathBuf::from(r"\\wsl$\Debian\root\.codex");
+        let from_codex = inferred_wsl_pi_agent_dir(None, Some(&codex)).expect("infer from Codex");
+        let codex_normalized = from_codex.to_string_lossy().replace('/', r"\");
+        assert!(
+            codex_normalized.ends_with(r"root\.pi\agent"),
+            "Codex WSL root home must map to .pi/agent: {codex_normalized}"
+        );
+
+        let custom = PathBuf::from(r"\\wsl.localhost\Ubuntu\opt\claude\.claude");
+        assert!(
+            inferred_wsl_pi_agent_dir(Some(&custom), None).is_none(),
+            "custom WSL dirs are not a UNC home"
+        );
+        assert!(wsl_unc_home_from_app_config_dir(Path::new("/home/user/.claude")).is_none());
+    }
+
+    #[test]
+    fn pi_config_dir_still_wins_over_inferred_wsl_home() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let override_dir = temp.path().join("explicit-agent");
+        let inferred = PathBuf::from(r"\\wsl.localhost\Ubuntu\home\user\.pi\agent");
+        assert_eq!(
+            resolve_pi_agent_dir(Some(override_dir.clone()), None, inferred).expect("resolve"),
+            override_dir
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn write_defaults_preserves_unknown_settings_fields() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_settings_path().expect("settings path");
+        fs::create_dir_all(path.parent().expect("agent dir")).expect("create agent");
+        fs::write(
+            &path,
+            r#"{"sessionDir":"/tmp/sessions","theme":"dark","defaultProvider":"old"}"#,
+        )
+        .expect("seed settings");
+
+        write_pi_native_defaults(Some("cc-switch-test"), Some("model-a")).expect("write defaults");
+
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read settings"))
+                .expect("parse settings");
+        assert_eq!(written["defaultProvider"], json!("cc-switch-test"));
+        assert_eq!(written["defaultModel"], json!("model-a"));
+        assert_eq!(written["sessionDir"], json!("/tmp/sessions"));
+        assert_eq!(written["theme"], json!("dark"));
+    }
+
+    #[test]
+    #[serial]
+    fn removing_the_default_reassigns_or_clears() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider("keep-me", &provider()).expect("insert remaining");
+        insert_pi_provider("gone", &provider()).expect("insert default");
+        write_pi_native_defaults(Some("gone"), Some("model-a")).expect("set default");
+
+        remove_pi_provider("gone").expect("remove default provider");
+        reassign_pi_default_if_current("gone").expect("reassign");
+
+        let defaults = read_pi_native_defaults().expect("read defaults");
+        assert_eq!(defaults.default_provider.as_deref(), Some("keep-me"));
+        assert_eq!(defaults.default_model.as_deref(), Some("example-model"));
+
+        remove_pi_provider("keep-me").expect("remove last");
+        reassign_pi_default_if_current("keep-me").expect("clear");
+        let cleared = read_pi_native_defaults().expect("read cleared");
+        assert_eq!(cleared.default_provider, None);
+        assert_eq!(cleared.default_model, None);
+    }
+
+    #[test]
+    #[serial]
+    fn legacy_root_models_json_is_mirrored_only_when_it_already_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pi_root = dir.path().join(".pi");
+        let agent_dir = pi_root.join("agent");
+        fs::create_dir_all(&agent_dir).expect("create agent");
+        let _agent = test_support::TestAgentDir::at(&agent_dir);
+
+        insert_pi_provider("only-agent", &provider()).expect("write agent file");
+        assert!(!pi_root.join("models.json").exists());
+
+        fs::write(pi_root.join("models.json"), "{}\n").expect("create legacy");
+        insert_pi_provider("mirrored", &provider()).expect("write again");
+
+        let legacy: Value = serde_json::from_str(
+            &fs::read_to_string(pi_root.join("models.json")).expect("read legacy"),
+        )
+        .expect("parse legacy");
+        assert!(legacy["providers"].get("only-agent").is_some());
+        assert!(legacy["providers"].get("mirrored").is_some());
+        let agent: Value = serde_json::from_str(
+            &fs::read_to_string(agent_dir.join("models.json")).expect("read agent"),
+        )
+        .expect("parse agent");
+        assert_eq!(legacy, agent);
+    }
+
+    #[test]
+    fn first_model_id_reads_the_first_nonempty_models_entry() {
+        assert_eq!(
+            first_model_id(&json!({"models": [{"id": "a"}, {"id": "b"}]})).as_deref(),
+            Some("a")
+        );
+        assert_eq!(first_model_id(&json!({"models": []})), None);
+        assert_eq!(first_model_id(&json!({})), None);
     }
 }

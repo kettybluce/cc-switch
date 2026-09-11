@@ -337,8 +337,8 @@ describe("ProviderList Component", () => {
     expect(await screen.findByText("pi.empty.title")).toBeInTheDocument();
     expect(providerCardRenderSpy).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", { name: "provider.addProvider" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "provider.addProvider" }),
+    ).toBeInTheDocument();
   });
 
   it("does not expose proxy or failover actions on Pi provider cards", async () => {
@@ -359,6 +359,7 @@ describe("ProviderList Component", () => {
       http.post(`${TAURI_ENDPOINT}/get_pi_current_state`, () =>
         HttpResponse.json({
           enabledProviderIds: ["current-pi", "inactive-pi"],
+          defaultProviderId: "current-pi",
         }),
       ),
     );
@@ -379,6 +380,7 @@ describe("ProviderList Component", () => {
         onDelete={vi.fn()}
         onDuplicate={vi.fn()}
         onOpenWebsite={vi.fn()}
+        onSetAsDefault={vi.fn()}
       />,
     );
 
@@ -392,7 +394,8 @@ describe("ProviderList Component", () => {
       expect(currentCards).not.toHaveLength(0);
       expect(inactiveCards).not.toHaveLength(0);
       expect(currentCards.at(-1)).toMatchObject({
-        isCurrent: false,
+        isCurrent: true,
+        isDefaultModel: true,
         isRemovalProtected: false,
         isProxyRunning: false,
         isProxyTakeover: false,
@@ -402,6 +405,7 @@ describe("ProviderList Component", () => {
       });
       expect(inactiveCards.at(-1)).toMatchObject({
         isCurrent: false,
+        isDefaultModel: false,
         isProxyRunning: false,
         isProxyTakeover: false,
       });
@@ -574,7 +578,7 @@ describe("ProviderList Component", () => {
       screen.queryByRole("button", { name: "provider.importCurrent" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "provider.addProvider" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "provider.addProvider" }),
+    ).toBeInTheDocument();
   });
 });

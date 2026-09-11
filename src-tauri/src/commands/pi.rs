@@ -21,6 +21,14 @@ pub(crate) fn update_pi_provider_usage_script(
 }
 
 #[tauri::command]
+pub(crate) fn set_pi_default_provider(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    ProviderService::set_pi_default_provider(state.inner(), &id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub(crate) fn get_pi_session_discovery() -> PiSessionDiscovery {
     crate::session_manager::providers::pi::session_discovery()
 }

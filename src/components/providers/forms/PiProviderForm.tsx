@@ -443,6 +443,9 @@ export function PiProviderForm({
   );
   const [providerKey, setProviderKey] = useState(providerId ?? "");
   const [baseUrl, setBaseUrl] = useState(optionalText(initialConfig.baseUrl));
+  const [isFullUrl, setIsFullUrl] = useState(
+    initialData?.meta?.isFullUrl === true,
+  );
   const [api, setApi] = useState(
     () => optionalText(initialConfig.api) || "openai-completions",
   );
@@ -782,6 +785,7 @@ export function PiProviderForm({
         parseJsonObject(identityDefaults.settingsConfig) ?? {};
       form.reset(identityDefaults);
       setBaseUrl("");
+      setIsFullUrl(false);
       setApi("openai-completions");
       setIncludeApi(true);
       includeModelsRef.current = true;
@@ -818,6 +822,7 @@ export function PiProviderForm({
       iconColor: preset.iconColor ?? "",
     });
     setBaseUrl(preset.settingsConfig.baseUrl);
+    setIsFullUrl(false);
     setApi(preset.settingsConfig.api);
     setIncludeApi(true);
     includeModelsRef.current = true;
@@ -950,19 +955,21 @@ export function PiProviderForm({
       "user-agent",
     );
 
+    const matchedPreset = piProviderPresets.find(
+      (preset) => preset.settingsConfig.baseUrl === endpoint,
+    );
+    const modelsUrl = matchedPreset?.modelsUrl;
+
     const requestGeneration = ++modelFetchGenerationRef.current;
     setFetchedModels([]);
     setIsFetchingModels(true);
     fetchModelsForConfig(
       endpoint,
       apiKey,
-      undefined,
-      undefined,
+      isFullUrl,
+      modelsUrl,
       customUserAgent,
-      {
-        apiFormat: api,
-        requestHeaders,
-      },
+      Object.keys(requestHeaders).length > 0 ? { requestHeaders } : undefined,
     )
       .then((result) => {
         if (modelFetchGenerationRef.current !== requestGeneration) return;
@@ -985,7 +992,7 @@ export function PiProviderForm({
           setIsFetchingModels(false);
         }
       });
-  }, [api, apiKey, baseUrl, providerHeaders, t]);
+  }, [apiKey, baseUrl, isFullUrl, providerHeaders, t]);
 
   const handleApiChange = useCallback(
     (value: string) => {
@@ -1248,7 +1255,10 @@ export function PiProviderForm({
         providerKey: isEdit ? providerId : trimmedKey,
         presetId: selectedPresetId ?? undefined,
         presetCategory: category,
-        meta: initialData?.meta,
+        meta: {
+          ...initialData?.meta,
+          isFullUrl: isFullUrl || undefined,
+        },
       };
       await onSubmit(values);
     } catch (error) {
@@ -1434,6 +1444,13 @@ export function PiProviderForm({
                 value={baseUrl}
                 onChange={handleBaseUrlChange}
                 placeholder="https://api.example.com/v1"
+                showManageButton={false}
+                showFullUrlToggle
+                isFullUrl={isFullUrl}
+                onFullUrlChange={(value) => {
+                  setIsFullUrl(value);
+                  invalidateFetchedModels();
+                }}
               />
               <p className="text-xs text-muted-foreground">
                 {t("opencode.baseUrlHint", {
