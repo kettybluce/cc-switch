@@ -3088,10 +3088,10 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
   },
   {
     name: "MiniMax",
-    websiteUrl: "https://platform.minimaxi.com",
-    apiKeyUrl: "https://platform.minimaxi.com/subscribe/coding-plan",
+    websiteUrl: "https://platform.minimax.cn",
+    apiKeyUrl: "https://platform.minimax.cn/subscribe/token-plan",
     settingsConfig: {
-      baseUrl: "https://api.minimaxi.com/v1",
+      baseUrl: "https://api.minimax.cn/v1",
       apiKey: "",
       api: "openai-completions",
       models: [
@@ -3252,17 +3252,18 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
   },
   {
     name: "BaiLing",
-    websiteUrl: "https://alipaytbox.yuque.com/sxs0ba/ling/get_started",
+    websiteUrl: "https://developer.ant-ling.com/zh-CN/docs/",
+    apiKeyUrl: "https://chat.ant-ling.com/open",
     settingsConfig: {
-      baseUrl: "https://api.tbox.cn/v1",
+      baseUrl: "https://api.ant-ling.com/v1",
       apiKey: "",
       api: "openai-completions",
       models: [
         {
-          id: "Ling-2.5-1T",
-          name: "Ling 2.5 1T",
-          contextWindow: 128000,
-          cost: { input: 0.56, output: 2.24 },
+          id: "Ling-2.6-1T",
+          name: "Ling 2.6 1T",
+          contextWindow: 262144,
+          cost: { input: 0.63, output: 2.52 },
         },
       ],
     },
@@ -3275,8 +3276,8 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       },
     },
     suggestedDefaults: {
-      model: { primary: "bailing/Ling-2.5-1T" },
-      modelCatalog: { "bailing/Ling-2.5-1T": { alias: "BaiLing" } },
+      model: { primary: "bailing/Ling-2.6-1T" },
+      modelCatalog: { "bailing/Ling-2.6-1T": { alias: "BaiLing" } },
     },
   },
   {
