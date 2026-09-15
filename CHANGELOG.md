@@ -5,6 +5,51 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.10] - 2026-09-15
+
+Fork cherry-pick of official 3.20.3 Wave 1 + Wave 2 + optional UI/presets onto SCHEMA 18. Does **not** claim official 3.20.3. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- Empty `reasoning_content` Thought flood in Anthropic SSE streaming (#7227)
+- Codex Chat coalesce of commentary + tool calls so long tasks no longer stop early (#7280); Moonshot `$ref` sibling rewrite kept
+- Codex NTFS growing-rollout usage cursor + incomplete-tail follow-up (#7219); reuses `last_byte_offset`
+- Omit null tool `description` on Claude→OpenAI conversion (#7319); fork 1214 `developer`→`system` remap kept
+- DeepSeek V4.1 Flash pricing seed/repair + vision catalog (#7286)
+- Shutdown/port allocation no longer copies Claude retry/timeout onto other apps (#7210); Pi shared listen / `proxy_takeover_pi` kept
+- Omitted Codex `model_provider` now hits local proxy instead of api.openai.com (#7263)
+- Codex Images edits follow-ups: pasted full endpoints, mixed-case suffixes, streamed usage (#7177)
+- Universal provider sync keeps child `meta` / `created_at` / `sort_index` (#7212)
+- Clamp Anthropic→Responses `max_tokens` 1–15 → 16 (#7287)
+- Zhipu Responses model list `models[].slug` fallback (#7330); Pi fetch-models Option A kept
+- Tray Codex quota for managed multi ChatGPT accounts (#7267)
+- grok-4.6 reasoning effort + `xhigh` verbatim (#7318)
+
+### Added
+
+- Disable Artifact Tool checkbox → `CLAUDE_CODE_DISABLE_ARTIFACT=1`
+- Request-log tokens/s column (#3369); session 0.0s / missing latency still shows `—`
+
+### Changed
+
+- New-card presets only: Kimi Codex native Responses, MiniMax M3, 千问AI平台, aggregator catalogs. Live Pi `models.json` keys are not rewritten.
+
+### Skipped (intentionally)
+
+- Official 3.20.3 version number / wholesale main merge
+- #7331 Linux Claude Desktop 3P
+- Fable weekly limits
+- #7346 npm dist-tags
+- Atlas sponsor removal
+- Unmerged official PRs
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- Preset changes apply only to newly created cards.
+
 ## [3.20.9] - 2026-09-11
 
 Fork iteration on official 3.20.x / SCHEMA 18 (main after PR #37). Pi 拉取模型对齐 Claude（供应商 URL / 预设 modelsUrl + `global_proxy_url`）；CRUD 同步 WSL live `models.json` 并刷新/作废接管备份；卡片「设为默认」写 `settings.json`，删除当前默认时改派或清除。`SCHEMA_VERSION` stays at 18. Windows x64 MSI + Portable only.
