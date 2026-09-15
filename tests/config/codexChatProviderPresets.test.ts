@@ -288,13 +288,8 @@ describe("Codex Chat provider presets", () => {
 
   it("ships per-model reasoningLevels for OpenCode Go mirroring models.dev", () => {
     // Zen 网关的合法 effort 档位是逐模型的（models.dev reasoning_options，
-<<<<<<< HEAD
     // 2026-09-10）：统一并集映射会把 high 发给仅声明 max 的 kimi-k3，
     // 此测试锁住逐模型表，防回退。
-=======
-    // 2026-08）：统一并集映射会把 Codex 默认的 medium 发给只声明 high|max 的
-    // glm-5.2（默认路径），此测试锁住逐模型表，防回退。
->>>>>>> 2f3c0262 (feat(presets): rebrand DashScope as 千问AI平台 and refresh Qwen models (#7183))
     const preset = codexProviderPresets.find(
       (item) => item.name === "OpenCode Go",
     );

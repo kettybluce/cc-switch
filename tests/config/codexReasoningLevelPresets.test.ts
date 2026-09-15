@@ -174,22 +174,9 @@ describe("Codex preset pre-filled reasoning levels", () => {
   );
 
   it("keeps deliberately-unfilled presets unfilled", () => {
-<<<<<<< HEAD
-    // Bailian qwen3-coder-plus 无 per-model 档位证据。OpenCode Go 的 MiMo
-    // 无 effort 声明，与 opencode 客户端一致（代理侧无表不发 reasoning_effort）。
-    // ModelScope 是否透传思考字段未证实，不造两态假开关。
+    // OpenCode Go 的 MiMo 无 effort 声明，与 opencode 客户端一致（代理侧无表
+    // 不发 reasoning_effort）。ModelScope 是否透传思考字段未证实，不造两态假开关。
     const UNFILLED: Array<[string, string]> = [
-      ["Bailian", "qwen3-coder-plus"],
-=======
-    // OpenCode Go 的 toggle/未收录模型保持不填：glm-5.1 是 toggle 型（models.dev
-    // 无 effort 声明）、kimi-k2.7-code 官方标注不支持 effort、mimo-v2.5-pro 未
-    // 收录 models.dev——与 opencode 客户端一致（代理侧无表不发 reasoning_effort
-    // 字段）。SiliconFlow .cn 的 M2.5 能否真正关思考无官方明文、ModelScope
-    // 是否透传思考字段未证实——真机验证前不造两态假开关（2026-08-15 盘点结论）
-    const UNFILLED: Array<[string, string]> = [
-      ["OpenCode Go", "glm-5.1"],
-      ["OpenCode Go", "kimi-k2.7-code"],
->>>>>>> 2f3c0262 (feat(presets): rebrand DashScope as 千问AI平台 and refresh Qwen models (#7183))
       ["OpenCode Go", "mimo-v2.5-pro"],
       ["ModelScope", "ZhipuAI/GLM-5.2"],
       // StepFun 无后缀 3.5-flash：官方未暴露 effort，单一常开思考态
