@@ -4992,6 +4992,30 @@ impl ProviderService {
         if app_type == AppType::Pi {
             return pi::list(state);
         }
+        if app_type == AppType::Mcode {
+            let native = crate::mcode_config::get_providers()?;
+            let mut saved = state.db.get_all_providers("mcode")?;
+            for (id, config) in &native {
+                if !saved.contains_key(id) {
+                    let name = config.get("name").and_then(Value::as_str).unwrap_or(id);
+                    saved.insert(
+                        id.clone(),
+                        Provider::with_id(id.clone(), name.into(), config.clone(), None),
+                    );
+                }
+            }
+            for (id, provider) in &mut saved {
+                if let Some(config) = native.get(id) {
+                    if let Some(name) = config.get("name").and_then(Value::as_str) {
+                        provider.name = name.into();
+                    }
+                    provider.settings_config = config.clone();
+                }
+                Self::set_provider_live_config_managed(provider, native.contains_key(id));
+                state.db.save_provider("mcode", provider)?;
+            }
+            return Ok(saved);
+        }
         state.db.get_all_providers(app_type.as_str())
     }
 
@@ -5009,6 +5033,27 @@ impl ProviderService {
         }
         crate::settings::get_effective_current_provider(&state.db, &app_type)
             .map(|opt| opt.unwrap_or_default())
+    }
+
+    fn save_mcode_provider(
+        state: &AppState,
+        provider: &Provider,
+        write_live: bool,
+    ) -> Result<bool, AppError> {
+        let previous = state.db.get_provider_by_id(&provider.id, "mcode")?;
+        state.db.save_provider("mcode", provider)?;
+        if write_live {
+            if let Err(error) =
+                crate::mcode_config::set_provider(&provider.id, provider.settings_config.clone())
+            {
+                match previous {
+                    Some(previous) => state.db.save_provider("mcode", &previous)?,
+                    None => state.db.delete_provider("mcode", &provider.id)?,
+                }
+                return Err(error);
+            }
+        }
+        Ok(true)
     }
 
     /// Add a new provider
@@ -5093,6 +5138,10 @@ impl ProviderService {
             }
 
             return Ok(true);
+        }
+
+        if app_type == AppType::Mcode {
+            return Self::save_mcode_provider(state, &provider, add_to_live);
         }
 
         // Save to database
@@ -5288,6 +5337,10 @@ impl ProviderService {
                 }),
             )?;
             Self::set_provider_live_config_managed(&mut provider, live_config_managed);
+
+            if app_type == AppType::Mcode {
+                return Self::save_mcode_provider(state, &provider, live_config_managed);
+            }
 
             // Save to database after live-config presence is resolved so parse errors
             // do not report failure after already mutating DB state.
@@ -5532,6 +5585,7 @@ impl ProviderService {
                     AppType::OpenCode => remove_opencode_provider_from_live(id)?,
                     AppType::OpenClaw => remove_openclaw_provider_from_live(id)?,
                     AppType::Hermes => remove_hermes_provider_from_live(id)?,
+                    AppType::Mcode => crate::mcode_config::remove_provider(id)?,
                     _ => {}
                 }
             }
@@ -5601,6 +5655,7 @@ impl ProviderService {
             AppType::Hermes => {
                 remove_hermes_provider_from_live(id)?;
             }
+            AppType::Mcode => crate::mcode_config::remove_provider(id)?,
             _ => {
                 return Err(AppError::Message(format!(
                     "App {} does not support remove from live config",
@@ -5969,6 +6024,7 @@ impl ProviderService {
                     AppType::OpenCode => remove_opencode_provider_from_live(&provider.id),
                     AppType::OpenClaw => remove_openclaw_provider_from_live(&provider.id),
                     AppType::Hermes => remove_hermes_provider_from_live(&provider.id),
+                    AppType::Mcode => crate::mcode_config::remove_provider(&provider.id),
                     _ => Ok(()),
                 };
 
@@ -6233,7 +6289,7 @@ impl ProviderService {
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
-            AppType::Pi => Ok(String::new()),
+            AppType::Pi | AppType::Mcode => Ok(String::new()),
         }
     }
 
@@ -6251,7 +6307,7 @@ impl ProviderService {
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
-            AppType::Pi => Ok(String::new()),
+            AppType::Pi | AppType::Mcode => Ok(String::new()),
         }
     }
 
@@ -7017,6 +7073,9 @@ impl ProviderService {
                     ));
                 }
             }
+            AppType::Mcode => {
+                crate::mcode_config::validate_provider(&provider.id, &provider.settings_config)?
+            }
             AppType::Pi => {
                 crate::pi_config::validate_provider_node(&provider.id, &provider.settings_config)?;
             }
@@ -7224,7 +7283,7 @@ impl ProviderService {
 
                 Ok((api_key, base_url))
             }
-            AppType::OpenClaw | AppType::Hermes | AppType::Pi => {
+            AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Mcode => {
                 // These native formats use apiKey and baseUrl directly on the object.
                 let api_key = provider
                     .settings_config
