@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   formatOutputTokensPerSecond,
+  formatRequestFirstToken,
+  formatRequestLatency,
   formatRequestTiming,
   formatTokensShort,
   getOutputTokensPerSecond,
@@ -117,9 +119,34 @@ describe("formatRequestTiming", () => {
     expect(formatRequestTiming(1500, 0, "grok_session")).toBe("1.5s");
   });
 
+  it("maps SCHEMA 18 Claude/Codex/Pi session imports (latency 0, no TTFT) to a dash", () => {
+    for (const source of [
+      "session_log",
+      "codex_session",
+      "pi_session",
+    ] as const) {
+      expect(formatRequestTiming(0, null, source)).toBe(UNKNOWN_REQUEST_TIMING);
+      expect(formatRequestTiming(0, undefined, source)).toBe(
+        UNKNOWN_REQUEST_TIMING,
+      );
+      expect(formatRequestTiming(0, 0, source)).toBe(UNKNOWN_REQUEST_TIMING);
+    }
+  });
+
   it("keeps real proxy and session timings that are actually present", () => {
     expect(formatRequestTiming(1234, 200, "proxy")).toBe("1.2s/0.2s");
     expect(formatRequestTiming(0, null, "proxy")).toBe("0.0s");
     expect(formatRequestTiming(1500, null, "grok_session")).toBe("1.5s");
+  });
+
+  it("omits a TTFT fragment when session JSONL stored 0 or null", () => {
+    expect(formatRequestFirstToken(null, "pi_session")).toBeNull();
+    expect(formatRequestFirstToken(0, "session_log")).toBeNull();
+    expect(formatRequestFirstToken(0, "codex_session")).toBeNull();
+    expect(formatRequestLatency(0, "pi_session")).toBe(UNKNOWN_REQUEST_TIMING);
+    expect(formatRequestLatency(0, "session_log")).toBe(UNKNOWN_REQUEST_TIMING);
+    expect(formatRequestLatency(0, "codex_session")).toBe(
+      UNKNOWN_REQUEST_TIMING,
+    );
   });
 });

@@ -88,6 +88,7 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 - Header stripped hop-by-hop in `forwarder.rs` (not sent upstream).
 - Shared listen still uses Claude / Codex / Gemini handlers; `x-cc-switch-app: pi` selects forwardable Pi catalog providers (not Claude/Codex current). Projected `PROXY_MANAGED` nodes are skipped.
 - Session importer already writes `app_type = "pi"` from agent JSONL (`session_usage_pi.rs`). `proxy_request_logs.app_type` has no CHECK; SCHEMA stays 18.
+- Isolated-HOME JSONL scan (`src-tauri/tests/session_usage_scan.rs`): Claude `projects/` + sub-agent, Codex `sessions/YYYY/MM/DD`, Pi `.pi/agent/sessions/<project>`. Asserts usage aggregation, stored TTFT dash (`latency_ms=0`, `first_token_ms` NULL), empty dirs, corrupt lines. No `pi-wsl-sessions`, no SCHEMA bump.
 
 ### 5. Claude-parity local proxy projection
 
@@ -172,7 +173,7 @@ Enable must error, leave Live unchanged, persist no backup, and leave the takeov
 
 `SCHEMA_VERSION` stays 18. No `proxy_config` row for `pi`.
 
-Docker: default `proxy_projection_linux`; full crate via `TEST_FILTER=all` / `pnpm test:docker:all` / `make test-docker-all` (see `docs/docker-backend-self-test.md`).
+Docker: default `proxy_projection_linux` + `session_usage_scan`; full crate via `TEST_FILTER=all` / `pnpm test:docker:all` / `make test-docker-all` (see `docs/docker-backend-self-test.md`).
 
 ## Hard no (must stay true after merge)
 
