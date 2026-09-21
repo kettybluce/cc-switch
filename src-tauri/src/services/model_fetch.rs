@@ -849,10 +849,12 @@ mod tests {
         fn request_target(&self) -> String {
             self.last_raw()
                 .lines()
-                .next()
-                .unwrap_or("")
-                .split_whitespace()
-                .nth(1)
+                .find(|line| {
+                    line.split_whitespace()
+                        .next()
+                        .is_some_and(|m| m.eq_ignore_ascii_case("GET"))
+                })
+                .and_then(|line| line.split_whitespace().nth(1))
                 .unwrap_or("")
                 .to_string()
         }
@@ -865,8 +867,35 @@ mod tests {
         )
     }
 
+    /// macOS 上从 nonblocking listener `accept` 出的 socket 会继承 O_NONBLOCK，
+    /// 一次 `read` 常得到空缓冲随后仍 200 应答。必须改回阻塞并读到头结束。
+    fn read_http_head(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        use std::time::Duration;
+
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    raw.extend_from_slice(&buf[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") || raw.len() > 16 * 1024 {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&raw).into_owned()
+    }
+
     fn spawn_capturing_server(mode: MockMode) -> CapturingServer {
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Duration;
 
@@ -902,16 +931,16 @@ mod tests {
                             }
                             continue;
                         }
-                        let mut buf = [0u8; 8192];
-                        let n = stream.read(&mut buf).unwrap_or(0);
-                        let mut raw = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        let first = raw.lines().next().unwrap_or("").to_string();
-                        let method = first.split_whitespace().next().unwrap_or("");
+                        let mut raw = read_http_head(&mut stream);
+                        let method = raw
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().next())
+                            .unwrap_or("");
                         if method.eq_ignore_ascii_case("CONNECT") {
                             let _ =
                                 stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
-                            let n2 = stream.read(&mut buf).unwrap_or(0);
-                            raw.push_str(&String::from_utf8_lossy(&buf[..n2]));
+                            raw.push_str(&read_http_head(&mut stream));
                         }
                         captured_clone.lock().expect("capture").push(raw.clone());
                         assert!(

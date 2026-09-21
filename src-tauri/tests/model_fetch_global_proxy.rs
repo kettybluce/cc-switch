@@ -90,6 +90,29 @@ fn http_ok(body: &str) -> String {
     )
 }
 
+/// macOS 上从 nonblocking listener `accept` 出的 socket 会继承 O_NONBLOCK。
+fn read_http_head(stream: &mut std::net::TcpStream) -> String {
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                if raw.windows(4).any(|w| w == b"\r\n\r\n") || raw.len() > 16 * 1024 {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
 fn spawn_capturing_server(mode: MockMode) -> CapturingServer {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock http");
     listener
@@ -111,9 +134,7 @@ fn spawn_capturing_server(mode: MockMode) -> CapturingServer {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     hits_clone.fetch_add(1, Ordering::SeqCst);
-                    let mut buf = [0u8; 8192];
-                    let n = stream.read(&mut buf).unwrap_or(0);
-                    let mut raw = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    let mut raw = read_http_head(&mut stream);
                     let method = raw
                         .lines()
                         .next()
@@ -121,8 +142,7 @@ fn spawn_capturing_server(mode: MockMode) -> CapturingServer {
                         .unwrap_or("");
                     if method.eq_ignore_ascii_case("CONNECT") {
                         let _ = stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
-                        let n2 = stream.read(&mut buf).unwrap_or(0);
-                        raw.push_str(&String::from_utf8_lossy(&buf[..n2]));
+                        raw.push_str(&read_http_head(&mut stream));
                     }
                     assert!(
                         !raw.contains("15721"),
