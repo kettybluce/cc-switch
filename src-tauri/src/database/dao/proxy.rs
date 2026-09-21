@@ -533,6 +533,22 @@ impl Database {
 
     const PI_TAKEOVER_SETTING_KEY: &'static str = "proxy_takeover_pi";
 
+    /// Whether `proxy_config` has a row for `app_type`.
+    ///
+    /// SCHEMA 18 CHECK only allows `claude` / `codex` / `gemini` / `grokbuild`.
+    /// Pi takeover must stay in `settings.proxy_takeover_pi`.
+    pub fn has_proxy_config_row(&self, app_type: &str) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE app_type = ?1",
+                [app_type],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(count > 0)
+    }
+
     /// Pi cannot own a `proxy_config` row under SCHEMA 18 CHECK. Persist takeover
     /// in the existing settings key-value table instead.
     pub fn is_pi_takeover_enabled(&self) -> Result<bool, AppError> {
