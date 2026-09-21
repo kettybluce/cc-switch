@@ -86,14 +86,26 @@ fn write_pi_live_fixtures(pi_agent: &Path) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 fn claude_provider() -> Provider {
+    claude_provider_named(
+        "standin-claude",
+        "Stand-in Claude",
+        "https://api.anthropic.example",
+        "claude-live-token",
+    )
+}
+
+fn claude_provider_named(id: &str, name: &str, url: &str, token: &str) -> Provider {
     let mut provider = Provider::with_id(
-        "standin-claude".to_string(),
-        "Stand-in Claude".to_string(),
+        id.to_string(),
+        name.to_string(),
         json!({
             "env": {
-                "ANTHROPIC_AUTH_TOKEN": "claude-live-token",
-                "ANTHROPIC_BASE_URL": "https://api.anthropic.example"
-            }
+                "ANTHROPIC_AUTH_TOKEN": token,
+                "ANTHROPIC_BASE_URL": url,
+                "CC_SWITCH_KEEP": "roundtrip"
+            },
+            "permissions": { "allow": ["Read"] },
+            "customTopLevel": "keep-me"
         }),
         None,
     );
@@ -102,24 +114,50 @@ fn claude_provider() -> Provider {
 }
 
 fn codex_provider() -> Provider {
-    let mut provider = Provider::with_id(
-        "standin-codex".to_string(),
-        "Stand-in Codex".to_string(),
-        json!({
-            "auth": {"OPENAI_API_KEY": "codex-live-key"},
-            "config": r#"model_provider = "standin"
+    codex_provider_named(
+        "standin-codex",
+        "Stand-in",
+        "https://api.openai.example/v1",
+        "codex-live-key",
+    )
+}
+
+fn codex_provider_named(id: &str, toml_name: &str, url: &str, key: &str) -> Provider {
+    let table = id.replace('-', "_");
+    let config = format!(
+        r#"model_provider = "{table}"
 model = "gpt-5"
 
-[model_providers.standin]
-name = "Stand-in"
-base_url = "https://api.openai.example/v1"
+[model_providers.{table}]
+name = "{toml_name}"
+base_url = "{url}"
 wire_api = "responses"
+
+[projects."/tmp/cc-switch-keep"]
+trust_level = "trusted"
 "#
+    );
+    let mut provider = Provider::with_id(
+        id.to_string(),
+        format!("Stand-in Codex {toml_name}"),
+        json!({
+            "auth": {"OPENAI_API_KEY": key, "keepMe": "roundtrip"},
+            "config": config
         }),
         None,
     );
     provider.category = Some("custom".to_string());
     provider
+}
+
+fn seed_codex_auth_with_unknown_fields(auth_path: &Path, key: &str) {
+    fs::write(
+        auth_path,
+        format!(
+            r#"{{"OPENAI_API_KEY":"{key}","keepMe":"roundtrip","tokens":{{"access_token":"leave-me"}}}}"#
+        ),
+    )
+    .expect("seed Codex auth.json extra fields");
 }
 
 async fn use_ephemeral_shared_listen(state: &cc_switch_lib::AppState) {
@@ -945,5 +983,470 @@ async fn linux_standin_delete_default_reassigns_settings_default_provider() {
         auth_before,
         "delete default must not touch auth.json"
     );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+fn setup_linux_standin_claude_codex_home() -> (PathBuf, PathBuf, PathBuf) {
+    reset_test_fs();
+    let test_home = ensure_test_home();
+    let user_home = wsl_standin_user_home(test_home);
+    apply_wsl_standin_overrides(&user_home);
+    let claude_settings = get_claude_settings_path();
+    let codex_config = get_codex_config_path();
+    let codex_auth = get_codex_auth_path();
+    assert_linux_standin_path(&claude_settings);
+    assert_linux_standin_path(&codex_config);
+    assert_linux_standin_path(&codex_auth);
+    (claude_settings, codex_config, codex_auth)
+}
+
+fn assert_claude_unknown_fields(live: &Value) {
+    assert_eq!(live["customTopLevel"], json!("keep-me"));
+    assert_eq!(live["permissions"]["allow"], json!(["Read"]));
+    assert_eq!(live["env"]["CC_SWITCH_KEEP"], json!("roundtrip"));
+}
+
+fn assert_codex_unknown_toml(config: &str) {
+    assert!(
+        config.contains("[projects.\"/tmp/cc-switch-keep\"]")
+            || config.contains("[projects.'/tmp/cc-switch-keep']")
+            || config.contains("/tmp/cc-switch-keep"),
+        "Codex extra TOML table must survive: {config}"
+    );
+    assert!(
+        config.contains("trust_level") && config.contains("trusted"),
+        "Codex extra project trust_level must survive: {config}"
+    );
+}
+
+/// Claude takeover roundtrip on the Linux WSL stand-in: unknown settings fields
+/// survive projection and disable restores the real token / URL (parallel to Pi
+/// `models.json` unknown-field fixtures).
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_claude_takeover_roundtrip_preserves_unknown_settings_fields() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, _codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &claude_provider())
+        .expect("save Claude provider");
+    ProviderService::switch(&state, AppType::Claude, "standin-claude").expect("write Claude live");
+
+    let before: Value = read_json_file(&claude_settings).expect("Claude live before");
+    assert_eq!(
+        before["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.anthropic.example")
+    );
+    assert_eq!(
+        before["env"]["ANTHROPIC_AUTH_TOKEN"],
+        json!("claude-live-token")
+    );
+    assert_claude_unknown_fields(&before);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", true)
+        .await
+        .expect("enable Claude takeover");
+
+    let status = state
+        .proxy_service
+        .get_status()
+        .await
+        .expect("proxy status");
+    let origin = format!("http://127.0.0.1:{}", status.port);
+    let projected: Value = read_json_file(&claude_settings).expect("Claude projected");
+    assert_eq!(projected["env"]["ANTHROPIC_BASE_URL"], json!(origin));
+    assert_eq!(
+        projected["env"]["ANTHROPIC_AUTH_TOKEN"],
+        json!("PROXY_MANAGED")
+    );
+    assert_claude_unknown_fields(&projected);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", false)
+        .await
+        .expect("disable Claude takeover");
+
+    let restored: Value = read_json_file(&claude_settings).expect("Claude restored");
+    assert_eq!(
+        restored["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.anthropic.example")
+    );
+    assert_eq!(
+        restored["env"]["ANTHROPIC_AUTH_TOKEN"],
+        json!("claude-live-token")
+    );
+    assert_claude_unknown_fields(&restored);
+    assert!(state
+        .db
+        .get_live_backup("claude")
+        .await
+        .expect("claude backup")
+        .is_none());
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+/// Codex takeover roundtrip: extra TOML tables survive; auth.json extra fields
+/// are not rewritten (same contract as Pi `auth.json` / `settings.json`).
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_codex_takeover_roundtrip_preserves_toml_and_auth() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (_claude_settings, codex_config, codex_auth) = setup_linux_standin_claude_codex_home();
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &codex_provider())
+        .expect("save Codex provider");
+    ProviderService::switch(&state, AppType::Codex, "standin-codex").expect("write Codex live");
+    seed_codex_auth_with_unknown_fields(&codex_auth, "codex-live-key");
+    let auth_before = fs::read_to_string(&codex_auth).expect("Codex auth before");
+    let config_before = fs::read_to_string(&codex_config).expect("Codex config before");
+    assert_codex_unknown_toml(&config_before);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", true)
+        .await
+        .expect("enable Codex takeover");
+
+    let status = state
+        .proxy_service
+        .get_status()
+        .await
+        .expect("proxy status");
+    let origin = format!("http://127.0.0.1:{}/v1", status.port);
+    let projected = fs::read_to_string(&codex_config).expect("Codex projected");
+    assert!(
+        projected.contains(&origin),
+        "Codex config.toml must project onto the shared listen /v1: {projected}"
+    );
+    assert!(projected.contains("PROXY_MANAGED"));
+    assert!(!projected.contains("https://api.openai.example/v1"));
+    assert_codex_unknown_toml(&projected);
+    assert_eq!(
+        fs::read_to_string(&codex_auth).expect("Codex auth during takeover"),
+        auth_before,
+        "Codex takeover must not rewrite auth.json"
+    );
+    let auth_live: Value = read_json_file(&codex_auth).expect("parse auth during takeover");
+    assert_eq!(auth_live["keepMe"], json!("roundtrip"));
+    assert_eq!(auth_live["tokens"]["access_token"], json!("leave-me"));
+    assert_eq!(auth_live["OPENAI_API_KEY"], json!("codex-live-key"));
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", false)
+        .await
+        .expect("disable Codex takeover");
+
+    let restored = fs::read_to_string(&codex_config).expect("Codex restored");
+    assert!(restored.contains("https://api.openai.example/v1"));
+    assert!(!restored.contains("PROXY_MANAGED"));
+    assert_codex_unknown_toml(&restored);
+    assert_eq!(
+        fs::read_to_string(&codex_auth).expect("Codex auth after restore"),
+        auth_before,
+        "disable must not rewrite auth.json"
+    );
+    assert!(state
+        .db
+        .get_live_backup("codex")
+        .await
+        .expect("codex backup")
+        .is_none());
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+/// Parallel to Pi delete-during-takeover: Claude hot-switch refreshes the live
+/// backup so disable restores the new card, not the pre-takeover one.
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_claude_switch_during_takeover_refreshes_backup() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, _codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    let provider_a = claude_provider_named(
+        "standin-claude-a",
+        "Claude A",
+        "https://api.a.example",
+        "token-a",
+    );
+    let provider_b = claude_provider_named(
+        "standin-claude-b",
+        "Claude B",
+        "https://api.b.example",
+        "token-b",
+    );
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &provider_a)
+        .expect("save A");
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &provider_b)
+        .expect("save B");
+    ProviderService::switch(&state, AppType::Claude, "standin-claude-a").expect("switch A");
+
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", true)
+        .await
+        .expect("enable Claude takeover");
+    ProviderService::switch(&state, AppType::Claude, "standin-claude-b")
+        .expect("hot-switch B while takeover is on");
+
+    let status = state
+        .proxy_service
+        .get_status()
+        .await
+        .expect("proxy status");
+    let origin = format!("http://127.0.0.1:{}", status.port);
+    let projected: Value = read_json_file(&claude_settings).expect("Claude after hot-switch");
+    assert_eq!(projected["env"]["ANTHROPIC_BASE_URL"], json!(origin));
+    assert_eq!(
+        projected["env"]["ANTHROPIC_AUTH_TOKEN"],
+        json!("PROXY_MANAGED")
+    );
+    assert_claude_unknown_fields(&projected);
+    let backup = state
+        .db
+        .get_live_backup("claude")
+        .await
+        .expect("read refreshed backup")
+        .expect("backup exists after hot-switch");
+    let parsed: Value = serde_json::from_str(&backup.original_config).expect("parse Claude backup");
+    assert_eq!(
+        parsed["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.b.example"),
+        "backup must be B so disable cannot restore A"
+    );
+    assert_eq!(parsed["env"]["ANTHROPIC_AUTH_TOKEN"], json!("token-b"));
+    assert_eq!(parsed["customTopLevel"], json!("keep-me"));
+
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", false)
+        .await
+        .expect("disable Claude takeover");
+
+    let restored: Value = read_json_file(&claude_settings).expect("Claude restored after switch");
+    assert_eq!(
+        restored["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.b.example")
+    );
+    assert_eq!(restored["env"]["ANTHROPIC_AUTH_TOKEN"], json!("token-b"));
+    assert_ne!(
+        restored["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.a.example")
+    );
+    assert_claude_unknown_fields(&restored);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+/// Parallel to Pi delete-during-takeover: Codex hot-switch refreshes backup.
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_codex_switch_during_takeover_refreshes_backup() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (_claude_settings, codex_config, codex_auth) = setup_linux_standin_claude_codex_home();
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    let provider_a = codex_provider_named(
+        "standin-codex-a",
+        "CodexA",
+        "https://api.a.example/v1",
+        "key-a",
+    );
+    let provider_b = codex_provider_named(
+        "standin-codex-b",
+        "CodexB",
+        "https://api.b.example/v1",
+        "key-b",
+    );
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &provider_a)
+        .expect("save A");
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &provider_b)
+        .expect("save B");
+    ProviderService::switch(&state, AppType::Codex, "standin-codex-a").expect("switch A");
+    seed_codex_auth_with_unknown_fields(&codex_auth, "key-a");
+    let auth_before = fs::read_to_string(&codex_auth).expect("auth before takeover");
+
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", true)
+        .await
+        .expect("enable Codex takeover");
+    ProviderService::switch(&state, AppType::Codex, "standin-codex-b")
+        .expect("hot-switch B while takeover is on");
+
+    let projected = fs::read_to_string(&codex_config).expect("Codex after hot-switch");
+    assert!(
+        projected.contains("PROXY_MANAGED"),
+        "hot-switch must keep takeover placeholder: {projected}"
+    );
+    assert!(
+        !projected.contains("https://api.a.example/v1"),
+        "live must not keep A's upstream: {projected}"
+    );
+    assert_codex_unknown_toml(&projected);
+    assert_eq!(
+        fs::read_to_string(&codex_auth).expect("auth during hot-switch"),
+        auth_before,
+        "Codex hot-switch must not rewrite auth.json"
+    );
+
+    let backup = state
+        .db
+        .get_live_backup("codex")
+        .await
+        .expect("read refreshed backup")
+        .expect("backup exists after hot-switch");
+    let parsed: Value = serde_json::from_str(&backup.original_config).expect("parse Codex backup");
+    let backup_config = parsed["config"].as_str().unwrap_or_default();
+    assert!(
+        backup_config.contains("https://api.b.example/v1"),
+        "backup must be B so disable cannot restore A: {backup_config}"
+    );
+    assert!(
+        !backup_config.contains("https://api.a.example/v1"),
+        "backup must drop A: {backup_config}"
+    );
+
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", false)
+        .await
+        .expect("disable Codex takeover");
+
+    let restored = fs::read_to_string(&codex_config).expect("Codex restored after switch");
+    assert!(restored.contains("https://api.b.example/v1"));
+    assert!(!restored.contains("https://api.a.example/v1"));
+    assert!(!restored.contains("PROXY_MANAGED"));
+    assert_codex_unknown_toml(&restored);
+    assert_eq!(
+        fs::read_to_string(&codex_auth).expect("auth after restore"),
+        auth_before
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+/// Disable Claude while Codex stays projected (and the reverse).
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_independent_disable_leaves_the_other_app_projected() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &claude_provider())
+        .expect("save Claude");
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &codex_provider())
+        .expect("save Codex");
+    ProviderService::switch(&state, AppType::Claude, "standin-claude").expect("write Claude");
+    ProviderService::switch(&state, AppType::Codex, "standin-codex").expect("write Codex");
+
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", true)
+        .await
+        .expect("enable Claude");
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", true)
+        .await
+        .expect("enable Codex");
+
+    let status = state
+        .proxy_service
+        .get_status()
+        .await
+        .expect("proxy status");
+    let origin = format!("http://127.0.0.1:{}", status.port);
+    let codex_origin = format!("{origin}/v1");
+
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", false)
+        .await
+        .expect("disable Claude only");
+
+    let claude_restored: Value =
+        read_json_file(&claude_settings).expect("Claude independent restore");
+    assert_eq!(
+        claude_restored["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.anthropic.example")
+    );
+    assert_eq!(
+        claude_restored["env"]["ANTHROPIC_AUTH_TOKEN"],
+        json!("claude-live-token")
+    );
+    assert_claude_unknown_fields(&claude_restored);
+    let (claude_enabled, _) = state.db.get_proxy_flags_sync("claude");
+    let (codex_enabled, _) = state.db.get_proxy_flags_sync("codex");
+    assert!(!claude_enabled);
+    assert!(codex_enabled);
+    let codex_still = fs::read_to_string(&codex_config).expect("Codex still projected");
+    assert!(
+        codex_still.contains(&codex_origin),
+        "disabling Claude must not restore Codex: {codex_still}"
+    );
+    assert!(codex_still.contains("PROXY_MANAGED"));
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", false)
+        .await
+        .expect("disable Codex only");
+    let claude_still: Value = read_json_file(&claude_settings).expect("Claude stays restored");
+    assert_eq!(
+        claude_still["env"]["ANTHROPIC_BASE_URL"],
+        json!("https://api.anthropic.example")
+    );
+    let codex_restored = fs::read_to_string(&codex_config).expect("Codex independent restore");
+    assert!(codex_restored.contains("https://api.openai.example/v1"));
+    assert!(!codex_restored.contains("PROXY_MANAGED"));
+    let (codex_enabled_after, _) = state.db.get_proxy_flags_sync("codex");
+    assert!(!codex_enabled_after);
     assert_schema18_pi_has_no_proxy_config_row(&state);
 }

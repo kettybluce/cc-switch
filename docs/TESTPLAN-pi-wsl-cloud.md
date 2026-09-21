@@ -149,6 +149,19 @@ Full `cargo test --manifest-path src-tauri/Cargo.toml` was **not** re-run in ful
 
 Full `cargo test --manifest-path src-tauri/Cargo.toml` (lib + integration, ~2800+ lib tests) was **not** re-run in full on this VM after the last fixture-string edit; clippy rebuilt the lib cleanly and the mapped tests above passed. GitHub Actions CI on the PR is the full crate gate.
 
+### 7. Claude / Codex takeover roundtrip (Wave D, parallel to Pi)
+
+Linux stand-in tests in `src-tauri/tests/proxy_projection_linux.rs` (same POSIX tree as #43/#46):
+
+- `linux_standin_claude_takeover_roundtrip_preserves_unknown_settings_fields` — extra `customTopLevel` / `permissions` / `CC_SWITCH_KEEP` survive projection; disable restores the real token/URL
+- `linux_standin_codex_takeover_roundtrip_preserves_toml_and_auth` — extra `[projects."/tmp/cc-switch-keep"]` survives; `auth.json` extra fields are byte-identical through enable/disable
+- `linux_standin_claude_switch_during_takeover_refreshes_backup` / `linux_standin_codex_switch_during_takeover_refreshes_backup` — hot-switch refreshes `proxy_live_backup` so disable restores the **new** card (Pi delete-during-takeover analogue)
+- `linux_standin_independent_disable_leaves_the_other_app_projected` — disable Claude while Codex stays projected (and the reverse)
+
+`SCHEMA_VERSION` stays 18. No `proxy_config` row for `pi`.
+
+Docker: default `proxy_projection_linux`; full crate via `TEST_FILTER=all` / `pnpm test:docker:all` / `make test-docker-all` (see `docs/docker-backend-self-test.md`).
+
 ## Hard no (must stay true after merge)
 
 - No `SCHEMA_VERSION` 19 / `migrate_v18_to_v19`

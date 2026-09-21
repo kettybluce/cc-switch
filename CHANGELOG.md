@@ -5,6 +5,23 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Wave D (SCHEMA 18)
+
+Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No further SCHEMA-18-safe merged cherry-picks remain. This wave adds Linux stand-in **Claude/Codex takeover roundtrip** fixtures parallel to Pi (#43/#46). Docker `TEST_FILTER=all` shipping docs already landed on main (`1a605875`). Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved.
+
+### Added
+
+- Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup (disable restores the new card); independent disable leaves the other app projected
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / later version number / wholesale main merge
+- #7383 SCHEMA 19 / MiniMax Code (`06082e18`)
+- #7331 Linux Claude Desktop 3P (`42ac174d`)
+- #7522 sponsor CTA / Atlas de-sponsor (`f2d0b2a6` / `f21e0944`)
+- Unmerged official PRs (#7543, #7541, #7535, #7531, #7520, #7514, #7510, #7509, #7505, #7502, …)
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
 ## [3.20.13] - 2026-09-21
 
 Ships current `main` after v3.20.12 (tag `97cbce00`, #42+#43 only): Wave C #45 (`96fbdc3c`), Pi CRUD fixtures #46 (`a3189e8c`), Docker backend self-test #47 (`77bd47f3`). Does **not** claim official 3.20.3 / 3.20.13. `SCHEMA_VERSION` stays 18. Default Cursor pool model and fork Pi/WSL/proxy surfaces are preserved. Windows x64 Portable (preferred) + MSI; macOS `.dmg` / `.zip` best-effort.
@@ -36,7 +53,6 @@ Ships current `main` after v3.20.12 (tag `97cbce00`, #42+#43 only): Wave C #45 (
 - Prefer **Portable** if MSI install/upgrade fails with Error 5.
 - After self-test work, do not ship until Docker **full-suite** (`pnpm test:docker:all`) has been run and a report is attached.
 - v3.20.12 users only need this for Wave C + Pi CRUD fixtures + Docker self-test.
-
 
 ## [3.20.12] - 2026-09-21
 

@@ -545,9 +545,13 @@ pnpm test:unit --coverage
 # Ubuntu 22.04 镜像 + 容器内 /tmp 下隔离的 CC_SWITCH_TEST_HOME
 docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 # 封装：pnpm test:docker   /   make test-docker
+
+# 完整 crate（更慢）：TEST_FILTER=all
+docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
+# 封装：pnpm test:docker:all   /   make test-docker-all
 ```
 
-默认跑 `proxy_projection_linux`（SCHEMA 18 的 Pi/Claude/Codex 夹具）。自测工作之后出绿色版/MSI **必须**再跑 `pnpm test:docker:all` 并附报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
+默认跑 `proxy_projection_linux`（SCHEMA 18 的 Pi/Claude/Codex 夹具，含接管往返）。自测工作之后出绿色版/MSI **必须**再跑 `pnpm test:docker:all` 并附报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
 
 ### 技术栈
 
