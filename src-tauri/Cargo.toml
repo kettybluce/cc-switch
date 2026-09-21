@@ -44,7 +44,7 @@ arboard = "3.6"
 flate2 = "1"
 brotli = "7"
 zstd = "0.13"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "signal"] }
 futures = "0.3"
 async-stream = "0.3"
 bytes = "1.5"
@@ -114,8 +114,14 @@ lto = "thin"
 opt-level = "s"
 # 使用 unwind 以便 panic hook 能捕获 backtrace（abort 会直接终止无法捕获）
 panic = "unwind"
-strip = "symbols"
+# macOS 27 + ld-27037: strip=symbols corrupts proc-macro dylibs (mis-aligned LINKEDIT)
+strip = false
 
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
+
+# Local patch: phf 0.10 + modern rustc (proc_macro_hack broken)
+[patch.crates-io]
+phf = { path = "patches/phf" }
+phf_macros = { path = "patches/phf_macros" }

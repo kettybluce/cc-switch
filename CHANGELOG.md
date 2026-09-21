@@ -7,15 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.20.11] - 2026-09-21
 
-Fork cherry-pick of official Wave A + Wave B onto SCHEMA 18. Does **not** claim official 3.20.3 / 3.20.11. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable only.
+Fork cherry-pick of official Wave A + Wave B (#41) onto SCHEMA 18, plus verified salvage from `release/v3.20.11` (SIGTERM, Pi `is_current` heal, WAL, staleTime, macOS matrix / phf). Does **not** claim official 3.20.3 / 3.20.11. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable and macOS `.dmg` / `.zip`.
 
 ### Fixed
 
-- npm latest probe uses `/-/package/{name}/dist-tags` with the 15s timeout (#7346)
+- npm latest probe uses `/-/package/{name}/dist-tags` with the 15s timeout (#7346, via #41)
 - Refresh enabled prompts from live CLAUDE.md / AGENTS.md after external edits; window-focus reload (#7194). Pi CRUD / `get_pi_prompts` unchanged
 - Skill archive entry cap 10_000 → 30_000 plus per-file 4 KiB minimum charge (#7489)
-- Recover stale Codex ChatGPT account bindings during takeover / switch / restore (`CodexLiveAuthSwitchGuard`, #7395)
+- Recover stale Codex ChatGPT account bindings during takeover / switch / restore (`CodexLiveAuthSwitchGuard`, #7395, via #41)
 - Claude Fable weekly limit from usage API `limits[]` on the card and tray (`bfbbf15c`)
+- Unix `SIGTERM`/`SIGINT` and `ExitRequested(None)` with a main window follow the tray Live-restore path
+- Heal Pi `is_current` when it diverges from live `defaultProvider` (e.g. `fd` vs `flz`)
+- Close the missing `fi` in `.github/workflows/release.yml` Apple-signing detection
+- Align `Cargo.lock` with `[patch.crates-io]` phf / phf_macros path patches
+- Keep the full `response_processor` from v3.20.10 / `19320dda` (no PLACEHOLDER)
 
 ### Added
 
@@ -25,6 +30,9 @@ Fork cherry-pick of official Wave A + Wave B onto SCHEMA 18. Does **not** claim 
 ### Changed
 
 - APIKEY.FUN preset URLs → apikey.fan; old `.fun` hosts kept as endpoint candidates (`1d5d90f4`)
+- SQLite WAL + `busy_timeout` + `synchronous=NORMAL`
+- Default frontend `staleTime` 30s
+- Release matrix includes macOS (optional Apple signing); `strip=false` for modern macOS linkers
 
 ### Skipped (intentionally)
 
@@ -32,13 +40,13 @@ Fork cherry-pick of official Wave A + Wave B onto SCHEMA 18. Does **not** claim 
 - #7383 SCHEMA 19 / MiniMax Code
 - #7331 Linux Claude Desktop 3P
 - #7522 sponsor CTA / Atlas de-sponsor
-- Anything from broken fork branch `release/v3.20.11`
+- PLACEHOLDER `response_processor` and other unverified fragments from broken `release/v3.20.11`
 - Schema bump (`SCHEMA_VERSION` stays 18)
 
 ### Upgrade notes
 
 - **No database migration**: `SCHEMA_VERSION` stays at 18.
-- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5. Ship Portable only after CI is green and merge is approved.
 - Preset changes apply only to newly created cards.
 
 ## [3.20.10] - 2026-09-15
