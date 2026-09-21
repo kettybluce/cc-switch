@@ -1401,7 +1401,23 @@ impl ProxyService {
     ///
     /// 代理服务本身保持运行；当最后一个应用也关闭接管后，下次用户手动关闭
     /// 代理或程序退出时会自然停止。
+    ///
+    /// 必须持有 per-app 切换锁：否则并发的 `set_takeover_for_app(true)` /
+    /// `ProviderService::switch` 会在恢复窗口里重写 live / 备份，留下
+    /// `enabled`、占位符、备份三者不一致。
     pub fn disable_takeover_for_app_sync(&self, app_type: &AppType) -> Result<(), String> {
+        let app_type_str = app_type.as_str();
+        let guard = futures::executor::block_on(self.switch_locks.lock_for_app(app_type_str));
+        let result = self.disable_takeover_for_app_sync_inner(app_type);
+        drop(guard);
+        result
+    }
+
+    /// 调用方必须已经持有该 app 的切换锁。
+    pub(crate) fn disable_takeover_for_app_sync_inner(
+        &self,
+        app_type: &AppType,
+    ) -> Result<(), String> {
         let app_type_str = app_type.as_str();
 
         // 1) 恢复原始 Live 配置（备份 → SSOT → 清理占位符 三层兜底）
@@ -5285,6 +5301,37 @@ mod tests {
         );
 
         state.proxy_service.stop().await.expect("stop proxy server");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn disable_takeover_sync_waits_for_switch_lock() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db);
+
+        let switch_guard = service.lock_switch_for_test("claude").await;
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let service_for_thread = service.clone();
+        std::thread::spawn(move || {
+            started_tx.send(()).expect("signal disable start");
+            let result = service_for_thread.disable_takeover_for_app_sync(&AppType::Claude);
+            done_tx.send(result).expect("send disable result");
+        });
+        started_rx.recv().expect("wait for disable task");
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(120))
+                .is_err(),
+            "disable_takeover_for_app_sync must wait while the Claude switch lock is held"
+        );
+        drop(switch_guard);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("disable should finish after lock release")
+            .expect("disable takeover");
     }
 
     #[test]

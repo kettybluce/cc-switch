@@ -10,6 +10,7 @@ Cloud / Linux / Docker Desktop can build an image and run **backend fixture + pr
 | --- | --- |
 | `proxy_projection_linux` — POSIX stand-in for Pi / Claude / Codex takeover projection, Claude/Codex roundtrips (unknown fields, hot-switch backup, independent disable), fail-closed enable (missing/malformed Live, foreign local proxy including Pi), **and** Codex OAuth `CodexLiveAuthSwitchGuard` stale-binding cases (`MissingAccount` switch-away / stale target during takeover) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
 | `session_usage_scan` — isolated-HOME Claude / Codex / Pi JSONL usage scan (aggregation, TTFT dash storage, empty dirs, corrupt lines) | Windows MSI / Portable installers |
+| `provider_profile_race` — overlapping profile apply, provider switch/save/delete, and takeover enable/disable under `CC_SWITCH_TEST_HOME` (SCHEMA 18) | |
 | Isolated `CC_SWITCH_TEST_HOME` under `/tmp` **inside** the container | Host user profile / `C:\Users\…` |
 | Optional `TEST_FILTER=all` → full `cargo test --manifest-path src-tauri/Cargo.toml` | Full Tauri GUI, tray, or WebView window |
 | SCHEMA 18 assertions (no `proxy_config` row for `pi`) | Official 3.20.x GUI QA on the user's desktop |
@@ -25,8 +26,8 @@ From the repo root (Docker + Compose v2 required):
 在仓库根目录（需要 Docker 与 Compose v2）：
 
 ```bash
-# Default: Linux fixture / proxy projection + session JSONL usage scan (minimum gate)
-# 默认：proxy_projection_linux + session_usage_scan（最低门槛）
+# Default: Linux fixture / proxy projection + session JSONL usage scan + concurrent profile/provider race (minimum gate)
+# 默认：proxy_projection_linux + session_usage_scan + provider_profile_race（最低门槛）
 docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 
 # Same via wrappers
@@ -40,7 +41,7 @@ Expect compose / cargo **exit 0**. The default command is:
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml \
-  --test proxy_projection_linux --test session_usage_scan -- --test-threads=1
+  --test proxy_projection_linux --test session_usage_scan --test provider_profile_race -- --test-threads=1
 ```
 
 Broader crate (compiles extra tests on first run; slower). **Required before shipping a Portable/MSI after self-test work**, together with a written report (exit code + pass/fail counts):
@@ -107,7 +108,7 @@ After self-test work, a Windows Portable (preferred) / MSI ship **requires** Doc
 
 - Command: `pnpm test:docker:all` / `make test-docker-all` / `TEST_FILTER=all`
 - Report: exit code, pass/fail counts, SCHEMA still 18, no host `C:` writes
-- Default `pnpm test:docker` (`proxy_projection_linux` + `session_usage_scan`) is the **minimum gate**, not the shipping report
+- Default `pnpm test:docker` (`proxy_projection_linux` + `session_usage_scan` + `provider_profile_race`) is the **minimum gate**, not the shipping report
 
 默认 `pnpm test:docker` 只是最低门槛，不是发版报告。
 

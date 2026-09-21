@@ -546,7 +546,7 @@ docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all ba
 # wrappers: pnpm test:docker:all   /   make test-docker-all
 ```
 
-Default runs `proxy_projection_linux` and `session_usage_scan` (SCHEMA 18 Pi/Claude/Codex fixtures, including takeover roundtrips and isolated-HOME JSONL usage scan). After self-test work, shipping Portable/MSI **requires** `pnpm test:docker:all` plus a report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
+Default runs `proxy_projection_linux`, `session_usage_scan`, and `provider_profile_race` (SCHEMA 18 Pi/Claude/Codex fixtures, including takeover roundtrips, isolated-HOME JSONL usage scan, and concurrent CRUD/switch stress). After self-test work, shipping Portable/MSI **requires** `pnpm test:docker:all` plus a report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
 
 ### Tech Stack
 

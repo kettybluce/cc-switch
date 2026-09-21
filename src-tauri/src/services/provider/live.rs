@@ -1519,6 +1519,7 @@ fn proxy_owns_live_config(
     app_type: &AppType,
     has_live_backup: bool,
     live_taken_over: bool,
+    caller_holds_switch_lock: bool,
 ) -> bool {
     if live_taken_over {
         return true;
@@ -1549,6 +1550,14 @@ fn proxy_owns_live_config(
         return true;
     }
 
+    // Callers that already hold the switch lock are serialized with takeover
+    // enable/disable, so "lock is held" is not evidence of an in-flight
+    // takeover — it is this write. Decide from committed backup/flag/placeholder
+    // only. Unlocked callers still treat the activation window as ownership.
+    if caller_holds_switch_lock {
+        return false;
+    }
+
     has_live_backup
         && futures::executor::block_on(
             state
@@ -1562,6 +1571,27 @@ pub(crate) fn sync_live_for_provider_respecting_takeover(
     state: &AppState,
     app_type: &AppType,
     provider: &Provider,
+) -> Result<LiveSyncOutcome, AppError> {
+    let lock_held = app_type.supports_proxy_takeover();
+    let guard = if lock_held {
+        Some(futures::executor::block_on(
+            state.proxy_service.lock_switch_for_app(app_type.as_str()),
+        ))
+    } else {
+        None
+    };
+    let result =
+        sync_live_for_provider_respecting_takeover_locked(state, app_type, provider, lock_held);
+    drop(guard);
+    result
+}
+
+/// 调用方必须已经持有该 app 的切换锁（或不需要锁的应用）。
+pub(crate) fn sync_live_for_provider_respecting_takeover_locked(
+    state: &AppState,
+    app_type: &AppType,
+    provider: &Provider,
+    caller_holds_switch_lock: bool,
 ) -> Result<LiveSyncOutcome, AppError> {
     let has_live_backup =
         match futures::executor::block_on(state.db.get_live_backup(app_type.as_str())) {
@@ -1578,14 +1608,22 @@ pub(crate) fn sync_live_for_provider_respecting_takeover(
         .proxy_service
         .detect_takeover_in_live_config_for_app(app_type);
 
-    if !proxy_owns_live_config(state, app_type, has_live_backup, live_taken_over) {
+    if !proxy_owns_live_config(
+        state,
+        app_type,
+        has_live_backup,
+        live_taken_over,
+        caller_holds_switch_lock,
+    ) {
         // A stale backup must follow the provider too, otherwise a later restore
         // can resurrect the old URL and undo the live write we are making now.
         if has_live_backup {
             if let Err(err) = futures::executor::block_on(
-                state
-                    .proxy_service
-                    .update_live_backup_from_provider(app_type.as_str(), provider),
+                state.proxy_service.update_live_backup_from_provider_inner(
+                    app_type.as_str(),
+                    provider,
+                    None,
+                ),
             ) {
                 log::warn!(
                     "刷新 {} 残留 Live 备份失败（不影响本次 live 写入）: {err}",
@@ -1599,11 +1637,11 @@ pub(crate) fn sync_live_for_provider_respecting_takeover(
 
     // Takeover owns live: update the restore source, and refresh proxy-safe
     // projections while the proxy is running.
-    futures::executor::block_on(
-        state
-            .proxy_service
-            .update_live_backup_from_provider(app_type.as_str(), provider),
-    )
+    futures::executor::block_on(state.proxy_service.update_live_backup_from_provider_inner(
+        app_type.as_str(),
+        provider,
+        None,
+    ))
     .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
 
     if !futures::executor::block_on(state.proxy_service.is_running()) {

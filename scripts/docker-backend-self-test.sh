@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Container entrypoint for the backend Docker self-test.
-# Default: proxy_projection_linux + session_usage_scan
-# (SCHEMA 18 Pi/Claude/Codex fixtures, isolated HOME JSONL usage scan).
+# Default: proxy_projection_linux + session_usage_scan + provider_profile_race
+# (SCHEMA 18 Pi/Claude/Codex fixtures, isolated HOME JSONL usage scan,
+# overlapping profile/provider CRUD + takeover).
 # TEST_FILTER=all runs the full crate; any other value is a cargo test filter.
 set -euo pipefail
 
@@ -26,11 +27,13 @@ if [[ $# -gt 0 ]]; then
 fi
 
 if [[ -z "${FILTER}" ]]; then
-  run_cargo_test --test proxy_projection_linux --test session_usage_scan
+  run_cargo_test --test proxy_projection_linux --test session_usage_scan --test provider_profile_race
 elif [[ "${FILTER}" == "proxy_projection_linux" ]]; then
   run_cargo_test --test proxy_projection_linux
 elif [[ "${FILTER}" == "session_usage_scan" ]]; then
   run_cargo_test --test session_usage_scan
+elif [[ "${FILTER}" == "provider_profile_race" ]]; then
+  run_cargo_test --test provider_profile_race
 elif [[ "${FILTER}" == "all" || "${FILTER}" == "*" ]]; then
   run_cargo_test
 else
