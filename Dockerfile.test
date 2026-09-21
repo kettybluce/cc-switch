@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Backend fixture / proxy self-test image.
+# Backend self-test image (default: FULL src-tauri cargo test).
 # Ubuntu 22.04 + the same GTK / WebKit / SSL packages as .github/workflows/ci.yml.
 # Compiles src-tauri cargo tests. Does NOT run the Tauri GUI.
 # SCHEMA stays 18. Isolated CC_SWITCH_TEST_HOME at runtime (see compose).
@@ -58,11 +58,10 @@ RUN mkdir -p /app/dist /app/src-tauri/src \
     && cargo fetch --locked --manifest-path src-tauri/Cargo.toml \
     && cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
 
-# --- real source; prebuild the default Linux fixture/proxy test ---
+# --- real source; prebuild the default FULL crate tests (not just fixtures) ---
 COPY src-tauri /app/src-tauri
 RUN mkdir -p /app/dist /tmp/cc-switch-test-home \
-    && cargo test --locked --manifest-path src-tauri/Cargo.toml \
-        --test proxy_projection_linux --no-run
+    && cargo test --locked --manifest-path src-tauri/Cargo.toml --no-run
 
 # Entrypoint last so script-only edits do not rebuild cargo artifacts.
 COPY scripts/docker-backend-self-test.sh /usr/local/bin/docker-backend-self-test.sh

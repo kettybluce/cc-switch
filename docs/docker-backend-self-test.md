@@ -1,16 +1,18 @@
 # Docker backend self-test / Docker 后端自测
 
-Cloud / Linux / Docker Desktop can build an image and run **backend fixture + proxy** cargo tests without touching a user Windows `C:` profile, without bumping **SCHEMA 18**, and without claiming the Tauri GUI works in Docker.
+**默认全量；每次给全量自测报告。**
 
-云端 / Linux / Docker Desktop 可构建镜像并跑后端夹具与代理 cargo 测试：不写用户 Windows `C:`、不升 SCHEMA（保持 **18**）、也不宣称 Docker 里能跑完整 Tauri GUI。
+Cloud / Linux / Docker Desktop can build an image and run the **full** `src-tauri` cargo test suite without touching a user Windows `C:` profile, without bumping **SCHEMA 18**, and without claiming the Tauri GUI works in Docker. Every run writes a Chinese markdown report under `docs/self-test-reports/`.
+
+云端 / Linux / Docker Desktop 可构建镜像并跑 **src-tauri 全量** cargo 测试：不写用户 Windows `C:`、不升 SCHEMA（保持 **18**）、也不宣称 Docker 里能跑完整 Tauri GUI。**默认全量**；每次运行都会写出一份全量自测报告。
 
 ## What it covers / 覆盖范围
 
 | Covered / 覆盖 | Not covered / 不覆盖 |
 | --- | --- |
-| `proxy_projection_linux` — POSIX stand-in for Pi / Claude / Codex takeover projection, Claude/Codex roundtrips (unknown fields, hot-switch backup, independent disable), **and** fail-closed enable (missing/malformed Live, foreign local proxy including Pi) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
+| **Default** `TEST_FILTER=all` — full `cargo test --manifest-path src-tauri/Cargo.toml` (includes `proxy_projection_linux` Pi / Claude / Codex takeover projection, Claude/Codex roundtrips: unknown fields, hot-switch backup, independent disable, **and** fail-closed enable: missing/malformed Live, foreign local proxy including Pi) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
 | Isolated `CC_SWITCH_TEST_HOME` under `/tmp` **inside** the container | Windows MSI / Portable installers |
-| Optional `TEST_FILTER=all` → full `cargo test --manifest-path src-tauri/Cargo.toml` | Full Tauri GUI, tray, or WebView window |
+| Markdown report: SHA / version / SCHEMA 18 / command / duration / passed-failed-ignored / failure snippets | Full Tauri GUI, tray, or WebView window |
 | SCHEMA 18 assertions (no `proxy_config` row for `pi`) | Official 3.20.x GUI QA on the user's desktop |
 
 Same Linux packages as `.github/workflows/ci.yml` (`pkg-config`, `libssl`, GTK 3, WebKit, Ayatana AppIndicator, soup). Base image: **Ubuntu 22.04** (CI `ubuntu-22.04`).
@@ -19,59 +21,108 @@ Same Linux packages as `.github/workflows/ci.yml` (`pkg-config`, `libssl`, GTK 3
 
 ## Commands / 命令
 
-From the repo root (Docker + Compose v2 required):
+From the repo root (Docker + Compose v2 required). **Default is the full crate** (long: first image build compiles all tests; subsequent runs reuse `cc-switch-backend-self-test:local`).
 
-在仓库根目录（需要 Docker 与 Compose v2）：
+在仓库根目录（需要 Docker 与 Compose v2）。**默认全量**（首次镜像构建会编译全部测试，可能较久）。
 
 ```bash
-# Default: Linux fixture / proxy projection only (minimum gate)
-# 默认：只跑 proxy_projection_linux（最低门槛）
-docker compose -f docker-compose.test.yml run --build --rm backend-self-test
-
-# Same via wrappers
+# Default: FULL src-tauri cargo test + markdown report
+# 默认：全量 cargo test，并写出中文报告
 pnpm test:docker
+# same:
 make test-docker
+bash scripts/docker-self-test.sh
+docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 ```
 
-Expect compose / cargo **exit 0**. The default command is:
+Expect compose / cargo **exit 0**, plus a report file:
 
-期望 compose / cargo **退出码 0**。默认等价于：
+期望 compose / cargo **退出码 0**，并生成报告：
 
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml --test proxy_projection_linux -- --test-threads=1
+```text
+docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md
 ```
 
-Broader crate (compiles extra tests on first run; slower). **Required before shipping a Portable/MSI after self-test work**, together with a written report (exit code + pass/fail counts):
+The wrapper prints the report to stdout and the path as `REPORT_PATH=...`. Default cargo equivalent:
 
-自测工作之后出 Portable/MSI **必须**跑全量并附报告（退出码 + 通过/失败计数）：
+封装脚本会把报告打到 stdout，并打印 `REPORT_PATH=...`。默认等价于：
 
 ```bash
-docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
+cargo test --offline --locked --no-fail-fast --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+```
+
+### Explicit narrower filters / 显式收窄（可选）
+
+Only use these when you do **not** want the full suite:
+
+只有在你**明确不要全量**时才用：
+
+```bash
+# Linux fixture / proxy projection only (#43)
+TEST_FILTER=proxy_projection_linux pnpm test:docker
 # or
-pnpm test:docker:all
-make test-docker-all
+pnpm test:docker:proxy
+make test-docker-proxy
+
+# Pi CRUD linux stand-in + fetch_models_ / live-update lib tests (#46)
+TEST_FILTER=pi-crud pnpm test:docker
+pnpm test:docker:pi-crud
+make test-docker-pi-crud
+
+# Lightweight lib slice: fetch_models_ + key Pi CRUD lib tests
+TEST_FILTER=lib-lite pnpm test:docker
+pnpm test:docker:lite
+make test-docker-lite
+docker compose -f docker-compose.test.yml --profile lite run --build --rm backend-self-test-lite
 ```
 
-Any other `TEST_FILTER` is passed to cargo as a name substring (same as `cargo test FILTER`):
+`TEST_FILTER=all` is accepted but redundant (already the default). Any other value is passed to cargo as a name substring (same as `cargo test FILTER`):
 
-其它 `TEST_FILTER` 会当作 cargo 测试名子串（与 `cargo test FILTER` 相同）：
+`TEST_FILTER=all` 可写，但与默认相同。其它值当作 cargo 测试名子串：
 
 ```bash
 docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=pi_takeover_projects backend-self-test
 ```
 
-Override the cargo invocation entirely:
+Override the cargo invocation entirely (no report unless you use the host wrapper):
 
-完全覆盖 cargo 命令：
+完全覆盖 cargo 命令（直接 compose 不会写报告；要用报告请走 `pnpm test:docker`）：
 
 ```bash
 docker compose -f docker-compose.test.yml run --build --rm backend-self-test \
   cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib linux_standin_agent_dir
 ```
 
-`CARGO_TEST_THREADS` defaults to `1` (the fixture tests hold a process-wide HOME mutex).
+`CARGO_TEST_THREADS` defaults to `1` (fixture tests hold a process-wide HOME mutex).
 
 `CARGO_TEST_THREADS` 默认 `1`（夹具测试会持有进程级 HOME 互斥锁）。
+
+### Report contents / 报告内容
+
+Each `pnpm test:docker` run writes `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md` (Chinese) including:
+
+每次 `pnpm test:docker` 会写中文报告，至少包含：
+
+- git commit SHA / `package.json` version
+- `SCHEMA_VERSION`（必须为 **18**）
+- image tag + digest / Id（若本机有 Docker）
+- command used / 使用的命令
+- wall-clock duration / 墙钟耗时
+- total passed / failed / ignored
+- full list of failed tests with stdout snippets
+- diff vs the previous report in that directory（若有上一份）
+
+Raw cargo logs: `docs/self-test-reports/*.log` (gitignored).
+
+原始 cargo 日志：`docs/self-test-reports/*.log`（不入库）。
+
+Without Docker, the wrapper refuses unless you opt into a host cargo equivalent (still emits the same report shape):
+
+没有 Docker 时脚本会失败，除非显式打开宿主机回退（报告格式相同）：
+
+```bash
+CC_SWITCH_SELFTEST_HOST_FALLBACK=1 pnpm test:docker
+```
 
 ## Isolation / 隔离
 
@@ -89,25 +140,25 @@ docker volume rm cc-switch-test-home
 
 ## CI
 
-Default GitHub Actions **does not** build this image (Rust + GTK compile is too heavy for every PR). CI still runs the existing frontend + backend jobs on the host runners.
+Default GitHub Actions **does not** build this image (Rust + GTK compile is too heavy for every PR). CI still runs the existing frontend + backend jobs on the host runners (backend `cargo test` is the merge gate).
 
-默认 GitHub Actions **不会**在每个 PR 上构建此镜像（Rust + GTK 编译太重）。仓库 CI 仍在 runner 上跑原有前端 / 后端任务。
+默认 GitHub Actions **不会**在每个 PR 上构建此镜像（Rust + GTK 编译太重）。仓库 CI 仍在 runner 上跑原有前端 / 后端任务（后端 `cargo test` 仍是合入门槛）。
 
-A cheap job only validates `docker compose -f docker-compose.test.yml config` when the Docker files change.
+A cheap job validates `docker compose -f docker-compose.test.yml config` and the report renderer self-check when Docker files change.
 
-仅当 Docker 相关文件变更时，有一个轻量任务校验 compose 配置。
+仅当 Docker 相关文件变更时，有一个轻量任务校验 compose 配置和报告脚本自检。
 
 ## Shipping / 发版
 
-After self-test work, a Windows Portable (preferred) / MSI ship **requires** Docker **full-suite** self-test **and a report**:
+Default `pnpm test:docker` **is** the full suite and writes the markdown report. After self-test work, a Windows Portable (preferred) / MSI ship **requires** that full-suite report:
 
-自测工作之后发 Windows 绿色版（优先）/ MSI **必须**有 Docker **全量**自测 **和报告**：
+默认 `pnpm test:docker` **就是全量**并写出 Markdown 报告。自测工作之后发 Windows 绿色版（优先）/ MSI **必须**有这份全量报告：
 
-- Command: `pnpm test:docker:all` / `make test-docker-all` / `TEST_FILTER=all`
-- Report: exit code, pass/fail counts, SCHEMA still 18, no host `C:` writes
-- Default `pnpm test:docker` (`proxy_projection_linux` only) is the **minimum gate**, not the shipping report
+- Command: `pnpm test:docker` / `pnpm test:docker:all` / `make test-docker` (`TEST_FILTER=all`)
+- Report: `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md` (exit code, pass/fail counts, SCHEMA 18, no host `C:` writes)
+- Narrower filters (`proxy` / `pi-crud` / `lib-lite`) are **not** the shipping report
 
-默认 `pnpm test:docker` 只是最低门槛，不是发版报告。
+显式收窄不能代替发版报告。本 Docker 工作流本身不出 Portable / MSI。
 
 ## Hard no / 硬约束
 
