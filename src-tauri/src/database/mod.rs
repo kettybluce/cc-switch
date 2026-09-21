@@ -58,7 +58,10 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 18;
+///
+/// Fork lock: stay on 18. Pi takeover uses `settings.proxy_takeover_pi`
+/// rather than a `proxy_config.app_type = 'pi'` row.
+pub const SCHEMA_VERSION: i32 = 18;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {

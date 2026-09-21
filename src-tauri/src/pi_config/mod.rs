@@ -860,6 +860,32 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn linux_standin_agent_dir_is_posix_and_never_windows_c_mirror() {
+        let standin = PathBuf::from(
+            "/tmp/cc-switch-test-home/profiles/wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi/agent",
+        );
+        let resolved = resolve_pi_agent_dir(Some(standin.clone()), None, PathBuf::from("/unused"))
+            .expect("linux stand-in must resolve");
+        assert_eq!(resolved, standin);
+        let normalized = resolved.to_string_lossy();
+        assert!(
+            normalized.ends_with("/home/tfdx8045/.pi/agent"),
+            "stand-in must keep the WSL home layout without a C: copy: {normalized}"
+        );
+        assert!(
+            !normalized.contains("C:") && !normalized.to_ascii_lowercase().contains("c:\\"),
+            "must not touch Windows C:: {normalized}"
+        );
+        assert!(!normalized.to_ascii_lowercase().contains("pi-wsl-sessions"));
+
+        let from_dot_pi = canonicalize_pi_agent_dir(PathBuf::from(
+            "/tmp/cc-switch-test-home/profiles/wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi",
+        ));
+        assert_eq!(from_dot_pi, standin);
+    }
+
     #[test]
     fn canonicalize_dot_pi_to_agent_dir() {
         assert_eq!(
