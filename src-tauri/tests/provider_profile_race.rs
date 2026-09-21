@@ -540,12 +540,13 @@ async fn overlapping_provider_crud_and_takeover_enable_disable_stay_consistent()
 
     assert_claude_takeover_consistent(&state).await;
     assert_schema18_pi_has_no_proxy_config_row(&state);
+    // Windows CI temp dirs live on C: (`%TEMP%\cc-switch-test-home`). Isolation
+    // means "under CC_SWITCH_TEST_HOME", not "must not contain c:\".
+    let test_home = ensure_test_home();
+    let claude_settings = get_claude_settings_path();
     assert!(
-        !get_claude_settings_path()
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .contains("c:\\"),
-        "must not write a Windows C: path"
+        claude_settings.starts_with(test_home),
+        "claude settings must stay under CC_SWITCH_TEST_HOME ({test_home:?}), got {claude_settings:?}"
     );
     let _ = get_codex_config_path();
     let _ = get_codex_auth_path();

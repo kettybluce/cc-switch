@@ -2,8 +2,13 @@
 # Isolated CC_SWITCH_TEST_HOME lives under /tmp inside the container
 # (Docker volume, never the developer Windows C: profile).
 #
+# Default is FULL src-tauri cargo test + a markdown report (via
+# scripts/docker-self-test.sh / pnpm test:docker). SCHEMA stays 18.
+#
+#   pnpm test:docker
 #   docker compose -f docker-compose.test.yml run --build --rm backend-self-test
-#   docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
+#   TEST_FILTER=pi-crud pnpm test:docker
+#   docker compose -f docker-compose.test.yml --profile lite run --build --rm backend-self-test-lite
 name: cc-switch-backend-self-test
 
 services:
@@ -16,7 +21,23 @@ services:
     working_dir: /app
     environment:
       CC_SWITCH_TEST_HOME: /tmp/cc-switch-test-home
-      TEST_FILTER: ${TEST_FILTER:-}
+      TEST_FILTER: ${TEST_FILTER:-all}
+      CARGO_TEST_THREADS: ${CARGO_TEST_THREADS:-1}
+    volumes:
+      - cc-switch-test-home:/tmp/cc-switch-test-home
+
+  # Optional lightweight profile: fetch_models_ + key Pi CRUD lib tests.
+  backend-self-test-lite:
+    profiles: ["lite"]
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: cc-switch-backend-self-test:local
+    init: true
+    working_dir: /app
+    environment:
+      CC_SWITCH_TEST_HOME: /tmp/cc-switch-test-home
+      TEST_FILTER: ${TEST_FILTER:-lib-lite}
       CARGO_TEST_THREADS: ${CARGO_TEST_THREADS:-1}
     volumes:
       - cc-switch-test-home:/tmp/cc-switch-test-home
