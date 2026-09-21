@@ -681,30 +681,207 @@ mod tests {
         );
     }
 
-    fn spawn_models_list_server() -> (
-        String,
-        std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        std::sync::mpsc::Sender<()>,
-        std::thread::JoinHandle<()>,
-    ) {
+    /// Claude / Codex / Pi 预设形态的候选 URL 矩阵。任何一条都不得改写到 Claude listen 15721。
+    #[test]
+    fn fetch_models_candidate_matrix_for_claude_codex_pi_never_rewrites_15721() {
+        struct Case {
+            name: &'static str,
+            base_url: &'static str,
+            is_full_url: bool,
+            models_url: Option<&'static str>,
+            expected: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                name: "claude-official",
+                base_url: "https://api.anthropic.com",
+                is_full_url: false,
+                models_url: None,
+                expected: &["https://api.anthropic.com/v1/models"],
+            },
+            Case {
+                name: "claude-deepseek-modelsUrl",
+                base_url: "https://api.deepseek.com/anthropic",
+                is_full_url: false,
+                models_url: Some("https://api.deepseek.com/models"),
+                expected: &["https://api.deepseek.com/models"],
+            },
+            Case {
+                name: "claude-full-url-messages",
+                base_url: "https://api.anthropic.com/v1/messages",
+                is_full_url: true,
+                models_url: None,
+                expected: &["https://api.anthropic.com/v1/models"],
+            },
+            Case {
+                name: "claude-tencent-plan-modelsUrl",
+                base_url: "https://api.lkeap.cloud.tencent.com/plan/anthropic",
+                is_full_url: false,
+                models_url: Some("https://api.lkeap.cloud.tencent.com/plan/v3/models"),
+                expected: &["https://api.lkeap.cloud.tencent.com/plan/v3/models"],
+            },
+            Case {
+                name: "codex-openai-v1",
+                base_url: "https://api.openai.com/v1",
+                is_full_url: false,
+                models_url: None,
+                expected: &["https://api.openai.com/v1/models"],
+            },
+            Case {
+                name: "codex-full-url-responses",
+                base_url: "https://api.openai.com/v1/responses",
+                is_full_url: true,
+                models_url: None,
+                expected: &["https://api.openai.com/v1/models"],
+            },
+            Case {
+                name: "codex-full-url-chat-completions",
+                base_url: "https://api.openai.com/v1/chat/completions",
+                is_full_url: true,
+                models_url: None,
+                expected: &["https://api.openai.com/v1/models"],
+            },
+            Case {
+                name: "pi-deepseek-aggregator",
+                base_url: "https://api.deepseek.com/v1",
+                is_full_url: false,
+                models_url: Some("https://api.deepseek.com/models"),
+                expected: &["https://api.deepseek.com/models"],
+            },
+            Case {
+                name: "pi-ppio-modelsUrl",
+                base_url: "https://api.ppio.com/openai/v1",
+                is_full_url: false,
+                models_url: Some("https://api.ppio.com/openai/v1/models"),
+                expected: &["https://api.ppio.com/openai/v1/models"],
+            },
+            Case {
+                name: "pi-novita-modelsUrl",
+                base_url: "https://api.novita.ai/openai/v1",
+                is_full_url: false,
+                models_url: Some("https://api.novita.ai/openai/v1/models"),
+                expected: &["https://api.novita.ai/openai/v1/models"],
+            },
+            Case {
+                name: "pi-openai-completions-v1",
+                base_url: "https://api.llm.prd.yumc.local/v1",
+                is_full_url: false,
+                models_url: None,
+                expected: &["https://api.llm.prd.yumc.local/v1/models"],
+            },
+            Case {
+                name: "pi-full-url-chat-completions",
+                base_url: "https://api.llm.prd.yumc.local/v1/chat/completions",
+                is_full_url: true,
+                models_url: None,
+                expected: &["https://api.llm.prd.yumc.local/v1/models"],
+            },
+        ];
+
+        for case in cases {
+            let got = build_models_url_candidates(case.base_url, case.is_full_url, case.models_url)
+                .unwrap_or_else(|e| panic!("{}: {e}", case.name));
+            assert_eq!(
+                got,
+                case.expected
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+            assert!(
+                got.iter()
+                    .all(|url| !url.contains("15721") && !url.contains("127.0.0.1:15721")),
+                "{} must never rewrite to Claude listen 15721: {got:?}",
+                case.name
+            );
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum MockMode {
+        Origin,
+        HttpProxy,
+        Hang,
+    }
+
+    struct CapturingServer {
+        url: String,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        shutdown: std::sync::mpsc::Sender<()>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for CapturingServer {
+        fn drop(&mut self) {
+            let _ = self.shutdown.send(());
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    impl CapturingServer {
+        fn last_raw(&self) -> String {
+            self.captured
+                .lock()
+                .expect("capture lock")
+                .last()
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn header(&self, name: &str) -> Option<String> {
+            let raw = self.last_raw();
+            let needle = format!("{}:", name.to_ascii_lowercase());
+            raw.lines().find_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                lower
+                    .starts_with(&needle)
+                    .then(|| line.split_once(':').map(|(_, v)| v.trim().to_string()))
+                    .flatten()
+            })
+        }
+
+        fn request_target(&self) -> String {
+            self.last_raw()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("")
+                .to_string()
+        }
+    }
+
+    fn http_json_response(status: u16, reason: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn spawn_capturing_server(mode: MockMode) -> CapturingServer {
         use std::io::{Read, Write};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Duration;
 
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind models origin");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock http");
         listener
             .set_nonblocking(true)
-            .expect("nonblocking models origin");
-        let port = listener.local_addr().expect("origin addr").port();
+            .expect("nonblocking mock http");
+        let port = listener.local_addr().expect("mock addr").port();
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let hits_clone = hits.clone();
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_clone = captured.clone();
         let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+        let ok_body = r#"{"object":"list","data":[{"id":"glm-5.1","owned_by":"test"}]}"#;
         let handle = std::thread::spawn(move || {
-            let body = r#"{"object":"list","data":[{"id":"glm-5.1"}]}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
             loop {
                 if shutdown_rx.try_recv().is_ok() {
                     break;
@@ -715,8 +892,47 @@ mod tests {
                         // sees "error sending request" if write_all WouldBlock-drops.
                         let _ = stream.set_nonblocking(false);
                         hits_clone.fetch_add(1, Ordering::SeqCst);
-                        let mut buf = [0u8; 2048];
-                        let _ = stream.read(&mut buf);
+                        if matches!(mode, MockMode::Hang) {
+                            // 保持连接但不写响应，让 fetch_models 的 15s 请求超时生效。
+                            for _ in 0..200 {
+                                if shutdown_rx.try_recv().is_ok() {
+                                    return;
+                                }
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
+                            continue;
+                        }
+                        let mut buf = [0u8; 8192];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let mut raw = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        let first = raw.lines().next().unwrap_or("").to_string();
+                        let method = first.split_whitespace().next().unwrap_or("");
+                        if method.eq_ignore_ascii_case("CONNECT") {
+                            let _ =
+                                stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+                            let n2 = stream.read(&mut buf).unwrap_or(0);
+                            raw.push_str(&String::from_utf8_lossy(&buf[..n2]));
+                        }
+                        captured_clone.lock().expect("capture").push(raw.clone());
+                        assert!(
+                            !raw.contains("15721"),
+                            "captured request must not target Claude listen 15721: {raw}"
+                        );
+                        let target = raw
+                            .lines()
+                            .find(|line| {
+                                let m = line.split_whitespace().next().unwrap_or("");
+                                m.eq_ignore_ascii_case("GET")
+                            })
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("");
+                        let response = if target.contains("/missing") {
+                            http_json_response(404, "Not Found", r#"{"error":"missing"}"#)
+                        } else if target.contains("/unauthorized") {
+                            http_json_response(401, "Unauthorized", r#"{"error":"nope"}"#)
+                        } else {
+                            http_json_response(200, "OK", ok_body)
+                        };
                         let _ = stream.write_all(response.as_bytes());
                         let _ = stream.flush();
                     }
@@ -726,12 +942,13 @@ mod tests {
                 }
             }
         });
-        (
-            format!("http://127.0.0.1:{port}"),
+        CapturingServer {
+            url: format!("http://127.0.0.1:{port}"),
             hits,
-            shutdown_tx,
-            handle,
-        )
+            captured,
+            shutdown: shutdown_tx,
+            handle: Some(handle),
+        }
     }
 
     fn client_for_optional_proxy(proxy_url: Option<&str>) -> reqwest::Client {
@@ -743,6 +960,13 @@ mod tests {
         builder.build().expect("build isolated fetch-models client")
     }
 
+    fn assert_not_claude_listen(value: &str) {
+        assert!(
+            !value.contains("15721"),
+            "must never rewrite to Claude listen 15721: {value}"
+        );
+    }
+
     #[tokio::test]
     async fn fetch_models_respects_configured_global_proxy_url() {
         use std::sync::atomic::Ordering;
@@ -750,16 +974,18 @@ mod tests {
         // Isolated clients only — never apply_proxy on GLOBAL_CLIENT (races --lib).
         // Production fetch_models() uses model_fetch_client() → http_client::get()
         // after init/apply_proxy from global_proxy_url.
-        let (origin, hits, shutdown, handle) = spawn_models_list_server();
+        let origin = spawn_capturing_server(MockMode::Origin);
         let dead_listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("reserve dead proxy port");
         let dead_port = dead_listener.local_addr().expect("dead proxy addr").port();
         drop(dead_listener);
         let dead_proxy = format!("http://127.0.0.1:{dead_port}");
+        assert_not_claude_listen(&origin.url);
+        assert_not_claude_listen(&dead_proxy);
 
         let err = fetch_models_with_client(
             client_for_optional_proxy(Some(&dead_proxy)),
-            &origin,
+            &origin.url,
             "test-key",
             false,
             None,
@@ -774,14 +1000,14 @@ mod tests {
             "fetch-models must go through the configured proxy: {err}"
         );
         assert_eq!(
-            hits.load(Ordering::SeqCst),
+            origin.hits.load(Ordering::SeqCst),
             0,
             "origin must not be reached when a proxy is configured"
         );
 
         let models = fetch_models_with_client(
             client_for_optional_proxy(None),
-            &origin,
+            &origin.url,
             "test-key",
             false,
             None,
@@ -794,11 +1020,236 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "glm-5.1");
         assert!(
-            hits.load(Ordering::SeqCst) >= 1,
+            origin.hits.load(Ordering::SeqCst) >= 1,
             "cleared proxy must reach the provider URL, not 15721"
         );
+        assert_not_claude_listen(&origin.request_target());
+    }
 
-        let _ = shutdown.send(());
-        let _ = handle.join();
+    #[tokio::test]
+    async fn fetch_models_working_proxy_records_request_and_skips_origin() {
+        use std::sync::atomic::Ordering;
+
+        let origin = spawn_capturing_server(MockMode::Origin);
+        let proxy = spawn_capturing_server(MockMode::HttpProxy);
+        assert_not_claude_listen(&origin.url);
+        assert_not_claude_listen(&proxy.url);
+
+        let models = fetch_models_with_client(
+            client_for_optional_proxy(Some(&proxy.url)),
+            &origin.url,
+            "proxy-key",
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("working HTTP proxy should serve models");
+        assert_eq!(models[0].id, "glm-5.1");
+        assert_eq!(
+            origin.hits.load(Ordering::SeqCst),
+            0,
+            "recording proxy answers itself; origin must stay at 0 hits"
+        );
+        assert!(
+            proxy.hits.load(Ordering::SeqCst) >= 1,
+            "request must go through the configured proxy"
+        );
+        let target = proxy.request_target();
+        assert!(
+            target.contains(&origin.url) || target.contains("/v1/models"),
+            "proxy target should be the provider models URL, not 15721: {target}"
+        );
+        assert_not_claude_listen(&target);
+        assert_eq!(
+            proxy.header("authorization").as_deref(),
+            Some("Bearer proxy-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_models_auth_header_matrix_for_claude_codex_pi() {
+        struct Case {
+            name: &'static str,
+            api_key: &'static str,
+            api_format: Option<&'static str>,
+            request_headers: Option<BTreeMap<String, String>>,
+            expect_name: &'static str,
+            expect_value: &'static str,
+            forbid: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "claude-anthropic-messages",
+                api_key: "sk-ant-test",
+                api_format: Some("anthropic-messages"),
+                request_headers: None,
+                expect_name: "x-api-key",
+                expect_value: "sk-ant-test",
+                forbid: Some("authorization"),
+            },
+            Case {
+                name: "codex-openai-responses",
+                api_key: "sk-codex",
+                api_format: Some("openai-responses"),
+                request_headers: None,
+                expect_name: "authorization",
+                expect_value: "Bearer sk-codex",
+                forbid: Some("x-api-key"),
+            },
+            Case {
+                name: "pi-aggregator-default-bearer",
+                api_key: "sk-pi-agg",
+                api_format: None,
+                request_headers: None,
+                expect_name: "authorization",
+                expect_value: "Bearer sk-pi-agg",
+                forbid: Some("x-api-key"),
+            },
+            Case {
+                name: "pi-header-only-token",
+                api_key: "",
+                api_format: Some("openai-completions"),
+                request_headers: Some(BTreeMap::from([(
+                    "Authorization".to_string(),
+                    "Token literal-header".to_string(),
+                )])),
+                expect_name: "authorization",
+                expect_value: "Token literal-header",
+                forbid: None,
+            },
+            Case {
+                name: "google-generative-ai",
+                api_key: "goog-key",
+                api_format: Some("google-generative-ai"),
+                request_headers: None,
+                expect_name: "x-goog-api-key",
+                expect_value: "goog-key",
+                forbid: Some("authorization"),
+            },
+        ];
+
+        for case in cases {
+            let origin = spawn_capturing_server(MockMode::Origin);
+            let models = fetch_models_with_client(
+                client_for_optional_proxy(None),
+                &origin.url,
+                case.api_key,
+                false,
+                None,
+                None,
+                case.api_format,
+                case.request_headers.as_ref(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{}: {e}", case.name));
+            assert_eq!(models[0].id, "glm-5.1", "{}", case.name);
+            assert_eq!(
+                origin.header(case.expect_name).as_deref(),
+                Some(case.expect_value),
+                "{}",
+                case.name
+            );
+            if let Some(forbid) = case.forbid {
+                assert!(
+                    origin.header(forbid).is_none(),
+                    "{} must not send {forbid}: {}",
+                    case.name,
+                    origin.last_raw()
+                );
+            }
+            assert_not_claude_listen(&origin.request_target());
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_models_is_full_url_and_models_url_hit_derived_paths() {
+        let origin = spawn_capturing_server(MockMode::Origin);
+
+        // isFullUrl：从 /v1/chat/completions 推导 /v1/models，不改写 15721。
+        let full_url = format!("{}/v1/chat/completions", origin.url);
+        let models = fetch_models_with_client(
+            client_for_optional_proxy(None),
+            &full_url,
+            "full-url-key",
+            true,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("isFullUrl fetch");
+        assert_eq!(models[0].id, "glm-5.1");
+        let target = origin.request_target();
+        assert!(
+            target.ends_with("/v1/models") || target.contains("/v1/models"),
+            "isFullUrl should request /v1/models: {target}"
+        );
+        assert!(!target.contains("chat/completions"), "{target}");
+        assert_not_claude_listen(&target);
+
+        // modelsUrl 覆写：只打精确路径（Pi DeepSeek / 腾讯 Token Plan 形态）。
+        let origin2 = spawn_capturing_server(MockMode::Origin);
+        let models_url = format!("{}/plan/v3/models", origin2.url);
+        let models = fetch_models_with_client(
+            client_for_optional_proxy(None),
+            &format!("{}/plan/anthropic", origin2.url),
+            "plan-key",
+            false,
+            Some(models_url.as_str()),
+            None,
+            Some("anthropic-messages"),
+            None,
+        )
+        .await
+        .expect("modelsUrl override fetch");
+        assert_eq!(models[0].id, "glm-5.1");
+        let target = origin2.request_target();
+        assert!(
+            target.contains("/plan/v3/models"),
+            "modelsUrl must win: {target}"
+        );
+        assert!(
+            !target.contains("/anthropic/"),
+            "must not fall back to baseURL candidates when modelsUrl is set: {target}"
+        );
+        assert_not_claude_listen(&target);
+        assert_eq!(origin2.header("x-api-key").as_deref(), Some("plan-key"));
+    }
+
+    #[tokio::test]
+    async fn fetch_models_hanging_origin_times_out() {
+        let origin = spawn_capturing_server(MockMode::Hang);
+        let started = std::time::Instant::now();
+        let err = fetch_models_with_client(
+            client_for_optional_proxy(None),
+            &origin.url,
+            "timeout-key",
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("hanging origin must time out");
+        let elapsed = started.elapsed();
+        assert!(
+            err.contains("Request failed"),
+            "expected request failure on hanging origin, got: {err}"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_secs(14),
+            "FETCH_TIMEOUT_SECS is 15s (reqwest Display may omit the word timeout): {elapsed:?} {err}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(25),
+            "timeout should not wait for the client-level 600s: {elapsed:?}"
+        );
+        assert_not_claude_listen(&origin.url);
     }
 }

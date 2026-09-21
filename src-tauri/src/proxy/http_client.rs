@@ -462,4 +462,61 @@ mod tests {
             std::env::remove_var(key);
         }
     }
+
+    /// `validate_proxy` / `build_client` 矩阵：开/关、坏 URL、带鉴权、各 scheme。
+    /// 不调用 `apply_proxy`，避免污染进程级 `GLOBAL_CLIENT`。
+    #[test]
+    fn validate_proxy_matrix_accepts_direct_and_supported_schemes() {
+        assert!(validate_proxy(None).is_ok(), "None = 直连");
+        assert!(validate_proxy(Some("")).is_ok(), "空字符串 = 直连");
+        assert!(validate_proxy(Some("   \t")).is_ok(), "空白 = 直连");
+        assert!(validate_proxy(Some("http://127.0.0.1:7890")).is_ok());
+        assert!(validate_proxy(Some("https://proxy.example.com:8443")).is_ok());
+        assert!(validate_proxy(Some("socks5://127.0.0.1:1080")).is_ok());
+        assert!(validate_proxy(Some("socks5h://127.0.0.1:1080")).is_ok());
+        assert!(validate_proxy(Some("http://user:s3cret@127.0.0.1:7890")).is_ok());
+        assert!(validate_proxy(Some("socks5://admin:s3cret@proxy.example.com:1080")).is_ok());
+        // 显式指向 Claude listen 仍是合法代理 URL（系统代理自环才会跳过）。
+        // 拉取模型不得把供应商 URL 改写到 15721，与「能不能配这个代理」是两件事。
+        assert!(validate_proxy(Some("http://127.0.0.1:15721")).is_ok());
+    }
+
+    #[test]
+    fn validate_proxy_matrix_rejects_bad_urls_and_masks_secrets() {
+        let cases = [
+            "ftp://127.0.0.1:21",
+            "file:///tmp/proxy",
+            "gopher://127.0.0.1:70",
+            "invalid-scheme://127.0.0.1:7890",
+            "not-a-url",
+            "http://",
+            "://127.0.0.1:7890",
+        ];
+        for url in cases {
+            let err = validate_proxy(Some(url)).expect_err(url);
+            assert!(
+                err.contains("Invalid proxy") || err.contains("Failed to build"),
+                "bad proxy URL {url} should fail validation: {err}"
+            );
+        }
+
+        let err = validate_proxy(Some("ftp://user:super-secret@127.0.0.1:21"))
+            .expect_err("ftp with userinfo");
+        assert!(
+            !err.contains("super-secret"),
+            "validation errors must not leak proxy credentials: {err}"
+        );
+        assert!(
+            err.contains("ftp://127.0.0.1:21") || err.contains("ftp"),
+            "masked ftp URL should remain identifiable: {err}"
+        );
+    }
+
+    #[test]
+    fn build_client_matrix_matches_validate_proxy() {
+        assert!(build_client(None).is_ok());
+        assert!(build_client(Some("http://127.0.0.1:8080")).is_ok());
+        assert!(build_client(Some("socks5h://localhost:1080")).is_ok());
+        assert!(build_client(Some("invalid-scheme://127.0.0.1:1")).is_err());
+    }
 }
