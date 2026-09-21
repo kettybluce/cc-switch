@@ -1223,6 +1223,17 @@ impl ProxyService {
                 );
             }
 
+            // Fail closed when Live already aims at a *different* local proxy
+            // (another tool / leftover listen). Do not steal that route or
+            // persist it as the restorable original. Missing files fall
+            // through to backup_live_config_strict; malformed JSON/TOML
+            // is returned as an error here.
+            if !current_enabled && self.live_points_at_foreign_local_proxy(&app).await? {
+                return Err(format!(
+                    "{app_type_str} Live 已指向其他本地代理，拒绝接管以免覆盖"
+                ));
+            }
+
             // 3) 备份 Live 配置（严格：目标 app 不存在则报错）
             if restore_existing_backup_before_takeover {
                 self.restore_live_config_for_app_inner(&app).await?;
@@ -2508,6 +2519,57 @@ impl ProxyService {
         doc.get("base_url")
             .and_then(|value| value.as_str())
             .is_some_and(predicate)
+    }
+
+    fn live_error_is_missing_config(err: &str) -> bool {
+        err.contains("不存在") || err.to_ascii_lowercase().contains("missing")
+    }
+
+    /// True when Live already uses a local proxy that is not the current
+    /// CC Switch listen. Enable must fail closed so we neither overwrite
+    /// that route nor store it as the restorable original.
+    ///
+    /// Missing live files return `Ok(false)` so `backup_live_config_strict`
+    /// can emit the canonical "配置文件不存在" error.
+    async fn live_points_at_foreign_local_proxy(&self, app_type: &AppType) -> Result<bool, String> {
+        let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
+        match app_type {
+            AppType::Claude => {
+                let config = match self.read_claude_live() {
+                    Ok(config) => config,
+                    Err(err) if Self::live_error_is_missing_config(&err) => return Ok(false),
+                    Err(err) => return Err(err),
+                };
+                let Some(url) = config
+                    .get("env")
+                    .and_then(|value| value.get("ANTHROPIC_BASE_URL"))
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                else {
+                    return Ok(false);
+                };
+                Ok(Self::is_local_proxy_url(url) && !Self::proxy_urls_match(url, &proxy_url))
+            }
+            AppType::Codex => {
+                let config = match self.read_codex_live() {
+                    Ok(config) => config,
+                    Err(err) if Self::live_error_is_missing_config(&err) => return Ok(false),
+                    Err(err) => return Err(err),
+                };
+                let Some(config_text) = config.get("config").and_then(Value::as_str) else {
+                    return Ok(false);
+                };
+                Ok(Self::codex_config_has_base_url_matching(
+                    config_text,
+                    |url| {
+                        Self::is_local_proxy_url(url)
+                            && !Self::proxy_urls_match(url, &proxy_codex_base_url)
+                    },
+                ))
+            }
+            _ => Ok(false),
+        }
     }
 
     async fn live_takeover_matches_current_proxy(
