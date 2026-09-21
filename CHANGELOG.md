@@ -17,7 +17,7 @@ Ships current `main` after v3.20.12 (tag `97cbce00`, #42+#43 only): Wave C #45 (
 ### Added
 
 - Linux-cloud fixtures covering Pi CRUD ↔ live `models.json` sync (#46)
-- Docker backend self-test (`Dockerfile.test` / `docker-compose.test.yml` / `pnpm test:docker`) for `proxy_projection_linux` without writing the host user home (#47)
+- Docker backend self-test (`Dockerfile.test` / `docker-compose.test.yml` / `pnpm test:docker`) for `proxy_projection_linux` without writing the host user home (#47). Shipping after self-test work requires the **full suite plus a report** (`pnpm test:docker:all` / `TEST_FILTER=all`); the default compose command is only the minimum gate.
 
 ### Changed
 
@@ -34,6 +34,7 @@ Ships current `main` after v3.20.12 (tag `97cbce00`, #42+#43 only): Wave C #45 (
 
 - **No database migration**: `SCHEMA_VERSION` stays at 18.
 - Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- After self-test work, do not ship until Docker **full-suite** (`pnpm test:docker:all`) has been run and a report is attached.
 - v3.20.12 users only need this for Wave C + Pi CRUD fixtures + Docker self-test.
 
 

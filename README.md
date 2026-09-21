@@ -542,7 +542,7 @@ docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 # wrappers: pnpm test:docker   /   make test-docker
 ```
 
-This runs `proxy_projection_linux` (SCHEMA 18 Pi/Claude/Codex fixtures). It does **not** cover WSL UNC, Windows MSI/Portable, or the full desktop GUI. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
+This runs `proxy_projection_linux` (SCHEMA 18 Pi/Claude/Codex fixtures). After self-test work, shipping Portable/MSI **requires** `pnpm test:docker:all` plus a report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
 
 ### Tech Stack
 
