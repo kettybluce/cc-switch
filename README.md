@@ -534,19 +534,17 @@ pnpm test:unit:watch
 pnpm test:unit --coverage
 ```
 
-**Docker backend self-test** (Linux image, no Windows `C:`, no Tauri GUI):
+**Docker backend self-test** (Linux image, no Windows `C:`, no Tauri GUI). **Default is the full `src-tauri` cargo suite**, and every run writes a Chinese report under `docs/self-test-reports/`:
 
 ```bash
 # Ubuntu 22.04 image + isolated CC_SWITCH_TEST_HOME under /tmp
-docker compose -f docker-compose.test.yml run --build --rm backend-self-test
-# wrappers: pnpm test:docker   /   make test-docker
-
-# Full crate (slower): TEST_FILTER=all
-docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
-# wrappers: pnpm test:docker:all   /   make test-docker-all
+# 默认全量；每次给全量自测报告
+pnpm test:docker
+# same: make test-docker   /   bash scripts/docker-self-test.sh
+# alias: pnpm test:docker:all
 ```
 
-Default runs `proxy_projection_linux` (SCHEMA 18 Pi/Claude/Codex fixtures, including takeover roundtrips). After self-test work, shipping Portable/MSI **requires** `pnpm test:docker:all` plus a report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
+This covers SCHEMA 18 Pi/Claude/Codex fixtures including takeover roundtrips (#51). After self-test work, shipping Portable/MSI **requires** this full-suite report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. SCHEMA stays 18. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
 
 ### Tech Stack
 
