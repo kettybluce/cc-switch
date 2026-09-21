@@ -76,7 +76,7 @@ pub async fn fetch_models(
     let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
     let headers =
         build_model_fetch_headers(api_key, api_format, user_agent.as_ref(), request_headers)?;
-    let client = crate::proxy::http_client::get();
+    let client = model_fetch_client();
     let mut last_err: Option<String> = None;
     let mut known_secrets = vec![api_key.to_string()];
     if let Some(request_headers) = request_headers {
@@ -149,6 +149,16 @@ pub async fn fetch_models(
         "All candidates failed: {}",
         last_err.unwrap_or_else(|| "no candidates".to_string())
     ))
+}
+
+/// Shared outbound client (Pi Option A / Claude fetch-models).
+///
+/// A saved `global_proxy_url` is applied to this process-wide client at
+/// startup and when the setting changes. Empty/unset follows system proxy
+/// or direct connect. Candidates stay on the provider URL / `modelsUrl` and
+/// are never rewritten to the Claude listen port (`15721`).
+fn model_fetch_client() -> reqwest::Client {
+    crate::proxy::http_client::get()
 }
 
 fn redact_model_fetch_error_body(body: String, known_secrets: &[String]) -> String {
@@ -630,5 +640,139 @@ mod tests {
         let json = r#"{"object":"list","data":[]}"#;
         let resp: ModelsResponse = serde_json::from_str(json).unwrap();
         assert!(resp.data.unwrap().is_empty());
+    }
+
+    #[test]
+    fn fetch_models_candidates_do_not_rewrite_to_claude_listen() {
+        let c = build_models_url_candidates(
+            "https://api.llm.prd.yumc.local/v1",
+            false,
+            Some("https://api.deepseek.com/models"),
+        )
+        .unwrap();
+        assert_eq!(c, vec!["https://api.deepseek.com/models"]);
+        assert!(
+            c.iter()
+                .all(|url| !url.contains("15721") && !url.contains("127.0.0.1")),
+            "Option A must keep the provider/modelsUrl host, not Claude listen: {c:?}"
+        );
+    }
+
+    fn proxy_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    struct RestoreProxy(Option<String>);
+
+    impl Drop for RestoreProxy {
+        fn drop(&mut self) {
+            let _ = crate::proxy::http_client::apply_proxy(self.0.as_deref());
+        }
+    }
+
+    fn spawn_models_list_server() -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind models origin");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking models origin");
+        let port = listener.local_addr().expect("origin addr").port();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let hits_clone = hits.clone();
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let body = r#"{"object":"list","data":[{"id":"glm-5.1"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            loop {
+                if shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        hits_clone.fetch_add(1, Ordering::SeqCst);
+                        let mut buf = [0u8; 2048];
+                        let _ = stream.read(&mut buf);
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        (
+            format!("http://127.0.0.1:{port}"),
+            hits,
+            shutdown_tx,
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn fetch_models_respects_configured_global_proxy_url() {
+        use std::sync::atomic::Ordering;
+
+        let _lock = proxy_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
+
+        let previous = crate::proxy::http_client::get_current_proxy_url();
+        let _restore = RestoreProxy(previous);
+
+        let (origin, hits, shutdown, handle) = spawn_models_list_server();
+        let dead_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve dead proxy port");
+        let dead_port = dead_listener.local_addr().expect("dead proxy addr").port();
+        drop(dead_listener);
+        let dead_proxy = format!("http://127.0.0.1:{dead_port}");
+
+        crate::proxy::http_client::apply_proxy(Some(&dead_proxy))
+            .expect("apply dead global_proxy_url");
+        assert_eq!(
+            crate::proxy::http_client::get_current_proxy_url().as_deref(),
+            Some(dead_proxy.as_str())
+        );
+
+        let err = fetch_models(&origin, "test-key", false, None, None, None, None)
+            .await
+            .expect_err("dead global_proxy_url must fail the fetch");
+        assert!(
+            err.contains("Request failed"),
+            "fetch-models must go through the configured proxy: {err}"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "origin must not be reached when global_proxy_url is set"
+        );
+
+        crate::proxy::http_client::apply_proxy(None).expect("clear global_proxy_url");
+        let models = fetch_models(&origin, "test-key", false, None, None, None, None)
+            .await
+            .expect("direct fetch-models after clearing proxy");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "glm-5.1");
+        assert!(
+            hits.load(Ordering::SeqCst) >= 1,
+            "cleared proxy must reach the provider URL, not 15721"
+        );
+
+        let _ = shutdown.send(());
+        let _ = handle.join();
     }
 }
