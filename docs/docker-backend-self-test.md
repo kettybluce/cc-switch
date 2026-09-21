@@ -109,6 +109,8 @@ After self-test work, a Windows Portable (preferred) / MSI ship **requires** Doc
 
 默认 `pnpm test:docker` 只是最低门槛，不是发版报告。
 
+v3.20.14 出包烧机清单（夹具 PR 门槛、Portable dry-run、禁止提前打 tag）：[release-v3.20.14-burn-in-zh.md](release-v3.20.14-burn-in-zh.md)。
+
 ## Hard no / 硬约束
 
 - No `SCHEMA_VERSION` 19 / `migrate_v18_to_v19`

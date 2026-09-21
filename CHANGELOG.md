@@ -13,6 +13,12 @@ Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No f
 
 - Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup (disable restores the new card); independent disable leaves the other app projected
 - Fail-closed takeover: refuse enable when Claude/Codex/Pi Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable
+- CI: `bash -n` on `scripts/**/*.sh` plus extracted GitHub Actions bash `run:` blocks, checksum-pinned actionlint 1.7.12, and a Windows Portable packaging dry-run (`scripts/ci/dry-run-windows-portable.sh`) that does not bump the version or call Tauri
+- Burn-in checklist for a future v3.20.14 Portable ship: `docs/release-v3.20.14-burn-in-zh.md` (do **not** tag until #49 is on main; #51/#53 already landed, do not squash overlapping #52)
+
+### Changed
+
+- Release workflow: do not cancel an in-flight Windows MSI/Portable job; publish when Windows artifacts exist even if the macOS matrix cell failed (`needs.release.result == 'success'` skipped publish on v3.20.12); `pnpm tauri build --ci --bundles msi`; secrets via `env:`; `workflow_dispatch` `dry_run` packages without creating a GitHub Release
 
 ### Skipped (intentionally)
 

@@ -11,6 +11,10 @@ name: Release
 # macOS Apple Developer signing/notarization is optional: when APPLE_* secrets
 # are absent the job still produces unsigned .app / .dmg / .zip for local use
 # (Gatekeeper may require right-click → Open, or `xattr -cr` once).
+#
+# Windows Portable packaging is extracted to scripts/package-windows-release.py
+# (CI dry-run: scripts/ci/dry-run-windows-portable.sh). workflow_dispatch dry_run
+# builds artifacts without creating/updating the GitHub Release.
 
 on:
   push:
@@ -25,6 +29,11 @@ on:
         description: 'Existing tag to publish (e.g. v0.1.0)'
         required: true
         type: string
+      dry_run:
+        description: 'Package artifacts only; do not create/update the GitHub Release'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,11 +43,13 @@ env:
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
-  cancel-in-progress: true
+  # Never cancel an in-flight Windows MSI/Portable build (re-dispatch used to).
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     environment: release
     # Unsigned macOS must not block Windows Portable/MSI publish.
     continue-on-error: ${{ matrix.artifact == 'macOS' }}
@@ -79,7 +90,7 @@ jobs:
       - name: Get pnpm store directory
         id: pnpm-store
         shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm cache
         uses: actions/cache@v5
@@ -93,14 +104,18 @@ jobs:
 
       - name: Prepare Tauri signing key
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_RAW: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY_RAW}" ]; then
             echo "❌ TAURI_SIGNING_PRIVATE_KEY Secret 为空或不存在" >&2
             echo "请检查 GitHub 仓库 Settings > Secrets and variables > Actions" >&2
             exit 1
           fi
 
-          RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
+          RAW="${TAURI_SIGNING_PRIVATE_KEY_RAW}"
           KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
           if echo "$RAW" | head -n1 | grep -q '^untrusted comment:'; then
             printf '%s\n' "$RAW" > "$KEY_PATH"
@@ -134,8 +149,8 @@ jobs:
             exit 1
           fi
           echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_B64" >> "$GITHUB_ENV"
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> $GITHUB_ENV
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" >> "$GITHUB_ENV"
           fi
           echo "✅ Tauri signing key prepared"
 
@@ -143,10 +158,17 @@ jobs:
         if: runner.os == 'macOS'
         id: apple
         shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ] && [ -n "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ] \
-             && [ -n "${{ secrets.KEYCHAIN_PASSWORD }}" ] && [ -n "${{ secrets.APPLE_ID }}" ] \
-             && [ -n "${{ secrets.APPLE_PASSWORD }}" ] && [ -n "${{ secrets.APPLE_TEAM_ID }}" ]; then
+          if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
+             && [ -n "${KEYCHAIN_PASSWORD}" ] && [ -n "${APPLE_ID}" ] \
+             && [ -n "${APPLE_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "✅ Apple signing/notarization secrets present"
           else
@@ -157,26 +179,30 @@ jobs:
       - name: Import Apple signing certificate
         if: runner.os == 'macOS' && steps.apple.outputs.available == 'true'
         shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
+          printf '%s' "${APPLE_CERTIFICATE}" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
 
           ORIGINAL_DEFAULT_KEYCHAIN=$(security default-keychain -d user | tr -d '"' | xargs)
           echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
 
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
-          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "$KEYCHAIN_PATH"
 
           security import "$CERT_PATH" \
             -k "$KEYCHAIN_PATH" \
-            -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "$KEYCHAIN_PATH"
 
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
             | grep "Developer ID Application" | grep -oE '"[^"]+"' | head -1 | tr -d '"')
@@ -212,7 +238,9 @@ jobs:
       - name: Build Tauri App (Windows x64)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: pnpm tauri build
+        timeout-minutes: 60
+        # --bundles msi skips NSIS (targets: all). Portable zip is packed from the exe.
+        run: pnpm tauri build --ci --bundles msi
 
       - name: Prepare macOS assets
         if: runner.os == 'macOS'
@@ -317,46 +345,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          $VERSION = $env:RELEASE_TAG
-          $targetRoot = 'src-tauri/target/release'
-
-          $msi = Get-ChildItem -Path (Join-Path $targetRoot 'bundle/msi') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -eq $msi) {
-            $msi = Get-ChildItem -Path (Join-Path $targetRoot 'bundle') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if ($null -eq $msi) {
-            throw 'No Windows x64 MSI installer found'
-          }
-          $dest = "CC-Switch-$VERSION-Windows.msi"
-          Copy-Item $msi.FullName (Join-Path release-assets $dest)
-          Write-Host "Installer copied: $dest"
-          $sigPath = "$($msi.FullName).sig"
-          if (Test-Path $sigPath) {
-            Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
-            Write-Host "Signature copied: $dest.sig"
-          } else {
-            Write-Warning "Signature not found for $($msi.Name)"
-          }
-
-          $exePath = @(
-            'src-tauri/target/release/cc-switch.exe',
-            'src-tauri/target/x86_64-pc-windows-msvc/release/cc-switch.exe'
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if ($null -eq $exePath) {
-            throw 'Portable exe not found'
-          }
-          $portableDir = 'release-assets/CC-Switch-Portable'
-          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
-          Copy-Item $exePath $portableDir
-          @(
-            '# CC Switch portable build marker',
-            'portable=true'
-          ) | Set-Content -Path (Join-Path $portableDir 'portable.ini') -Encoding UTF8
-          $portableZip = "release-assets/CC-Switch-$VERSION-Windows-Portable.zip"
-          Compress-Archive -Path "$portableDir/*" -DestinationPath $portableZip -Force
-          Remove-Item -Recurse -Force $portableDir
-          Write-Host "Windows portable zip created: CC-Switch-$VERSION-Windows-Portable.zip"
+          $py = Get-Command python3 -ErrorAction SilentlyContinue
+          if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+          if (-not $py) { throw 'python3/python not found on the Windows runner' }
+          & $py.Source scripts/package-windows-release.py --version $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: List prepared assets
         shell: bash
@@ -392,7 +385,11 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-22.04
     needs: release
-    if: ${{ always() && !cancelled() && needs.release.result == 'success' }}
+    # v3.20.12: Windows green + macOS red skipped publish because
+    # needs.release.result == 'success' is false when any matrix cell fails
+    # (continue-on-error does not always flip the aggregate). The Windows
+    # Portable+MSI assert below is the real gate. dry_run skips GitHub Release.
+    if: ${{ always() && !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
     permissions:
       contents: write
     steps:
@@ -408,52 +405,11 @@ jobs:
 
       - name: Require Windows x64 Portable and MSI
         shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${RELEASE_TAG}"
-          missing=0
-          if [ ! -f "release-assets/CC-Switch-${TAG}-Windows.msi" ]; then
-            echo "Windows x64 MSI is required; refusing to publish." >&2
-            missing=1
-          fi
-          if [ ! -f "release-assets/CC-Switch-${TAG}-Windows-Portable.zip" ]; then
-            echo "Windows x64 Portable zip is required; refusing to publish." >&2
-            missing=1
-          fi
-          if [ ! -f "release-assets/CC-Switch-${TAG}-macOS.zip" ] && [ ! -f "release-assets/CC-Switch-${TAG}-macOS.dmg" ]; then
-            echo "⚠️ macOS zip/dmg missing (unsigned build may have failed); publishing Windows anyway." >&2
-          fi
-          ls -la release-assets || true
-          exit "$missing"
+        run: bash scripts/ci/assert-windows-release-assets.sh "${RELEASE_TAG}" release-assets
 
       - name: Compose release notes
         shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${RELEASE_TAG}"
-          NOTES="docs/release-notes/${TAG}.md"
-          if [ ! -f "$NOTES" ]; then
-            echo "Refusing to publish ${TAG}: missing ${NOTES} with 修复的问题 / 优化 / 自测." >&2
-            exit 1
-          fi
-          for heading in '修复的问题' '优化' '自测'; do
-            if ! grep -q "$heading" "$NOTES"; then
-              echo "Refusing to publish ${TAG}: ${NOTES} must contain ## ${heading}." >&2
-              exit 1
-            fi
-          done
-          cp "$NOTES" release-notes.md
-          if ! grep -q '下载' release-notes.md; then
-            {
-              echo
-              echo "## 下载"
-              echo
-              echo "- **macOS（推荐）**：\`CC-Switch-${TAG}-macOS.dmg\` 或 \`CC-Switch-${TAG}-macOS.zip\`"
-              echo "- **Windows x64 绿色版**：\`CC-Switch-${TAG}-Windows-Portable.zip\`"
-              echo "- **Windows x64 安装包**：\`CC-Switch-${TAG}-Windows.msi\`"
-            } >> release-notes.md
-          fi
-          cat release-notes.md
+        run: bash scripts/ci/compose-release-notes.sh "${RELEASE_TAG}" release-notes.md
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v3
@@ -470,7 +426,7 @@ jobs:
     name: Assemble latest.json
     runs-on: ubuntu-22.04
     needs: publish-release
-    if: ${{ success() }}
+    if: ${{ always() && !cancelled() && needs.publish-release.result == 'success' }}
     permissions:
       contents: write
     steps:
@@ -489,6 +445,7 @@ jobs:
           gh release download "$TAG" --dir dl --repo "$GITHUB_REPOSITORY"
           ls -la dl || true
       - name: Generate latest.json
+        shell: bash
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ env.RELEASE_TAG }}
