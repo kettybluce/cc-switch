@@ -30,7 +30,7 @@ FILTER="${TEST_FILTER:-all}"
 cd /app
 
 run_cargo_test() {
-  cargo test --offline --locked --manifest-path src-tauri/Cargo.toml "$@" -- --test-threads="${THREADS}"
+  cargo test --offline --locked --no-fail-fast --manifest-path src-tauri/Cargo.toml "$@" -- --test-threads="${THREADS}"
 }
 
 if [[ $# -gt 0 ]]; then
