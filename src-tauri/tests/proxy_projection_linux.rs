@@ -314,6 +314,7 @@ async fn linux_standin_projects_claude_and_codex_proxy_settings() {
     let codex_auth = get_codex_auth_path();
     assert_linux_standin_path(&claude_settings);
     assert_linux_standin_path(&codex_config);
+    assert_linux_standin_path(&codex_auth);
     assert!(
         claude_settings
             .to_string_lossy()
@@ -352,7 +353,6 @@ async fn linux_standin_projects_claude_and_codex_proxy_settings() {
         claude_before["env"]["ANTHROPIC_BASE_URL"],
         json!("https://api.anthropic.example")
     );
-    let codex_auth_before: Value = read_json_file(&codex_auth).expect("Codex auth before");
     let codex_config_before = fs::read_to_string(&codex_config).expect("Codex config before");
     assert!(codex_config_before.contains("https://api.openai.example/v1"));
 
@@ -402,11 +402,19 @@ async fn linux_standin_projects_claude_and_codex_proxy_settings() {
         !codex_live.contains("https://api.openai.example/v1"),
         "Codex live must not keep the upstream endpoint during takeover"
     );
-    let codex_auth_after: Value = read_json_file(&codex_auth).expect("Codex auth after");
-    assert_eq!(
-        codex_auth_after, codex_auth_before,
-        "Codex auth.json is not the projection target for custom-key takeover"
-    );
+    // Third-party Codex takeover projects config.toml (placeholder + local
+    // /v1). auth.json may be absent after a preservation-off switch and is
+    // not the settings projection target.
+    if let Ok(auth_after) = read_json_file::<Value>(&codex_auth) {
+        let auth_url = auth_after
+            .get("OPENAI_BASE_URL")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            !auth_url.contains("127.0.0.1"),
+            "Codex auth.json must not receive the proxy origin: {auth_after}"
+        );
+    }
 
     let (claude_enabled, _) = state.db.get_proxy_flags_sync("claude");
     let (codex_enabled, _) = state.db.get_proxy_flags_sync("codex");
