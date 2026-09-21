@@ -40,6 +40,8 @@ jobs:
   release:
     runs-on: ${{ matrix.os }}
     environment: release
+    # Unsigned macOS must not block Windows Portable/MSI publish.
+    continue-on-error: ${{ matrix.artifact == 'macOS' }}
     strategy:
       fail-fast: false
       matrix:
@@ -192,7 +194,6 @@ jobs:
         shell: bash
         timeout-minutes: 60
         env:
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -200,6 +201,12 @@ jobs:
           set -euo pipefail
           # Prefer universal when both targets are available; unsigned local CI
           # still produces a usable Apple Silicon + Intel binary.
+          # Do not export an empty APPLE_SIGNING_IDENTITY: Tauri then signs with
+          # identity "" and fails ("item could not be found in the keychain").
+          # Import step writes a real identity to GITHUB_ENV when certs exist.
+          if [ "${{ steps.apple.outputs.available }}" != "true" ]; then
+            unset APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID || true
+          fi
           pnpm tauri build --target universal-apple-darwin
 
       - name: Build Tauri App (Windows x64)
@@ -399,7 +406,7 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Require Windows x64 MSI and macOS zip
+      - name: Require Windows x64 Portable and MSI
         shell: bash
         run: |
           set -euo pipefail
@@ -409,9 +416,12 @@ jobs:
             echo "Windows x64 MSI is required; refusing to publish." >&2
             missing=1
           fi
-          if [ ! -f "release-assets/CC-Switch-${TAG}-macOS.zip" ] && [ ! -f "release-assets/CC-Switch-${TAG}-macOS.dmg" ]; then
-            echo "macOS zip or dmg is required; refusing to publish." >&2
+          if [ ! -f "release-assets/CC-Switch-${TAG}-Windows-Portable.zip" ]; then
+            echo "Windows x64 Portable zip is required; refusing to publish." >&2
             missing=1
+          fi
+          if [ ! -f "release-assets/CC-Switch-${TAG}-macOS.zip" ] && [ ! -f "release-assets/CC-Switch-${TAG}-macOS.dmg" ]; then
+            echo "⚠️ macOS zip/dmg missing (unsigned build may have failed); publishing Windows anyway." >&2
           fi
           ls -la release-assets || true
           exit "$missing"
