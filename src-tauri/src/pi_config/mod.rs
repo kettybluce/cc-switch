@@ -860,6 +860,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn linux_standin_agent_dir_is_posix_and_never_windows_c_mirror() {
         let standin = PathBuf::from(
