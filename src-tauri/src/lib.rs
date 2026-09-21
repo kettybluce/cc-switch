@@ -50,6 +50,15 @@ pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile, SCHEMA_VERSION};
+/// 全局出站 HTTP 客户端（拉取模型 / 用量 / OAuth 共用）。
+///
+/// 集成测试必须在独立 `--test` 进程里调用这些函数：`--lib` 里对
+/// `GLOBAL_CLIENT` 做 `apply_proxy` 会和其他 outbound 单测抢状态。
+pub mod global_http_client {
+    pub use crate::proxy::http_client::{
+        apply_proxy, get_current_proxy_url, init, is_proxy_enabled, mask_url, validate_proxy,
+    };
+}
 pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
 pub use error::AppError;
 pub use grok_config::get_grok_config_path;
@@ -62,6 +71,7 @@ pub use mcp::{
 };
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
+pub use services::model_fetch::{build_models_url_candidates, fetch_models, FetchedModel};
 pub use services::session_usage::{
     get_data_source_breakdown, session_sync_mutex, sync_all_unlocked, DataSourceSummary,
     SessionSyncResult,
