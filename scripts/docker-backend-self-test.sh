@@ -7,6 +7,18 @@ set -euo pipefail
 
 TEST_HOME="${CC_SWITCH_TEST_HOME:-/tmp/cc-switch-test-home}"
 mkdir -p "${TEST_HOME}" /app/dist
+
+# Named volumes are root-owned. CI cargo tests run as a regular user; stay
+# consistent so paths like /nonexistent/directory remain unwritable.
+if [[ "$(id -u)" -eq 0 && -z "${CC_SWITCH_DROPPED_ROOT:-}" ]]; then
+  chown tester:tester "${TEST_HOME}" /app/dist 2>/dev/null || chmod 1777 "${TEST_HOME}" /app/dist
+  export CC_SWITCH_DROPPED_ROOT=1
+  export HOME=/home/tester
+  export USER=tester
+  export LOGNAME=tester
+  exec runuser -u tester --preserve-environment -- "$0" "$@"
+fi
+
 # Isolation is CC_SWITCH_TEST_HOME (see src-tauri/src/config.rs). Do not
 # rewrite HOME here: cargo fingerprints HOME and would rebuild the crate.
 export CC_SWITCH_TEST_HOME="${TEST_HOME}"

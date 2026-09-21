@@ -25,6 +25,11 @@ FAILURE_STDOUT_RE = re.compile(r"^---- (.+) stdout ----$")
 FAILURE_LIST_RE = re.compile(r"^    (\S.+)$")
 RUNNING_RE = re.compile(r"^\s*Running (unittests |tests/|Doc-tests )(.+)$")
 COMPILE_ERR_RE = re.compile(r"^error(\[E\d+\])?:")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def clean_line(line: str) -> str:
+    return ANSI_RE.sub("", line.replace("\r", "")).rstrip()
 
 
 def parse_cargo_log(text: str) -> dict:
@@ -63,7 +68,8 @@ def parse_cargo_log(text: str) -> dict:
         targets.append(current)
         return current
 
-    for line in lines:
+    for raw in lines:
+        line = clean_line(raw)
         running = RUNNING_RE.match(line)
         if running:
             flush_snippet()
@@ -329,7 +335,7 @@ failures:
 
 test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.50s
 
-     Running tests/proxy_projection_linux.rs (target/debug/deps/proxy_projection_linux-xyz)
+\x1b[1m\x1b[92m     Running\x1b[0m tests/proxy_projection_linux.rs (target/debug/deps/proxy_projection_linux-xyz)
 
 running 2 tests
 test linux_standin_create_openai_completions_pins_developer_role_false ... ok
@@ -343,6 +349,7 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
     assert parsed["totals"]["ignored"] == 1, parsed
     assert parsed["failed_names"] == ["boom"], parsed
     assert any("SCHEMA_VERSION == 18" in line for line in parsed["failed_snippets"]["boom"])
+    assert any("proxy_projection_linux" in t["name"] for t in parsed["targets"]), parsed["targets"]
     md = render_markdown(
         {
             "generated_at": "2026-09-21 00:00",
