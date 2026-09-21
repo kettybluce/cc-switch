@@ -139,6 +139,10 @@ Reset the volume if needed / 需要时重置卷：
 docker volume rm cc-switch-test-home
 ```
 
+The entrypoint starts as root only long enough to `chown -R tester` that volume, then drops to uid 1000. Leftover root-owned `.cc-switch` from an older image will otherwise fail with `Permission denied` and poison integration-test mutexes.
+
+入口脚本仅以 root 把卷 `chown -R tester`，随后降到 uid 1000。旧镜像留下的 root 文件会导致 `Permission denied` 并毒化夹具互斥锁。
+
 ## CI
 
 Default GitHub Actions **does not** build this image (Rust + GTK compile is too heavy for every PR). CI still runs the existing frontend + backend jobs on the host runners (backend `cargo test` is the merge gate).
