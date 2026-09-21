@@ -603,6 +603,15 @@ impl Database {
         if app_type == "pi" {
             return self.set_pi_takeover_enabled(enabled);
         }
+        if assert_schema18_proxy_config_app_type(app_type).is_err() {
+            // SCHEMA 18 has no row (`claude-desktop`, unknown). A disable used
+            // to be UPDATE 0 rows; keep that no-op so profile switch can
+            // restore Desktop live files without inserting a CHECK-illegal row.
+            if !enabled {
+                return Ok(());
+            }
+            return Err(schema18_proxy_config_app_type_error(app_type));
+        }
         let mut config = self.get_proxy_config_for_app(app_type).await?;
         config.enabled = enabled;
         self.update_proxy_config_for_app(config).await
@@ -1144,6 +1153,18 @@ mod tests {
             .expect("count claude-desktop rows")
         };
         assert_eq!(desktop_rows, 0);
+
+        db.set_app_takeover_enabled("claude-desktop", false).await?;
+        let err = db
+            .set_app_takeover_enabled("claude-desktop", true)
+            .await
+            .unwrap_err();
+        match err {
+            AppError::InvalidInput(msg) => {
+                assert!(msg.contains("claude-desktop"), "{msg}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
         assert_eq!(crate::database::SCHEMA_VERSION, 18);
 
         Ok(())
