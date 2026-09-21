@@ -605,3 +605,345 @@ async fn linux_standin_restore_disable_cleans_pi_claude_codex_projection() {
             .running
     );
 }
+
+fn pi_openai_provider(id: &str, name: &str, model: &str, url: &str, key: &str) -> Provider {
+    let mut provider = Provider::with_id(
+        id.to_string(),
+        name.to_string(),
+        json!({
+            "name": name,
+            "baseUrl": url,
+            "apiKey": key,
+            "api": "openai-completions",
+            "models": [{ "id": model }]
+        }),
+        None,
+    );
+    provider.category = Some("custom".to_string());
+    provider
+}
+
+fn setup_linux_standin_pi_home() -> (PathBuf, PathBuf, PathBuf) {
+    reset_test_fs();
+    let test_home = ensure_test_home();
+    let user_home = wsl_standin_user_home(test_home);
+    let (_claude_dir, _codex_dir, pi_agent) = apply_wsl_standin_overrides(&user_home);
+    let models_path = pi_agent.join("models.json");
+    let settings_path = pi_agent.join("settings.json");
+    let auth_path = pi_agent.parent().expect("Pi root").join("auth.json");
+    fs::write(&models_path, r#"{"providers":{}}"#).expect("seed empty models.json");
+    fs::write(
+        &settings_path,
+        r#"{"theme":"keep-me","sessionDir":"/tmp/pi-sessions"}"#,
+    )
+    .expect("seed Pi settings.json");
+    fs::write(&auth_path, PI_AUTH_FIXTURE).expect("seed Pi auth.json");
+    assert_linux_standin_path(&models_path);
+    assert!(
+        models_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("tfdx8045/.pi/agent/models.json"),
+        "CRUD must write the WSL stand-in agent models.json: {}",
+        models_path.display()
+    );
+    (models_path, settings_path, auth_path)
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across Pi CRUD"
+)]
+async fn linux_standin_create_openai_completions_pins_developer_role_false() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (models_path, settings_path, auth_path) = setup_linux_standin_pi_home();
+    let settings_before = fs::read_to_string(&settings_path).expect("settings before");
+    let auth_before = fs::read_to_string(&auth_path).expect("auth before");
+
+    let state = create_test_state().expect("create test state");
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        pi_openai_provider(
+            "standin-yum",
+            "Yum",
+            "glm-5.1",
+            "https://api.llm.prd.yumc.local/v1",
+            "yum-key",
+        ),
+        true,
+    )
+    .expect("create live openai-completions provider");
+
+    let live = read_json(&models_path);
+    assert_eq!(
+        live["providers"]["standin-yum"]["api"],
+        json!("openai-completions")
+    );
+    assert_eq!(
+        live["providers"]["standin-yum"]["baseUrl"],
+        json!("https://api.llm.prd.yumc.local/v1")
+    );
+    assert_eq!(live["providers"]["standin-yum"]["apiKey"], json!("yum-key"));
+    assert_eq!(
+        live["providers"]["standin-yum"]["compat"]["supportsDeveloperRole"],
+        json!(false)
+    );
+    assert_eq!(
+        live["providers"]["standin-yum"]["models"][0]["compat"]["supportsDeveloperRole"],
+        json!(false)
+    );
+    assert_eq!(
+        fs::read_to_string(&settings_path).expect("settings after create"),
+        settings_before,
+        "create must not rewrite Pi settings.json defaults"
+    );
+    assert_eq!(
+        fs::read_to_string(&auth_path).expect("auth after create"),
+        auth_before,
+        "create must not touch auth.json"
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across Pi CRUD"
+)]
+async fn linux_standin_update_writes_url_and_key_to_models_json() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (models_path, _settings_path, auth_path) = setup_linux_standin_pi_home();
+    let auth_before = fs::read_to_string(&auth_path).expect("auth before");
+
+    let state = create_test_state().expect("create test state");
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        pi_openai_provider(
+            "standin-yum",
+            "Yum",
+            "glm-5.1",
+            "https://api.llm.prd.yumc.local/v1",
+            "yum-key",
+        ),
+        true,
+    )
+    .expect("create live provider");
+
+    let mut updated = pi_openai_provider(
+        "standin-yum",
+        "Yum",
+        "glm-5.1",
+        "https://rotated.example/v1",
+        "rotated-key",
+    );
+    updated.settings_config["unknownField"] = json!({ "keep": true });
+    ProviderService::update(&state, AppType::Pi, Some("standin-yum"), updated)
+        .expect("update live url/key");
+
+    let live = read_json(&models_path);
+    assert_eq!(
+        live["providers"]["standin-yum"]["baseUrl"],
+        json!("https://rotated.example/v1")
+    );
+    assert_eq!(
+        live["providers"]["standin-yum"]["apiKey"],
+        json!("rotated-key")
+    );
+    assert_eq!(
+        live["providers"]["standin-yum"]["unknownField"],
+        json!({ "keep": true })
+    );
+    assert_eq!(
+        live["providers"]["standin-yum"]["compat"]["supportsDeveloperRole"],
+        json!(false)
+    );
+    assert!(
+        !live["providers"]["standin-yum"]["baseUrl"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("15721"),
+        "update without takeover must keep the real upstream"
+    );
+    assert_eq!(
+        fs::read_to_string(&auth_path).expect("auth after update"),
+        auth_before
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across Pi CRUD"
+)]
+async fn linux_standin_delete_removes_models_json_and_invalidates_takeover_backup() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (models_path, settings_path, auth_path) = setup_linux_standin_pi_home();
+    let auth_before = fs::read_to_string(&auth_path).expect("auth before");
+    let settings_before = fs::read_to_string(&settings_path).expect("settings before");
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        pi_openai_provider(
+            "keep",
+            "Keep",
+            "keep-model",
+            "https://keep.example/v1",
+            "keep-key",
+        ),
+        true,
+    )
+    .expect("add keep");
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        pi_openai_provider(
+            "gone",
+            "Gone",
+            "gone-model",
+            "https://gone.example/v1",
+            "gone-key",
+        ),
+        true,
+    )
+    .expect("add gone");
+
+    state
+        .proxy_service
+        .set_takeover_for_app("pi", true)
+        .await
+        .expect("enable Pi takeover to seed a whole-file backup");
+    assert!(state
+        .db
+        .get_live_backup("pi")
+        .await
+        .expect("read seeded backup")
+        .is_some());
+
+    ProviderService::delete(&state, AppType::Pi, "gone").expect("delete live gone");
+
+    let projected = read_json(&models_path);
+    assert!(
+        projected["providers"].get("gone").is_none(),
+        "delete must drop the node from live models.json"
+    );
+    assert!(projected["providers"].get("keep").is_some());
+
+    let backup = state
+        .db
+        .get_live_backup("pi")
+        .await
+        .expect("read refreshed backup")
+        .expect("valid backup is refreshed, not left stale");
+    let parsed: Value =
+        serde_json::from_str(&backup.original_config).expect("parse refreshed backup");
+    assert!(
+        parsed["providers"].get("gone").is_none(),
+        "takeover backup must drop the deleted node so disable cannot restore it"
+    );
+    assert!(parsed["providers"].get("keep").is_some());
+
+    state
+        .proxy_service
+        .set_takeover_for_app("pi", false)
+        .await
+        .expect("disable Pi takeover");
+
+    let restored = read_json(&models_path);
+    assert!(
+        restored["providers"].get("gone").is_none(),
+        "disable must not resurrect the deleted provider"
+    );
+    assert_eq!(
+        restored["providers"]["keep"]["baseUrl"],
+        json!("https://keep.example/v1")
+    );
+    assert_eq!(restored["providers"]["keep"]["apiKey"], json!("keep-key"));
+    assert_eq!(
+        fs::read_to_string(&auth_path).expect("auth after delete"),
+        auth_before
+    );
+    assert_eq!(
+        fs::read_to_string(&settings_path).expect("settings after delete"),
+        settings_before,
+        "delete of a non-default provider must not rewrite settings.json"
+    );
+    assert!(state
+        .db
+        .get_live_backup("pi")
+        .await
+        .expect("backup after disable")
+        .is_none());
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across Pi CRUD"
+)]
+async fn linux_standin_delete_default_reassigns_settings_default_provider() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (models_path, settings_path, auth_path) = setup_linux_standin_pi_home();
+    let auth_before = fs::read_to_string(&auth_path).expect("auth before");
+
+    let state = create_test_state().expect("create test state");
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        pi_openai_provider(
+            "keep",
+            "Keep",
+            "keep-model",
+            "https://keep.example/v1",
+            "keep-key",
+        ),
+        true,
+    )
+    .expect("add keep");
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        pi_openai_provider(
+            "gone",
+            "Gone",
+            "gone-model",
+            "https://gone.example/v1",
+            "gone-key",
+        ),
+        true,
+    )
+    .expect("add gone");
+
+    fs::write(
+        &settings_path,
+        r#"{"defaultProvider":"gone","defaultModel":"gone-model","theme":"keep-me","sessionDir":"/tmp/pi-sessions"}"#,
+    )
+    .expect("set live default to gone");
+
+    ProviderService::delete(&state, AppType::Pi, "gone").expect("delete default provider");
+
+    let live = read_json(&models_path);
+    assert!(live["providers"].get("gone").is_none());
+    assert!(live["providers"].get("keep").is_some());
+
+    let settings = read_json(&settings_path);
+    assert_eq!(settings["defaultProvider"], json!("keep"));
+    assert_eq!(settings["defaultModel"], json!("keep-model"));
+    assert_eq!(settings["theme"], json!("keep-me"));
+    assert_eq!(settings["sessionDir"], json!("/tmp/pi-sessions"));
+    assert_eq!(
+        fs::read_to_string(&auth_path).expect("auth after default delete"),
+        auth_before,
+        "delete default must not touch auth.json"
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
