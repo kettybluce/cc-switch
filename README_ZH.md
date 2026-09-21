@@ -543,7 +543,7 @@ pnpm test:unit --coverage
 
 ```bash
 # Ubuntu 22.04 镜像 + 容器内 /tmp 下隔离的 CC_SWITCH_TEST_HOME
-docker compose -f docker-compose.test.yml run --rm backend-self-test
+docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 # 封装：pnpm test:docker   /   make test-docker
 ```
 

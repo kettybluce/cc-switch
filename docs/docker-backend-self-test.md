@@ -26,7 +26,7 @@ From the repo root (Docker + Compose v2 required):
 ```bash
 # Default: Linux fixture / proxy projection only (minimum gate)
 # 默认：只跑 proxy_projection_linux（最低门槛）
-docker compose -f docker-compose.test.yml run --rm backend-self-test
+docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 
 # Same via wrappers
 pnpm test:docker
@@ -46,7 +46,7 @@ Broader crate (compiles extra tests on first run; slower):
 更广的 crate 测试（首次会再编译其余用例，更慢）：
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm -e TEST_FILTER=all backend-self-test
+docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
 # or
 pnpm test:docker:all
 make test-docker-all
@@ -57,7 +57,7 @@ Any other `TEST_FILTER` is passed to cargo as a name substring (same as `cargo t
 其它 `TEST_FILTER` 会当作 cargo 测试名子串（与 `cargo test FILTER` 相同）：
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm -e TEST_FILTER=pi_takeover_projects backend-self-test
+docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=pi_takeover_projects backend-self-test
 ```
 
 Override the cargo invocation entirely:
@@ -65,7 +65,7 @@ Override the cargo invocation entirely:
 完全覆盖 cargo 命令：
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm backend-self-test \
+docker compose -f docker-compose.test.yml run --build --rm backend-self-test \
   cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib linux_standin_agent_dir
 ```
 

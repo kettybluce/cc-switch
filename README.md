@@ -538,7 +538,7 @@ pnpm test:unit --coverage
 
 ```bash
 # Ubuntu 22.04 image + isolated CC_SWITCH_TEST_HOME under /tmp
-docker compose -f docker-compose.test.yml run --rm backend-self-test
+docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 # wrappers: pnpm test:docker   /   make test-docker
 ```
 

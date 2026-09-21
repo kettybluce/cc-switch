@@ -260,7 +260,7 @@ jobs:
 
   # Cheap syntax check only. Building Dockerfile.test (Rust + GTK) is too
   # heavy for every PR; run the image locally / in cloud with:
-  #   docker compose -f docker-compose.test.yml run --rm backend-self-test
+  #   docker compose -f docker-compose.test.yml run --build --rm backend-self-test
   docker-compose-config:
     name: Docker compose config
     runs-on: ubuntu-latest

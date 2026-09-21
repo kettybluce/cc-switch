@@ -7,13 +7,13 @@ CARGO_TEST_THREADS ?= 1
 COMPOSE := docker compose -f docker-compose.test.yml
 
 test-docker:
-	$(COMPOSE) run --rm \
+	$(COMPOSE) run --build --rm \
 		-e TEST_FILTER="$(TEST_FILTER)" \
 		-e CARGO_TEST_THREADS="$(CARGO_TEST_THREADS)" \
 		backend-self-test
 
 test-docker-all:
-	$(COMPOSE) run --rm \
+	$(COMPOSE) run --build --rm \
 		-e TEST_FILTER=all \
 		-e CARGO_TEST_THREADS="$(CARGO_TEST_THREADS)" \
 		backend-self-test

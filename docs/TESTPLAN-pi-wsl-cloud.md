@@ -46,7 +46,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 # cargo test --manifest-path src-tauri/Cargo.toml
 
 # Docker (no host GTK install, no Windows C:):
-# docker compose -f docker-compose.test.yml run --rm backend-self-test
+# docker compose -f docker-compose.test.yml run --build --rm backend-self-test
 # See docs/docker-backend-self-test.md
 ```
 
