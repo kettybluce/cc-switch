@@ -1201,6 +1201,8 @@ pub fn run() {
                 }
             }
 
+            spawn_unix_termination_handlers(app.handle().clone());
+
             // 异常退出恢复 + 代理状态自动恢复
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -1723,7 +1725,8 @@ pub fn run() {
     app.run(|app_handle, event| {
         // 处理退出请求（所有平台）
         if let RunEvent::ExitRequested { api, code, .. } = &event {
-            match classify_exit_request(*code) {
+            let has_main_window = app_handle.get_webview_window("main").is_some();
+            match classify_exit_request(*code, has_main_window) {
                 // code 为 None 表示运行时自动触发（如隐藏窗口的 WebView 被回收导致无存活窗口），
                 // 此时应仅阻止退出、保持托盘后台运行。
                 ExitRequestAction::StayInTray => {
@@ -1962,7 +1965,7 @@ async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static 
     apps
 }
 
-async fn restore_proxy_state_on_startup(state: &store::AppState) {
+pub(crate) async fn restore_proxy_state_on_startup(state: &store::AppState) {
     // 收集需要恢复接管的应用列表（从 proxy_config.enabled 读取）
     let apps_to_restore = enabled_proxy_apps_on_startup(&state.db).await;
 
@@ -1998,7 +2001,7 @@ async fn restore_proxy_state_on_startup(state: &store::AppState) {
     }
 }
 
-fn initialize_common_config_snippets(state: &store::AppState) {
+pub(crate) fn initialize_common_config_snippets(state: &store::AppState) {
     // Auto-extract common config snippets from clean live files when snippet is missing.
     // This must run before proxy takeover is restored on startup, otherwise we'd read
     // proxy-placeholder configs instead of the user's actual live settings.
@@ -2218,8 +2221,9 @@ fn show_database_init_error_dialog(
 /// 可能与插件退出钩子争用同一状态而死锁。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitRequestAction {
-    /// `code` 为 `None`：运行时自动触发（如隐藏窗口的 WebView 被回收导致无存活
-    /// 窗口），阻止退出、保持托盘后台运行。
+    /// `code` 为 `None` 且无主窗口：运行时自动触发（如隐藏窗口的 WebView 被回收
+    /// 导致无存活窗口），阻止退出、保持托盘后台运行。
+    /// 有主窗口时的 `None` 按用户退出清理，减少 SIGTERM/关窗被记成「异常退出」。
     StayInTray,
     /// `code` 为 `RESTART_EXIT_CODE`：`app.restart()` / 自更新 relaunch 发起的
     /// 重启，不拦截、不做自定义清理，交还 Tauri 默认 re-exec 流程。
@@ -2228,11 +2232,51 @@ enum ExitRequestAction {
     CleanupAndExit,
 }
 
-fn classify_exit_request(code: Option<i32>) -> ExitRequestAction {
+fn classify_exit_request(code: Option<i32>, has_main_window: bool) -> ExitRequestAction {
     match code {
+        None if has_main_window => ExitRequestAction::CleanupAndExit,
         None => ExitRequestAction::StayInTray,
         Some(tauri::RESTART_EXIT_CODE) => ExitRequestAction::DeferToTauriRestart,
         Some(_) => ExitRequestAction::CleanupAndExit,
+    }
+}
+
+/// Unix `SIGTERM`/`SIGINT` 走与托盘退出相同的 Live 恢复，避免 kill 后残留接管。
+fn spawn_unix_termination_handlers(app_handle: tauri::AppHandle) {
+    #[cfg(unix)]
+    {
+        tauri::async_runtime::spawn(async move {
+            let mut sigterm =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(signal) => signal,
+                    Err(error) => {
+                        log::warn!("无法监听 SIGTERM: {error}");
+                        return;
+                    }
+                };
+            let mut sigint =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                    Ok(signal) => signal,
+                    Err(error) => {
+                        log::warn!("无法监听 SIGINT: {error}");
+                        return;
+                    }
+                };
+            tokio::select! {
+                _ = sigterm.recv() => log::info!("收到 SIGTERM，按托盘退出路径恢复 Live"),
+                _ = sigint.recv() => log::info!("收到 SIGINT，按托盘退出路径恢复 Live"),
+            }
+            save_window_state_before_exit(&app_handle);
+            cleanup_before_exit(&app_handle).await;
+            remove_tray_icon_before_exit(&app_handle);
+            destroy_single_instance_lock(&app_handle);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            std::process::exit(0);
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = app_handle;
     }
 }
 
@@ -2372,13 +2416,24 @@ mod tests {
 
     #[test]
     fn no_code_keeps_app_alive_in_tray() {
-        assert_eq!(classify_exit_request(None), ExitRequestAction::StayInTray);
+        assert_eq!(
+            classify_exit_request(None, false),
+            ExitRequestAction::StayInTray
+        );
+    }
+
+    #[test]
+    fn no_code_with_main_window_cleans_up_like_user_exit() {
+        assert_eq!(
+            classify_exit_request(None, true),
+            ExitRequestAction::CleanupAndExit
+        );
     }
 
     #[test]
     fn restart_exit_code_defers_to_tauri_default_restart() {
         assert_eq!(
-            classify_exit_request(Some(tauri::RESTART_EXIT_CODE)),
+            classify_exit_request(Some(tauri::RESTART_EXIT_CODE), false),
             ExitRequestAction::DeferToTauriRestart
         );
     }
@@ -2386,11 +2441,11 @@ mod tests {
     #[test]
     fn user_exit_codes_run_cleanup_then_exit() {
         assert_eq!(
-            classify_exit_request(Some(0)),
+            classify_exit_request(Some(0), true),
             ExitRequestAction::CleanupAndExit
         );
         assert_eq!(
-            classify_exit_request(Some(1)),
+            classify_exit_request(Some(1), false),
             ExitRequestAction::CleanupAndExit
         );
     }
