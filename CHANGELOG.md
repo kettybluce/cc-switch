@@ -5,6 +5,28 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Wave C (SCHEMA 18)
+
+More official `farion1231/cc-switch` cherry-picks onto fork main after Wave A+B / salvage / Linux fixtures. Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved.
+
+### Fixed
+
+- Install and update skills when skills.sh `skillId` does not match the repo directory (`#6381` / `8272707d`). Hand-ported onto fork `skill.rs` (no MiniMax overlay). Unique `SKILL.md` metadata name is a last-resort match; persisted source path wins on update
+- Claude “apply model to all roles” now follows the form panel order, with the default model last (`5c053626`)
+
+### Changed
+
+- New-card DouBaoSeed display name → localized Volcengine Doubao / 火山 豆包AI (`f874803f`). Pi `providerKey` `cc-switch-dou-bao-seed` and other live identifiers are unchanged
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / later version number / wholesale main merge
+- #7383 SCHEMA 19 / MiniMax Code
+- #7331 Linux Claude Desktop 3P
+- #7522 sponsor CTA / Atlas de-sponsor
+- Unmerged official PRs (#7543, #7541, #7535, #7531, #7520, #7514, #7510, #7509, #7505, #7502, …)
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
 ## [3.20.11] - 2026-09-21
 
 Fork cherry-pick of official Wave A + Wave B (#41) onto SCHEMA 18, plus verified salvage from `release/v3.20.11` (SIGTERM, Pi `is_current` heal, WAL, staleTime, macOS matrix / phf). Does **not** claim official 3.20.3 / 3.20.11. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable and macOS `.dmg` / `.zip`.
