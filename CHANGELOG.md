@@ -5,6 +5,39 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.12] - 2026-09-21
+
+Ships current `main` after v3.20.11 (`de75e456` / #41 Wave A+B): salvage #42 (`0e0c2629`) plus Linux proxy-projection fixtures #43 (`90e0d3a5`). Wave A+B is already in 3.20.11. Does **not** claim official 3.20.3 / 3.20.12. `SCHEMA_VERSION` stays 18. Default Cursor pool model and fork Pi/WSL/proxy surfaces are preserved. Windows x64 Portable (preferred) + MSI; macOS `.dmg` / `.zip`.
+
+### Fixed
+
+- Unix `SIGTERM`/`SIGINT` and `ExitRequested(None)` with a main window follow the tray Live-restore path
+- Heal Pi `is_current` when it diverges from live `defaultProvider` (e.g. `fd` vs `flz`)
+- Close the missing `fi` in `.github/workflows/release.yml` Apple-signing detection
+- Align `Cargo.lock` with `[patch.crates-io]` phf / phf_macros path patches
+
+### Added
+
+- Linux-cloud fixtures that project Pi `models.json` plus Claude/Codex live settings onto the shared listen and restore on disable (#43)
+
+### Changed
+
+- SQLite WAL + `busy_timeout` + `synchronous=NORMAL`
+- Default frontend `staleTime` 30s
+- Release matrix includes macOS (optional Apple signing); `strip=false` for modern macOS linkers
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / 3.20.12 version number / wholesale main merge
+- #7383 SCHEMA 19 / MiniMax Code
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- Wave A+B users on 3.20.11 only need this for salvage + Linux fixtures.
+
 ## [3.20.11] - 2026-09-21
 
 Fork cherry-pick of official Wave A + Wave B (#41) onto SCHEMA 18, plus verified salvage from `release/v3.20.11` (SIGTERM, Pi `is_current` heal, WAL, staleTime, macOS matrix / phf). Does **not** claim official 3.20.3 / 3.20.11. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable and macOS `.dmg` / `.zip`.
