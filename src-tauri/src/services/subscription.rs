@@ -1583,6 +1583,166 @@ mod tests {
     }
 
     #[test]
+    fn claude_quota_limits_percent_integer_and_over_100_are_kept() {
+        // percent 是 JSON 整数也能进 f64;>100 仍展示(渲染层再裁)。
+        let mut fable = scoped_limit("Fable", 0.0);
+        fable["percent"] = serde_json::json!(37);
+        let quota = parse_claude_quota(&serde_json::json!({
+            "limits": [fable, scoped_limit("Opus", 150.0)]
+        }));
+        assert_eq!(
+            quota
+                .tiers
+                .iter()
+                .map(|t| (t.name.as_str(), t.utilization))
+                .collect::<Vec<_>>(),
+            vec![(TIER_SEVEN_DAY_FABLE, 37.0), (TIER_SEVEN_DAY_OPUS, 150.0)]
+        );
+    }
+
+    #[test]
+    fn claude_quota_limits_skip_haiku_and_blank_or_unrelated_models() {
+        let quota = parse_claude_quota(&serde_json::json!({
+            "five_hour": { "utilization": 4.0 },
+            "limits": [
+                scoped_limit("Haiku", 88.0),
+                scoped_limit("Claude Fable", 88.0),
+                scoped_limit("", 10.0),
+                scoped_limit("   ", 11.0),
+                scoped_limit("Fable", 22.0)
+            ]
+        }));
+        assert_eq!(
+            quota
+                .tiers
+                .iter()
+                .map(|t| (t.name.as_str(), t.utilization))
+                .collect::<Vec<_>>(),
+            vec![(TIER_FIVE_HOUR, 4.0), (TIER_SEVEN_DAY_FABLE, 22.0)]
+        );
+    }
+
+    #[test]
+    fn claude_quota_limits_kind_and_group_are_case_sensitive() {
+        let mut weekly = scoped_limit("Fable", 40.0);
+        weekly["kind"] = serde_json::json!("Weekly_Scoped");
+        let mut group = scoped_limit("Fable", 41.0);
+        group["group"] = serde_json::json!("Weekly");
+        let quota = parse_claude_quota(&serde_json::json!({
+            "limits": [weekly, group, scoped_limit("Fable", 9.0)]
+        }));
+        assert_eq!(quota.tiers.len(), 1);
+        assert_eq!(quota.tiers[0].utilization, 9.0);
+    }
+
+    #[test]
+    fn claude_quota_limits_surface_empty_string_is_skipped_null_is_kept() {
+        let mut empty_surface = scoped_limit("Fable", 10.0);
+        empty_surface["scope"]["surface"] = serde_json::json!("");
+        let mut missing_surface = scoped_limit("Opus", 20.0);
+        missing_surface["scope"]
+            .as_object_mut()
+            .unwrap()
+            .remove("surface");
+        let quota = parse_claude_quota(&serde_json::json!({
+            "limits": [empty_surface, missing_surface, scoped_limit("Sonnet", 30.0)]
+        }));
+        assert_eq!(
+            quota
+                .tiers
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET]
+        );
+    }
+
+    #[test]
+    fn claude_quota_limits_first_fable_row_wins_on_duplicates() {
+        let quota = parse_claude_quota(&serde_json::json!({
+            "limits": [
+                scoped_limit("Fable", 1.0),
+                scoped_limit("Fable", 99.0),
+                scoped_limit("fable", 50.0)
+            ]
+        }));
+        assert_eq!(quota.tiers.len(), 1);
+        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_FABLE);
+        assert_eq!(quota.tiers[0].utilization, 1.0);
+    }
+
+    #[test]
+    fn claude_quota_limits_unknown_fields_and_model_id_are_ignored() {
+        let mut row = scoped_limit("\n Fable \t", 12.5);
+        row["extra"] = serde_json::json!("ignored");
+        row["scope"]["model"]["id"] = serde_json::json!("claude-fable");
+        let quota = parse_claude_quota(&serde_json::json!({
+            "extra_usage": { "is_enabled": true, "used_credits": 1.0 },
+            "limits": [row]
+        }));
+        assert_eq!(quota.tiers.len(), 1);
+        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_FABLE);
+        assert_eq!(quota.tiers[0].utilization, 12.5);
+        assert!(quota.extra_usage.unwrap().is_enabled);
+    }
+
+    #[test]
+    fn claude_quota_limits_object_or_missing_does_not_invent_fable() {
+        for body in [
+            serde_json::json!({ "five_hour": { "utilization": 3.0 } }),
+            serde_json::json!({ "five_hour": { "utilization": 3.0 }, "limits": { "Fable": 1 } }),
+            serde_json::json!({ "five_hour": { "utilization": 3.0 }, "limits": "weekly" }),
+        ] {
+            let quota = parse_claude_quota(&body);
+            assert_eq!(quota.tiers.len(), 1);
+            assert_eq!(quota.tiers[0].name, TIER_FIVE_HOUR);
+        }
+    }
+
+    #[test]
+    fn claude_quota_limits_sorts_fable_among_known_tiers() {
+        let quota = parse_claude_quota(&serde_json::json!({
+            "other_window": { "utilization": 1.0 },
+            "seven_day": { "utilization": 8.0 },
+            "five_hour": { "utilization": 2.0 },
+            "limits": [scoped_limit("Sonnet", 4.0), scoped_limit("Fable", 3.0)]
+        }));
+        assert_eq!(
+            quota
+                .tiers
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                TIER_FIVE_HOUR,
+                TIER_SEVEN_DAY,
+                TIER_SEVEN_DAY_FABLE,
+                TIER_SEVEN_DAY_SONNET,
+                "other_window"
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_quota_limits_empty_resets_at_is_preserved() {
+        let mut row = scoped_limit("Fable", 0.0);
+        row["resets_at"] = serde_json::json!("");
+        let quota = parse_claude_quota(&serde_json::json!({ "limits": [row] }));
+        assert_eq!(quota.tiers[0].resets_at.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn claude_quota_limits_model_as_string_is_skipped() {
+        let mut row = scoped_limit("Fable", 40.0);
+        row["scope"]["model"] = serde_json::json!("Fable");
+        let quota = parse_claude_quota(&serde_json::json!({
+            "limits": [row, scoped_limit("Opus", 5.0)]
+        }));
+        assert_eq!(quota.tiers.len(), 1);
+        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_OPUS);
+    }
+
+    #[test]
     fn window_seconds_map_to_expected_tier_names() {
         // 官方特例窗口
         assert_eq!(window_seconds_to_tier_name(18000), TIER_FIVE_HOUR);

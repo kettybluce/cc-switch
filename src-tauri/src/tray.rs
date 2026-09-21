@@ -1534,6 +1534,141 @@ mod tests {
     }
 
     #[test]
+    fn claude_fable_tray_does_not_fold_into_weekly_w_label() {
+        let quota = make_quota(
+            "claude",
+            true,
+            vec![
+                tier(TIER_SEVEN_DAY, 10.0),
+                tier(TIER_SEVEN_DAY_OPUS, 80.0),
+                tier(TIER_SEVEN_DAY_FABLE, 95.0),
+            ],
+        );
+        let s = format_subscription_summary(&quota).expect("should format");
+        assert_eq!(s, "🔴 w80% Fable95%");
+        assert!(
+            !s.contains("w95%"),
+            "Fable must not raise the weekly w bucket: {s}"
+        );
+        assert!(
+            !s.contains(TIER_SEVEN_DAY_FABLE),
+            "machine name must not leak: {s}"
+        );
+    }
+
+    #[test]
+    fn claude_fable_tray_rounds_percent_but_emoji_uses_raw() {
+        // 89.6 → 标签 90%,但未达 90 红线,仍橙色。
+        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 89.6)]);
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🟠 Fable90%")
+        );
+        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 37.5)]);
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🟢 Fable38%")
+        );
+        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 69.9)]);
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🟢 Fable70%")
+        );
+        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 70.0)]);
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🟠 Fable70%")
+        );
+        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 90.0)]);
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🔴 Fable90%")
+        );
+        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 99.5)]);
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🔴 Fable100%")
+        );
+    }
+
+    #[test]
+    fn claude_fable_tray_skips_nan_and_keeps_finite_negative() {
+        let quota = make_quota(
+            "claude",
+            true,
+            vec![
+                tier(TIER_SEVEN_DAY_FABLE, f64::NAN),
+                tier(TIER_FIVE_HOUR, 12.0),
+            ],
+        );
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🟢 h12%")
+        );
+        let only_nan = make_quota(
+            "claude",
+            true,
+            vec![tier(TIER_SEVEN_DAY_FABLE, f64::INFINITY)],
+        );
+        assert!(format_subscription_summary(&only_nan).is_none());
+        let negative = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, -5.4)]);
+        assert_eq!(
+            format_subscription_summary(&negative).as_deref(),
+            Some("🟢 Fable-5%")
+        );
+    }
+
+    #[test]
+    fn script_summary_fable_matches_subscription_and_hides_machine_name() {
+        let quota = make_quota(
+            "claude",
+            true,
+            vec![
+                tier(TIER_FIVE_HOUR, 12.0),
+                tier(TIER_WEEKLY_LIMIT, 25.0),
+                tier(TIER_SEVEN_DAY_FABLE, 0.0),
+            ],
+        );
+        let result = usage_result(
+            true,
+            vec![
+                usage_data(Some(TIER_FIVE_HOUR), 12.0),
+                usage_data(Some(TIER_WEEKLY_LIMIT), 25.0),
+                usage_data(Some(TIER_SEVEN_DAY_FABLE), 0.0),
+            ],
+        );
+        assert_eq!(
+            format_script_summary(&result).as_deref(),
+            Some("🟢 h12% w25% Fable0%")
+        );
+        assert_eq!(
+            format_script_summary(&result),
+            format_subscription_summary(&quota)
+        );
+        let s = format_script_summary(&result).unwrap();
+        assert!(!s.contains(TIER_SEVEN_DAY_FABLE));
+        assert!(!s.contains("weekly_limit"));
+    }
+
+    #[test]
+    fn claude_fable_tray_label_order_is_h_w_fable_then_month() {
+        let quota = make_quota(
+            "claude",
+            true,
+            vec![
+                tier(TIER_THIRTY_DAY, 40.0),
+                tier(TIER_SEVEN_DAY_FABLE, 15.0),
+                tier(TIER_FIVE_HOUR, 8.0),
+                tier(TIER_SEVEN_DAY, 20.0),
+            ],
+        );
+        assert_eq!(
+            format_subscription_summary(&quota).as_deref(),
+            Some("🟢 h8% w20% Fable15% m40%")
+        );
+    }
+
+    #[test]
     fn gemini_summary_uses_p_and_f_labels() {
         let quota = make_quota(
             "gemini",
