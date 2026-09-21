@@ -5,7 +5,23 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Wave D (SCHEMA 18)
+## [Unreleased] — Wave E official audit (SCHEMA 18)
+
+Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (same as Wave C / Wave D). Post-Wave-D re-diff found **no new SAFE merged cherry-picks** (providers / presets / bugfixes, SCHEMA 18). This wave lands the audit only: `docs/official-wave-e-audit.md`. Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` / Cursor pool preserved.
+
+### Cherry-pick list (2026-09-21)
+
+- **SAFE:** none new. Wave 1–3 / A+B / C already cover every user-facing merged commit after official 3.20.2 (`b6254432` → `8272707d`).
+- **Conflict-risk / product-scope:** #7331 Linux Claude Desktop 3P (`42ac174d`) — applies cleanly, no schema, skipped because this fork does not ship Linux; #7522 sponsor CTAs (`f2d0b2a6`); Atlas de-sponsor (`f21e0944`, would rewrite Pi preset sponsor metadata).
+- **Skip-schema:** #7383 MiniMax Code (`06082e18`, official SCHEMA 19); official 3.20.3 bump/notes (`1a725016` / `d695a2d7`); unmerged #7496 DevEco (SCHEMA 19 → 20).
+- **Unmerged (wait for official main):** #7543 OpenCode blank model names, #7541 OpenCode V2 usage, #7531 GPT-5.6 `max` effort (proxy = extra conflict-risk vs fork 1214 hardening), #7520 / #7514 / #7510 / #7509 / #7505 / #7502, …
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / later version number / wholesale main merge
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
+## Wave D (on main, SCHEMA 18)
 
 Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No further SCHEMA-18-safe merged cherry-picks remain. This wave adds Linux stand-in **Claude/Codex takeover roundtrip** fixtures parallel to Pi (#43/#46). Docker `TEST_FILTER=all` shipping docs already landed on main (`1a605875`). Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved.
 
