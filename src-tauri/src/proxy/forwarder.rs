@@ -348,14 +348,15 @@ impl RequestForwarder {
                     app_type_str,
                     used_half_open_permit,
                     false,
-                    Some(retry_err.to_string()),
+                    Some(summarize_proxy_error(&retry_err)),
                 )
                 .await;
             {
                 let mut status = self.status.write().await;
                 status.last_error = Some(format!(
                     "Provider {} {rectifier_label}重试失败: {}",
-                    provider.name, retry_err
+                    provider.name,
+                    summarize_proxy_error(&retry_err)
                 ));
             }
             *last_error = Some(retry_err);
@@ -368,7 +369,7 @@ impl RequestForwarder {
             .await;
         let mut status = self.status.write().await;
         status.failed_requests += 1;
-        status.last_error = Some(retry_err.to_string());
+        status.last_error = Some(summarize_proxy_error(&retry_err));
         if status.total_requests > 0 {
             status.success_rate =
                 (status.success_requests as f32 / status.total_requests as f32) * 100.0;
@@ -695,7 +696,8 @@ impl RequestForwarder {
                                 }
                                 Err(retry_err) => {
                                     log::warn!(
-                                        "[{app_type_str}] [Media] Unsupported-image retry still failed: {retry_err}"
+                                        "[{app_type_str}] [Media] Unsupported-image retry still failed: {}",
+                                        summarize_proxy_error(&retry_err)
                                     );
                                     if let Some(err) = self
                                         .handle_rectifier_retry_failure(
@@ -736,7 +738,7 @@ impl RequestForwarder {
                                     .await;
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
+                                status.last_error = Some(summarize_proxy_error(&e));
                                 if status.total_requests > 0 {
                                     status.success_rate = (status.success_requests as f32
                                         / status.total_requests as f32)
@@ -888,7 +890,7 @@ impl RequestForwarder {
                                     .await;
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
+                                status.last_error = Some(summarize_proxy_error(&e));
                                 if status.total_requests > 0 {
                                     status.success_rate = (status.success_requests as f32
                                         / status.total_requests as f32)
@@ -914,7 +916,7 @@ impl RequestForwarder {
                                     .await;
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
+                                status.last_error = Some(summarize_proxy_error(&e));
                                 if status.total_requests > 0 {
                                     status.success_rate = (status.success_requests as f32
                                         / status.total_requests as f32)
@@ -1036,7 +1038,7 @@ impl RequestForwarder {
                             .await;
                         let mut status = self.status.write().await;
                         status.failed_requests += 1;
-                        status.last_error = Some(e.to_string());
+                        status.last_error = Some(summarize_proxy_error(&e));
                         if status.total_requests > 0 {
                             status.success_rate = (status.success_requests as f32
                                 / status.total_requests as f32)
@@ -1063,14 +1065,17 @@ impl RequestForwarder {
                                     app_type_str,
                                     used_half_open_permit,
                                     false,
-                                    Some(e.to_string()),
+                                    Some(summarize_proxy_error(&e)),
                                 )
                                 .await;
 
                             {
                                 let mut status = self.status.write().await;
-                                status.last_error =
-                                    Some(format!("Provider {} 失败: {}", provider.name, e));
+                                status.last_error = Some(format!(
+                                    "Provider {} 失败: {}",
+                                    provider.name,
+                                    summarize_proxy_error(&e)
+                                ));
                             }
 
                             let (log_code, log_message) = build_retryable_failure_log(
@@ -1098,7 +1103,7 @@ impl RequestForwarder {
                             {
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
+                                status.last_error = Some(summarize_proxy_error(&e));
                                 if status.total_requests > 0 {
                                     status.success_rate = (status.success_requests as f32
                                         / status.total_requests as f32)
@@ -3574,7 +3579,9 @@ fn map_reqwest_send_error(error: reqwest::Error) -> ProxyError {
 }
 
 fn summarize_text_for_log(text: &str, max_chars: usize) -> String {
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Redact first so truncation cannot leave a secret prefix in the log line.
+    let redacted = crate::redact_secret_text(text);
+    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = normalized.trim();
 
     if trimmed.chars().count() <= max_chars {
@@ -3945,6 +3952,31 @@ mod tests {
         let summary = summarize_text_for_log("line1\n\n line2   line3", 12);
 
         assert_eq!(summary, "line1 line2...");
+    }
+
+    #[test]
+    fn summarize_proxy_error_and_display_do_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let error = ProxyError::UpstreamError {
+            status: 401,
+            body: Some(format!(
+                r#"{{"error":{{"message":"invalid x-api-key: {key}"}}}}"#
+            )),
+        };
+
+        let summary = summarize_proxy_error(&error);
+        assert!(!summary.contains(key), "{summary}");
+        assert!(!summary.contains("TESTSECRETVALUE99"), "{summary}");
+        assert!(summary.contains("[REDACTED]"), "{summary}");
+        assert!(summary.contains("401"), "{summary}");
+
+        let display = error.to_string();
+        assert!(!display.contains(key), "{display}");
+        assert!(!display.contains("TESTSECRETVALUE99"), "{display}");
+
+        let debug = format!("{error:?}");
+        assert!(!debug.contains(key), "{debug}");
+        assert!(!debug.contains("TESTSECRETVALUE99"), "{debug}");
     }
 
     #[test]
