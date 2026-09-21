@@ -10,10 +10,10 @@ Cloud / Linux / Docker Desktop can build an image and run the **full** `src-taur
 
 | Covered / 覆盖 | Not covered / 不覆盖 |
 | --- | --- |
-| **Default** `TEST_FILTER=all` — full `cargo test --manifest-path src-tauri/Cargo.toml` (includes `proxy_projection_linux` Pi / Claude / Codex takeover projection, Claude/Codex roundtrips: unknown fields, hot-switch backup, independent disable, fail-closed enable: missing/malformed Live, foreign local proxy including Pi, **and** Codex OAuth `CodexLiveAuthSwitchGuard` stale-binding cases (`MissingAccount` switch-away / stale target during takeover); plus `session_usage_scan` isolated-HOME JSONL usage and `provider_profile_race` concurrent CRUD/switch) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
+| **Default** `TEST_FILTER=all` — full `cargo test --manifest-path src-tauri/Cargo.toml` (includes `proxy_projection_linux` Pi / Claude / Codex takeover projection, Claude/Codex roundtrips: unknown fields, hot-switch backup, independent disable, fail-closed enable: missing/malformed Live, foreign local proxy including Pi, **and** Codex OAuth `CodexLiveAuthSwitchGuard` stale-binding cases (`MissingAccount` switch-away / stale target during takeover); plus `session_usage_scan` isolated-HOME JSONL usage, `provider_profile_race` concurrent CRUD/switch, and `additive_provider_surface` OpenCode/Hermes/OpenClaw live CRUD) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
 | Isolated `CC_SWITCH_TEST_HOME` under `/tmp` **inside** the container | Windows MSI / Portable installers |
 | Markdown report: SHA / version / SCHEMA 18 / command / duration / passed-failed-ignored / failure snippets | Full Tauri GUI, tray, or WebView window |
-| SCHEMA 18 assertions (no `proxy_config` row for `pi`) | Official 3.20.x GUI QA on the user's desktop |
+| SCHEMA 18 assertions (no `proxy_config` row for `pi` / `opencode` / `openclaw` / `hermes`) | Official 3.20.x GUI QA on the user's desktop |
 
 Same Linux packages as `.github/workflows/ci.yml` (`pkg-config`, `libssl`, GTK 3, WebKit, Ayatana AppIndicator, soup). Base image: **Ubuntu 22.04** (CI `ubuntu-22.04`).
 
@@ -74,6 +74,9 @@ TEST_FILTER=lib-lite pnpm test:docker
 pnpm test:docker:lite
 make test-docker-lite
 docker compose -f docker-compose.test.yml --profile lite run --build --rm backend-self-test-lite
+
+# OpenCode / Hermes / OpenClaw additive live CRUD only
+TEST_FILTER=additive_provider_surface pnpm test:docker
 ```
 
 `TEST_FILTER=all` is accepted but redundant (already the default). Any other value is passed to cargo as a name substring (same as `cargo test FILTER`):
@@ -161,7 +164,7 @@ Default `pnpm test:docker` **is** the full suite and writes the markdown report.
 
 - Command: `pnpm test:docker` / `pnpm test:docker:all` / `make test-docker` (`TEST_FILTER=all`)
 - Report: `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md` (exit code, pass/fail counts, SCHEMA 18, no host `C:` writes)
-- Narrower filters (`proxy` / `session_usage_scan` / `provider_profile_race` / `pi-crud` / `lib-lite`) are **not** the shipping report
+- Narrower filters (`proxy` / `session_usage_scan` / `provider_profile_race` / `additive_provider_surface` / `pi-crud` / `lib-lite`) are **not** the shipping report
 
 显式收窄不能代替发版报告。本 Docker 工作流本身不出 Portable / MSI。
 

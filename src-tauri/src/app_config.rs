@@ -1034,6 +1034,28 @@ mod tests {
         assert!(!AppType::Hermes.supports_proxy_takeover());
     }
 
+    #[test]
+    fn additive_apps_are_schema18_safe_without_proxy_config_rows() {
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
+        for app in [AppType::OpenCode, AppType::OpenClaw, AppType::Hermes] {
+            assert!(
+                app.is_additive_mode(),
+                "{:?} must stay additive (live files coexist)",
+                app
+            );
+            assert!(
+                !app.supports_local_proxy(),
+                "{:?} has no SCHEMA 18 proxy_config app_type",
+                app
+            );
+            assert!(
+                !app.supports_proxy_takeover(),
+                "{:?} must not claim Pi-style takeover under SCHEMA 18",
+                app
+            );
+        }
+    }
+
     struct TempHome {
         #[allow(dead_code)] // 字段通过 Drop trait 管理临时目录生命周期
         dir: TempDir,

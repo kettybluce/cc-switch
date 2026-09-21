@@ -530,6 +530,7 @@ fn proxy_config_check_rejects_pi_and_lookalikes() {
         "π",
         "ｐｉ",
         "opencode",
+        "openclaw",
         "hermes",
         "claude-desktop",
         "claudedesktop",

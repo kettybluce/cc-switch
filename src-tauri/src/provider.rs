@@ -947,6 +947,11 @@ pub struct OpenCodeProviderConfig {
     /// 模型定义映射
     #[serde(default)]
     pub models: HashMap<String, OpenCodeModel>,
+
+    /// 额外顶层字段（未来 SDK 键、用户自定义键）
+    /// 使用 flatten 捕获，避免 typed CRUD 投影静默丢弃。
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, Value>,
 }
 
 impl Default for OpenCodeProviderConfig {
@@ -956,6 +961,7 @@ impl Default for OpenCodeProviderConfig {
             name: None,
             options: OpenCodeProviderOptions::default(),
             models: HashMap::new(),
+            extra: HashMap::new(),
         }
     }
 }
@@ -1399,6 +1405,34 @@ mod tests {
         assert!(config.options.api_key.is_none());
         assert!(config.options.headers.is_none());
         assert!(config.options.extra.is_empty());
+        assert!(config.extra.is_empty());
+    }
+
+    #[test]
+    fn opencode_provider_config_preserves_unknown_top_level_fields() {
+        let parsed: OpenCodeProviderConfig = serde_json::from_value(json!({
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Fixture",
+            "options": { "baseURL": "https://api.example/v1", "setCacheKey": true },
+            "models": { "gpt-4o": { "name": "GPT-4o", "modalities": { "input": ["text"] } } },
+            "futureVendorFlag": true
+        }))
+        .expect("parse OpenCode provider with unknown fields");
+
+        assert_eq!(parsed.extra.get("futureVendorFlag"), Some(&json!(true)));
+        assert_eq!(parsed.options.extra.get("setCacheKey"), Some(&json!(true)));
+        assert_eq!(
+            parsed.models["gpt-4o"].extra.get("modalities"),
+            Some(&json!({ "input": ["text"] }))
+        );
+
+        let written = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(written["futureVendorFlag"], json!(true));
+        assert_eq!(written["options"]["setCacheKey"], json!(true));
+        assert_eq!(
+            written["models"]["gpt-4o"]["modalities"]["input"][0],
+            "text"
+        );
     }
 
     #[test]

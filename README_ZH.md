@@ -549,7 +549,7 @@ pnpm test:docker
 # 别名：pnpm test:docker:all
 ```
 
-覆盖 SCHEMA 18 的 Pi/Claude/Codex 夹具（含 #51 接管往返）、隔离 HOME 的 JSONL 用量扫描（#64）、并发 profile/供应商竞态（#77）以及 Codex OAuth 失效绑定（#76）。自测工作之后出绿色版/MSI **必须**附这份全量报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。SCHEMA 保持 18。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
+覆盖 SCHEMA 18 的 Pi/Claude/Codex 夹具（含 #51 接管往返）、隔离 HOME 的 JSONL 用量扫描（#64）、并发 profile/供应商竞态（#77）、Codex OAuth 失效绑定（#76），以及 OpenCode/Hermes/OpenClaw 累加式 CRUD（`additive_provider_surface`）。自测工作之后出绿色版/MSI **必须**附这份全量报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。SCHEMA 保持 18。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md) 与 [docs/additive-provider-surface-tests-zh.md](docs/additive-provider-surface-tests-zh.md)。
 
 ### 技术栈
 
