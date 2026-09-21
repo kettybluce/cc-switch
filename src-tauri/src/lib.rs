@@ -62,6 +62,11 @@ pub use mcp::{
 };
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
+pub use services::session_usage::{
+    get_data_source_breakdown, session_sync_mutex, sync_all_unlocked, DataSourceSummary,
+    SessionSyncResult,
+};
+pub use services::usage_stats::{LogFilters, RequestLogDetail};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
     provider::reapply_current_codex_official_live,
