@@ -58,8 +58,14 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         // 转换错误：422 Unprocessable Entity
         ProxyError::TransformError(_) => 422,
 
-        // 其他未知错误：500 Internal Server Error
-        _ => 500,
+        // 响应体过大：与 IntoResponse 一致，502 Bad Gateway
+        ProxyError::ResponseBodyTooLarge(_) => 502,
+
+        // 绑定/停止/内部错误：500 Internal Server Error
+        ProxyError::BindFailed(_)
+        | ProxyError::StopTimeout
+        | ProxyError::StopFailed(_)
+        | ProxyError::Internal(_) => 500,
     }
 }
 
@@ -139,6 +145,28 @@ mod tests {
         assert_eq!(
             map_proxy_error_to_status(&ProxyError::StreamIdleTimeout(30)),
             504
+        );
+        assert_eq!(
+            map_proxy_error_to_status(&ProxyError::ResponseBodyTooLarge(8)),
+            502
+        );
+        assert_eq!(
+            map_proxy_error_to_status(&ProxyError::Internal("boom".to_string())),
+            500
+        );
+        assert_eq!(
+            map_proxy_error_to_status(&ProxyError::UpstreamError {
+                status: 403,
+                body: None
+            }),
+            403
+        );
+        assert_eq!(
+            map_proxy_error_to_status(&ProxyError::UpstreamError {
+                status: 503,
+                body: Some("unavailable".to_string())
+            }),
+            503
         );
     }
 

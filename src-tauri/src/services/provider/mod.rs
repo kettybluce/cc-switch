@@ -2044,18 +2044,20 @@ requires_openai_auth = true
 
         // Claude Desktop keeps backup state from takeover startup; this sentinel only
         // marks takeover as active so provider updates rewrite the 3P profile.
+        // SCHEMA 18 CHECK has no `claude-desktop` proxy_config row — Desktop
+        // reuses the Claude listen, same as Pi reuses Claude/Codex/Gemini.
         db.save_live_backup("claude-desktop", "{}")
             .await
             .expect("seed live backup");
         {
             let mut config = db
-                .get_proxy_config_for_app("claude-desktop")
+                .get_proxy_config_for_app("claude")
                 .await
-                .expect("get app proxy config");
+                .expect("get shared Claude listen config");
             config.enabled = true;
             db.update_proxy_config_for_app(config)
                 .await
-                .expect("update app proxy config");
+                .expect("enable shared Claude listen");
         }
 
         state
