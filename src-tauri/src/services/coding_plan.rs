@@ -1778,6 +1778,46 @@ mod tests {
         assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
     }
 
+    #[test]
+    fn zhipu_credit_limit_is_accepted_like_tokens_limit() {
+        let data = json!({
+            "limits": [
+                { "type": "CREDIT_LIMIT", "unit": 3, "percentage": 11.0, "nextResetTime": 1_000_000_000_000_i64 },
+                { "type": "credit_limit", "unit": 6, "percentage": 22.0, "nextResetTime": 2_000_000_000_000_i64 }
+            ]
+        });
+        let tiers = parse_zhipu_token_tiers(&data);
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
+        assert_eq!(tiers[0].utilization, 11.0);
+        assert_eq!(tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(tiers[1].utilization, 22.0);
+    }
+
+    #[test]
+    fn zhipu_limits_missing_or_non_array_returns_empty() {
+        assert!(parse_zhipu_token_tiers(&json!({})).is_empty());
+        assert!(parse_zhipu_token_tiers(&json!({ "limits": {} })).is_empty());
+        assert!(parse_zhipu_token_tiers(&json!({ "limits": "TOKENS_LIMIT" })).is_empty());
+        assert!(parse_zhipu_token_tiers(&json!({ "limits": [] })).is_empty());
+        assert!(parse_zhipu_token_tiers(&json!({ "limits": [null, 1, "x"] })).is_empty());
+    }
+
+    #[test]
+    fn zhipu_limits_integer_percentage_and_missing_type_are_handled() {
+        let data = json!({
+            "limits": [
+                { "type": "TOKENS_LIMIT", "percentage": 12, "nextResetTime": 1_000_000_000_000_i64 },
+                { "percentage": 99.0, "nextResetTime": 2_000_000_000_000_i64 },
+                { "type": "TIME_LIMIT", "percentage": 7.0 }
+            ]
+        });
+        let tiers = parse_zhipu_token_tiers(&data);
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, TIER_FIVE_HOUR);
+        assert_eq!(tiers[0].utilization, 12.0);
+    }
+
     // ── MiniMax ──
 
     #[test]
