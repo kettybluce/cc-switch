@@ -11,7 +11,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
-const LEGACY_SCHEMA_SQL: &str = r#"
+pub(super) const LEGACY_SCHEMA_SQL: &str = r#"
     CREATE TABLE providers (
         id TEXT NOT NULL,
         app_type TEXT NOT NULL,
