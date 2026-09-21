@@ -48,9 +48,6 @@ const piKeysOutsideNamespace = new Set([
   "settings.browsePlaceholderPi",
   "settings.piConfigDir",
   "settings.piConfigDirDescription",
-  "notifications.piDefaultProviderSet",
-  "notifications.piDefaultProviderSetFailed",
-  "confirm.piDefaultProviderWarning",
 ]);
 const piReference = new Map(
   [...reference].filter(
