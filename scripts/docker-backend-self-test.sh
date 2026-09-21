@@ -6,8 +6,9 @@ set -euo pipefail
 
 TEST_HOME="${CC_SWITCH_TEST_HOME:-/tmp/cc-switch-test-home}"
 mkdir -p "${TEST_HOME}" /app/dist
+# Isolation is CC_SWITCH_TEST_HOME (see src-tauri/src/config.rs). Do not
+# rewrite HOME here: cargo fingerprints HOME and would rebuild the crate.
 export CC_SWITCH_TEST_HOME="${TEST_HOME}"
-export HOME="${TEST_HOME}"
 unset USERPROFILE || true
 
 THREADS="${CARGO_TEST_THREADS:-1}"
