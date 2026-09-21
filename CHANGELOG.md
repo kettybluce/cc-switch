@@ -5,6 +5,38 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.13] - 2026-09-21
+
+Ships current `main` after v3.20.12 (tag `97cbce00`, #42+#43 only): Wave C #45 (`96fbdc3c`), Pi CRUD fixtures #46 (`a3189e8c`), Docker backend self-test #47 (`77bd47f3`). Does **not** claim official 3.20.3 / 3.20.13. `SCHEMA_VERSION` stays 18. Default Cursor pool model and fork Pi/WSL/proxy surfaces are preserved. Windows x64 Portable (preferred) + MSI; macOS `.dmg` / `.zip` best-effort.
+
+### Fixed
+
+- Install and update skills when skills.sh `skillId` does not match the repo directory (`#6381` / `8272707d`, via #45). Unique `SKILL.md` metadata name is a last-resort match; persisted source path wins on update
+- Claude “apply model to all roles” now follows the form panel order, with the default model last (`5c053626`, via #45)
+
+### Added
+
+- Linux-cloud fixtures covering Pi CRUD ↔ live `models.json` sync (#46)
+- Docker backend self-test (`Dockerfile.test` / `docker-compose.test.yml` / `pnpm test:docker`) for `proxy_projection_linux` without writing the host user home (#47)
+
+### Changed
+
+- New-card DouBaoSeed display name → localized Volcengine Doubao / 火山 豆包AI (`f874803f`, via #45). Pi `providerKey` `cc-switch-dou-bao-seed` and other live identifiers are unchanged
+- Give `PiProviderForm` Vitest suite 15s per case so slow CI does not flake on header/auth CRUD
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / 3.20.13 version number / wholesale main merge
+- #7383 SCHEMA 19 / MiniMax Code
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- v3.20.12 users only need this for Wave C + Pi CRUD fixtures + Docker self-test.
+
+
 ## [3.20.12] - 2026-09-21
 
 Ships `main` after v3.20.11 (`de75e456` / #41 Wave A+B): salvage #42 (`0e0c2629`) plus Linux proxy-projection fixtures #43 (`90e0d3a5`). Wave A+B is already in 3.20.11. GitHub Release tag `v3.20.12` was cut at `97cbce00` (post-#43). Does **not** claim official 3.20.3 / 3.20.12. `SCHEMA_VERSION` stays 18. Default Cursor pool model and fork Pi/WSL/proxy surfaces are preserved. Windows x64 Portable (preferred) + MSI; macOS `.dmg` / `.zip` best-effort.
@@ -16,21 +48,16 @@ Ships `main` after v3.20.11 (`de75e456` / #41 Wave A+B): salvage #42 (`0e0c2629`
 - Close the missing `fi` in `.github/workflows/release.yml` Apple-signing detection
 - Align `Cargo.lock` with `[patch.crates-io]` phf / phf_macros path patches
 - Empty `APPLE_SIGNING_IDENTITY` no longer makes Tauri sign with `""` (unsigned macOS cannot block Windows Portable publish)
-- Install and update skills when skills.sh `skillId` does not match the repo directory (`#6381` / `8272707d`, via #45). Unique `SKILL.md` metadata name is a last-resort match; persisted source path wins on update
-- Claude “apply model to all roles” now follows the form panel order, with the default model last (`5c053626`, via #45)
 
 ### Added
 
 - Linux-cloud fixtures that project Pi `models.json` plus Claude/Codex live settings onto the shared listen and restore on disable (#43)
-- Linux-cloud fixtures covering Pi CRUD ↔ live `models.json` sync (#46)
 
 ### Changed
 
 - SQLite WAL + `busy_timeout` + `synchronous=NORMAL`
 - Default frontend `staleTime` 30s
 - Release matrix includes macOS (optional Apple signing); `strip=false` for modern macOS linkers
-- New-card DouBaoSeed display name → localized Volcengine Doubao / 火山 豆包AI (`f874803f`, via #45). Pi `providerKey` `cc-switch-dou-bao-seed` and other live identifiers are unchanged
-- Give `PiProviderForm` Vitest suite 15s per case so slow CI does not flake on header/auth CRUD
 
 ### Skipped (intentionally)
 
