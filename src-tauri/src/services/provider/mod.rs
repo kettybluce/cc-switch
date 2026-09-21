@@ -117,7 +117,7 @@ mod tests {
     #[cfg(any(target_os = "macos", windows))]
     use crate::claude_desktop_config::PROFILE_ID;
     use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
-    use crate::database::Database;
+    use crate::database::{Database, SCHEMA_VERSION};
     use crate::provider::{
         AuthBinding, AuthBindingSource, ClaudeModelConfig, ProviderMeta, UniversalProvider,
         UsageScript,
@@ -3493,6 +3493,206 @@ wire_api = "responses"
                 });
             }
         }
+    }
+
+    #[test]
+    #[serial]
+    fn existing_account_without_live_token_can_switch_away_from_stale_binding() {
+        with_test_home(|state, _| {
+            crate::settings::reload_settings().unwrap();
+            crate::settings::update_settings(crate::settings::AppSettings {
+                preserve_codex_official_auth_on_switch: true,
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(
+                SCHEMA_VERSION, 18,
+                "stale-binding recovery stays on SCHEMA 18"
+            );
+            let runtime = tauri::async_runtime::handle();
+            runtime
+                .block_on(
+                    state
+                        .codex_oauth_manager
+                        .add_test_account_with_user_identity("acct-present", "access", "user-a"),
+                )
+                .unwrap();
+            let current = managed_codex_provider("current", "acct-present");
+            state.db.save_provider("codex", &current).unwrap();
+            ProviderService::switch(state, AppType::Codex, "current").unwrap();
+            fs::remove_file(crate::codex_config::get_codex_auth_path()).unwrap();
+            assert!(crate::codex_config::codex_managed_oauth_live_auth_marker_exists());
+
+            let native = json!({
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": null,
+                "tokens": {
+                    "access_token": "native-access",
+                    "refresh_token": "native-refresh",
+                    "account_id": "native-workspace"
+                },
+                "last_refresh": "2026-09-21T00:00:00Z",
+                "keepMe": "native-login"
+            });
+            write_json_file(&crate::codex_config::get_codex_auth_path(), &native).unwrap();
+
+            let target = Provider::with_id(
+                "target".into(),
+                "Third party".into(),
+                codex_settings("https://example.test/v1", "sk-target"),
+                None,
+            );
+            state.db.save_provider("codex", &target).unwrap();
+            ProviderService::switch(state, AppType::Codex, "target").unwrap();
+
+            assert_eq!(
+                read_json_file::<Value>(&crate::codex_config::get_codex_auth_path()).unwrap(),
+                native,
+                "ExistingAccount(None) switch-away must not delete a later native login"
+            );
+            assert_eq!(
+                crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
+                    .unwrap()
+                    .as_deref(),
+                Some("target")
+            );
+            assert_eq!(SCHEMA_VERSION, 18);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn stale_target_binding_reports_choose_account_even_when_takeover_already_enabled() {
+        with_test_home(|state, _| {
+            crate::settings::reload_settings().unwrap();
+            assert_eq!(SCHEMA_VERSION, 18);
+            let runtime = tauri::async_runtime::handle();
+            let current = Provider::with_id(
+                "current".into(),
+                "API key".into(),
+                codex_settings("https://example.test/v1", "sk-current"),
+                None,
+            );
+            state.db.save_provider("codex", &current).unwrap();
+            ProviderService::switch(state, AppType::Codex, "current").unwrap();
+            runtime.block_on(async {
+                let mut config = state.db.get_proxy_config().await.unwrap();
+                config.listen_port = 0;
+                state.db.update_proxy_config(config).await.unwrap();
+                state
+                    .proxy_service
+                    .set_takeover_for_app("codex", true)
+                    .await
+                    .unwrap();
+            });
+            assert!(state
+                .proxy_service
+                .detect_takeover_in_live_config_for_app(&AppType::Codex));
+
+            let stale = managed_codex_provider("stale-target", "deleted-local");
+            state.db.save_provider("codex", &stale).unwrap();
+            let err = ProviderService::switch(state, AppType::Codex, "stale-target")
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("选择账号"),
+                "already-enabled takeover must still inspect the stale target binding: {err}"
+            );
+            assert_eq!(
+                crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
+                    .unwrap()
+                    .as_deref(),
+                Some("current"),
+                "failed stale-target switch must leave the previous provider current"
+            );
+            assert!(
+                state
+                    .proxy_service
+                    .detect_takeover_in_live_config_for_app(&AppType::Codex),
+                "failed switch must leave an already-enabled takeover intact"
+            );
+            runtime.block_on(async {
+                if state.proxy_service.is_running().await {
+                    state.proxy_service.stop().await.unwrap();
+                }
+            });
+            assert_eq!(SCHEMA_VERSION, 18);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn missing_account_current_can_switch_away_to_third_party() {
+        with_test_home(|state, _| {
+            crate::settings::reload_settings().unwrap();
+            crate::settings::update_settings(crate::settings::AppSettings {
+                preserve_codex_official_auth_on_switch: true,
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(SCHEMA_VERSION, 18);
+            let stale = managed_codex_provider("stale-current", "deleted-local");
+            state.db.save_provider("codex", &stale).unwrap();
+            state
+                .db
+                .set_current_provider("codex", "stale-current")
+                .unwrap();
+            crate::settings::set_current_provider(&AppType::Codex, Some("stale-current")).unwrap();
+            fs::write(
+                crate::config::get_app_config_dir().join("codex_oauth_auth.json"),
+                r#"{"version":2,"accounts":{}}"#,
+            )
+            .unwrap();
+            let native = json!({
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": null,
+                "tokens": {
+                    "access_token": "native-access",
+                    "refresh_token": "native-refresh",
+                    "account_id": "native-workspace"
+                },
+                "last_refresh": "2026-09-21T00:00:00Z",
+                "keepMe": "native-login"
+            });
+            write_json_file(&crate::codex_config::get_codex_auth_path(), &native).unwrap();
+            crate::codex_config::record_codex_managed_oauth_live_auth(
+                &crate::codex_config::codex_managed_oauth_auth_value(
+                    "stale-workspace",
+                    "stale-access",
+                    Some(&crate::codex_config::test_codex_id_token("stale-user")),
+                    "stale-refresh",
+                    "2026-09-21T00:00:00Z",
+                ),
+                "deleted-local",
+            )
+            .unwrap();
+            assert!(crate::codex_config::codex_managed_oauth_live_auth_marker_exists());
+
+            let target = Provider::with_id(
+                "target".into(),
+                "Third party".into(),
+                codex_settings("https://example.test/v1", "sk-target"),
+                None,
+            );
+            state.db.save_provider("codex", &target).unwrap();
+            ProviderService::switch(state, AppType::Codex, "target").unwrap();
+
+            assert!(
+                !crate::codex_config::codex_managed_oauth_live_auth_marker_exists(),
+                "MissingAccount switch-away must drop the stale ownership marker"
+            );
+            assert_eq!(
+                read_json_file::<Value>(&crate::codex_config::get_codex_auth_path()).unwrap(),
+                native
+            );
+            assert_eq!(
+                crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
+                    .unwrap()
+                    .as_deref(),
+                Some("target")
+            );
+            assert_eq!(SCHEMA_VERSION, 18);
+        });
     }
 
     #[test]

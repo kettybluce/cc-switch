@@ -107,6 +107,23 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 - Docs only: `docs/windows-msi-error-5-zh.md`, pointers in `README_ZH.md` and `docs/user-manual/zh/1-getting-started/1.2-installation.md`.
 - WiX unchanged (`InstallScope=perUser`). This PR does **not** tag, ship MSI, or ship Portable.
 
+### 7. CodexLiveAuthSwitchGuard stale ChatGPT bindings (Wave B #7395 follow-up)
+
+Wave B already landed `CodexLiveAuthSwitchGuard`. This coverage adds the two-state edges that the cherry-pick tests did not name explicitly. **No SCHEMA bump. Default Cursor pool model unchanged.**
+
+| Case | Test |
+| --- | --- |
+| `MissingAccount` vs corrupt store | `missing_account_recovery_requires_valid_persisted_state` |
+| `ExistingAccount(None)` does not delete native `auth.json` | `existing_account_without_matching_live_token_is_distinct_from_missing`, `existing_account_without_live_token_can_switch_away_from_stale_binding` |
+| `ExistingAccount(Some)` compare-before-delete / rotated refresh | `existing_account_with_matching_live_refresh_carries_disk_token`, `existing_account_ensure_unchanged_rejects_rotated_live_refresh` |
+| MissingAccount only drops its marker | `missing_account_clear_outgoing_only_drops_its_ownership_marker`, `missing_account_current_can_switch_away_to_third_party` |
+| Workspace mismatch fail-closed | `workspace_mismatch_between_store_and_live_auth_is_rejected` |
+| Stale **target** while takeover already enabled | `stale_target_binding_reports_choose_account_even_when_takeover_already_enabled`, `linux_standin_stale_codex_oauth_target_reports_choose_account_during_takeover` |
+| Linux MissingAccount current switch-away | `linux_standin_missing_codex_oauth_current_can_switch_away` |
+| Card **选择账号** on current and non-current | `ProviderCard.codexAccount.test.tsx` |
+
+Chinese recovery: `docs/guides/codex-stale-account-binding-zh.md`, FAQ, `2.2-switch.md`.
+
 ## Untested (honest)
 
 | Item | Why cloud cannot claim it |

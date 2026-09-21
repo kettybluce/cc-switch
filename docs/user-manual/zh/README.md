@@ -121,6 +121,7 @@
 - **轻量模式**：退出到托盘时销毁主窗口，空闲占用接近零 — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
 - **配额与余额展示**：官方订阅类（Claude/Codex/Gemini/Copilot/Codex OAuth）自动展示剩余额度；Token Plan 和第三方余额通过内置模板一键启用 — 详见 [2.5 用量查询](./2-providers/2.5-usage-query.md)
 - **Codex OAuth 反向代理**：用 ChatGPT 账号在 Claude Code 中复用 Codex 服务 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
+- **Codex 绑定悬空恢复**：删除 ChatGPT 账号再登录后，点卡片 **选择账号** 重新绑定，切走失效当前卡不会误删后来的官方登录 — 详见 [2.2 切换供应商](./2-providers/2.2-switch.md) 与 [攻略](../../guides/codex-stale-account-binding-zh.md)
 - **托盘按应用分级菜单**：Claude / Codex / Gemini 独立子菜单，标题展示当前供应商与可用用量摘要 — 详见 [2.2 切换供应商](./2-providers/2.2-switch.md)
 - **Skills 发现与批量更新**：SHA-256 更新检测、批量更新、skills.sh 公共注册表搜索 — 详见 [3.3 Skills 技能管理](./3-extensions/3.3-skills.md)
 - **完整 URL 端点模式**：高级选项支持将 base_url 视作完整上游端点 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
