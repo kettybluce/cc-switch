@@ -17,6 +17,7 @@
     "test:docker": "bash scripts/docker-self-test.sh",
     "test:docker:all": "bash scripts/docker-self-test.sh",
     "test:docker:proxy": "env TEST_FILTER=proxy_projection_linux bash scripts/docker-self-test.sh",
+    "test:docker:usage": "env TEST_FILTER=session_usage_scan bash scripts/docker-self-test.sh",
     "test:docker:pi-crud": "env TEST_FILTER=pi-crud bash scripts/docker-self-test.sh",
     "test:docker:lite": "env TEST_FILTER=lib-lite bash scripts/docker-self-test.sh"
   },

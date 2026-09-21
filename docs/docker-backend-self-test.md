@@ -64,6 +64,11 @@ TEST_FILTER=proxy_projection_linux pnpm test:docker
 pnpm test:docker:proxy
 make test-docker-proxy
 
+# Isolated-HOME JSONL usage scan only (#64)
+TEST_FILTER=session_usage_scan pnpm test:docker
+pnpm test:docker:usage
+make test-docker-usage
+
 # Pi CRUD linux stand-in + fetch_models_ / live-update lib tests (#46)
 TEST_FILTER=pi-crud pnpm test:docker
 pnpm test:docker:pi-crud

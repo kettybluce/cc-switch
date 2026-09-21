@@ -97,6 +97,9 @@ run_host_fallback() {
     proxy|proxy_projection_linux)
       host_cargo --test proxy_projection_linux
       ;;
+    session_usage_scan|usage-scan|usage_scan)
+      host_cargo --test session_usage_scan
+      ;;
     pi-crud|pi_crud|pi-crud-linux)
       host_cargo --test proxy_projection_linux linux_standin_create
       host_cargo --test proxy_projection_linux linux_standin_update
