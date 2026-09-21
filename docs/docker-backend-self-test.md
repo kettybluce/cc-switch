@@ -41,9 +41,9 @@ Expect compose / cargo **exit 0**. The default command is:
 cargo test --manifest-path src-tauri/Cargo.toml --test proxy_projection_linux -- --test-threads=1
 ```
 
-Broader crate (compiles extra tests on first run; slower):
+Broader crate (compiles extra tests on first run; slower). **Required before shipping a Portable/MSI after self-test work**, together with a written report (exit code + pass/fail counts):
 
-更广的 crate 测试（首次会再编译其余用例，更慢）：
+自测工作之后出 Portable/MSI **必须**跑全量并附报告（退出码 + 通过/失败计数）：
 
 ```bash
 docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
@@ -96,6 +96,18 @@ Default GitHub Actions **does not** build this image (Rust + GTK compile is too 
 A cheap job only validates `docker compose -f docker-compose.test.yml config` when the Docker files change.
 
 仅当 Docker 相关文件变更时，有一个轻量任务校验 compose 配置。
+
+## Shipping / 发版
+
+After self-test work, a Windows Portable (preferred) / MSI ship **requires** Docker **full-suite** self-test **and a report**:
+
+自测工作之后发 Windows 绿色版（优先）/ MSI **必须**有 Docker **全量**自测 **和报告**：
+
+- Command: `pnpm test:docker:all` / `make test-docker-all` / `TEST_FILTER=all`
+- Report: exit code, pass/fail counts, SCHEMA still 18, no host `C:` writes
+- Default `pnpm test:docker` (`proxy_projection_linux` only) is the **minimum gate**, not the shipping report
+
+默认 `pnpm test:docker` 只是最低门槛，不是发版报告。
 
 ## Hard no / 硬约束
 
