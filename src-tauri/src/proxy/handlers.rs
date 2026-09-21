@@ -2556,7 +2556,10 @@ fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
                 .and_then(|d| d.as_object())
                 .is_some_and(|o| !o.is_empty());
             let (payload, is_full_message) = if delta_nonempty {
-                (choice.get("delta").unwrap(), false)
+                match choice.get("delta") {
+                    Some(delta) => (delta, false),
+                    None => return Ok(()),
+                }
             } else if let Some(message) = choice.get("message") {
                 (message, true)
             } else if let Some(delta) = choice.get("delta") {
@@ -3334,6 +3337,22 @@ data: {\"usage\":{\"prompt_to";
 
         let response = chat_sse_to_response_value(sse).unwrap();
         assert_eq!(response["choices"][0]["message"]["content"], "hi");
+    }
+
+    #[test]
+    fn chat_sse_to_response_value_rejects_truncated_json_without_finish() {
+        let sse = "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"}";
+
+        let err = chat_sse_to_response_value(sse).unwrap_err();
+        match err {
+            ProxyError::TransformError(msg) => {
+                assert!(
+                    msg.contains("truncated") || msg.contains("No chat completion choices"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected TransformError, got {other:?}"),
+        }
     }
 
     #[test]

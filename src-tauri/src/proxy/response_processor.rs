@@ -679,6 +679,35 @@ async fn log_usage_internal(
     }
 }
 
+/// Parse one SSE block (or residual buffer at EOF) into the usage collector.
+async fn ingest_sse_event_text(event_text: &str, collector: &Option<SseUsageCollector>, tag: &str) {
+    if event_text.trim().is_empty() {
+        return;
+    }
+    for line in event_text.lines() {
+        if let Some(data) = strip_sse_field(line, "data") {
+            if data.trim() == "[DONE]" {
+                log::debug!("[{tag}] <<< SSE: [DONE]");
+                continue;
+            }
+            let collected = match collector {
+                Some(c) if c.should_collect(data) => match serde_json::from_str::<Value>(data) {
+                    Ok(json_value) => {
+                        c.push(json_value).await;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                _ => false,
+            };
+            log::trace!(
+                "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
+                data.len()
+            );
+        }
+    }
+}
+
 /// 创建带日志记录和超时控制的透传流
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
@@ -750,33 +779,7 @@ pub fn create_logged_passthrough_stream(
 
                         // 尝试解析并记录完整的 SSE 事件
                         while let Some(event_text) = take_sse_block(&mut buffer) {
-                            if !event_text.trim().is_empty() {
-                                // 提取 data 部分；只有 usage collector 存在时才解析 JSON。
-                                for line in event_text.lines() {
-                                    if let Some(data) = strip_sse_field(line, "data") {
-                                        if data.trim() != "[DONE]" {
-                                            let collected = match &collector {
-                                                Some(c) if c.should_collect(data) => {
-                                                    match serde_json::from_str::<Value>(data) {
-                                                        Ok(json_value) => {
-                                                            c.push(json_value).await;
-                                                            true
-                                                        }
-                                                        Err(_) => false,
-                                                    }
-                                                }
-                                                _ => false,
-                                            };
-                                            log::trace!(
-                                                "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
-                                                data.len()
-                                            );
-                                        } else {
-                                            log::debug!("[{tag}] <<< SSE: [DONE]");
-                                        }
-                                    }
-                                }
-                            }
+                            ingest_sse_event_text(&event_text, &collector, tag).await;
                         }
                     }
 
@@ -788,7 +791,18 @@ pub fn create_logged_passthrough_stream(
                     break;
                 }
                 None => {
-                    // 流正常结束
+                    // 流正常结束。半截 SSE（缺尾部空行）仍交给用量收集器，
+                    // 对齐 handlers.rs 对残余 buffer 的处理。
+                    if inspect_sse_events {
+                        if !utf8_remainder.is_empty() {
+                            buffer.push_str(&String::from_utf8_lossy(&utf8_remainder));
+                            utf8_remainder.clear();
+                        }
+                        if !buffer.trim().is_empty() {
+                            ingest_sse_event_text(&buffer, &collector, tag).await;
+                            buffer.clear();
+                        }
+                    }
                     break;
                 }
             }
@@ -864,7 +878,9 @@ mod tests {
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
     };
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
+    use futures::stream::StreamExt;
     use rust_decimal::Decimal;
+    use serde_json::Value;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -1279,5 +1295,48 @@ mod tests {
             Decimal::from_str("1.5").unwrap()
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn passthrough_collects_truncated_sse_without_trailing_blank_line() {
+        let collected = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let collected_cb = collected.clone();
+        let collector =
+            SseUsageCollector::new(std::time::Instant::now(), None, move |events, _| {
+                *collected_cb.lock().expect("collected lock") = events;
+            });
+
+        let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from_static(
+            br#"data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}"#,
+        ))]);
+        let logged = create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            StreamingTimeoutConfig {
+                first_byte_timeout: 0,
+                idle_timeout: 0,
+            },
+            None,
+        );
+        tokio::pin!(logged);
+        let mut forwarded = Vec::new();
+        while let Some(chunk) = logged.next().await {
+            forwarded.push(chunk.expect("forward chunk"));
+        }
+
+        let forwarded: Vec<u8> = forwarded.into_iter().flat_map(|b| b.to_vec()).collect();
+        assert_eq!(
+            forwarded,
+            br#"data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}"#
+        );
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(
+            events.len(),
+            1,
+            "residual SSE without \\n\\n must still be collected"
+        );
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 3);
+        assert_eq!(events[0]["usage"]["completion_tokens"], 1);
     }
 }

@@ -342,4 +342,16 @@ mod tests {
             "each invalid byte should produce one U+FFFD"
         );
     }
+
+    #[test]
+    fn take_sse_block_leaves_truncated_tail_in_buffer() {
+        let mut buffer = "data: {\"ok\":true}\n\ndata: {\"partial".to_string();
+        assert_eq!(
+            take_sse_block(&mut buffer),
+            Some("data: {\"ok\":true}".to_string())
+        );
+        assert_eq!(buffer, "data: {\"partial");
+        assert_eq!(take_sse_block(&mut buffer), None);
+        assert_eq!(buffer, "data: {\"partial");
+    }
 }

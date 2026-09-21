@@ -2065,6 +2065,41 @@ mod tests {
     }
 
     #[test]
+    fn remap_chat_developer_role_rewrites_every_developer_message() {
+        let mut body = json!({
+            "messages": [
+                {"role": "developer", "content": "You are GLM."},
+                {"role": "user", "content": "hi"},
+                {"role": "developer", "content": "stay system"},
+                {"role": "assistant", "content": "ok"}
+            ]
+        });
+        assert!(remap_chat_developer_role_to_system(&mut body));
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert_eq!(body["messages"][2]["role"], "system");
+        assert_eq!(body["messages"][2]["content"], "stay system");
+        assert_eq!(body["messages"][3]["role"], "assistant");
+    }
+
+    #[test]
+    fn remap_chat_developer_role_skips_non_object_and_missing_messages() {
+        let mut no_messages = json!({"model": "glm-4"});
+        assert!(!remap_chat_developer_role_to_system(&mut no_messages));
+
+        let mut mixed = json!({
+            "messages": [
+                "not-an-object",
+                {"role": "developer", "content": "prompt"},
+                {"role": "user", "content": "hi"}
+            ]
+        });
+        assert!(remap_chat_developer_role_to_system(&mut mixed));
+        assert_eq!(mixed["messages"][0], "not-an-object");
+        assert_eq!(mixed["messages"][1]["role"], "system");
+    }
+
+    #[test]
     fn tool_choice_forced_tool_maps_to_nested_function_selector() {
         // Anthropic {"type":"tool","name":"X"} must become OpenAI Chat
         // {"type":"function","function":{"name":"X"}} — the *nested* form, not
