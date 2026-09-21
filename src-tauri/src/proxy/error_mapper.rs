@@ -63,9 +63,9 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
     }
 }
 
-/// 将 ProxyError 转换为用户友好的错误消息
+/// 将 ProxyError 转换为用户友好的错误消息（密钥已脱敏，可写入请求日志）。
 pub fn get_error_message(error: &ProxyError) -> String {
-    match error {
+    let raw = match error {
         ProxyError::UpstreamError { status, body } => {
             if let Some(body) = body {
                 format!("上游错误 ({status}): {body}")
@@ -83,7 +83,8 @@ pub fn get_error_message(error: &ProxyError) -> String {
         ProxyError::DatabaseError(msg) => format!("数据库错误: {msg}"),
         ProxyError::TransformError(msg) => format!("请求/响应转换错误: {msg}"),
         _ => error.to_string(),
-    }
+    };
+    crate::redact_secret_text(&raw)
 }
 
 #[cfg(test)]
@@ -151,5 +152,21 @@ mod tests {
         assert!(msg.contains("上游错误"));
         assert!(msg.contains("500"));
         assert!(msg.contains("Internal Server Error"));
+    }
+
+    #[test]
+    fn get_error_message_does_not_print_raw_api_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let error = ProxyError::UpstreamError {
+            status: 401,
+            body: Some(format!(
+                r#"{{"error":{{"message":"invalid x-api-key: {key}"}}}}"#
+            )),
+        };
+        let msg = get_error_message(&error);
+        assert!(!msg.contains(key), "{msg}");
+        assert!(!msg.contains("TESTSECRETVALUE99"), "{msg}");
+        assert!(msg.contains("[REDACTED]"), "{msg}");
+        assert!(msg.contains("401"), "{msg}");
     }
 }

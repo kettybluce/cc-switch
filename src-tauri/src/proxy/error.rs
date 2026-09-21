@@ -4,9 +4,10 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use std::fmt;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum ProxyError {
     #[error("上游响应体超过大小上限: {0} 字节")]
     ResponseBodyTooLarge(usize),
@@ -42,7 +43,9 @@ pub enum ProxyError {
     #[error("Provider不健康: {0}")]
     ProviderUnhealthy(String),
 
-    #[error("上游错误 (状态码 {status}): {body:?}")]
+    /// Display omits the raw body; logs and request-log rows must use
+    /// `get_error_message` / `summarize_proxy_error`, which redact first.
+    #[error("上游错误 (状态码 {status})")]
     UpstreamError { status: u16, body: Option<String> },
 
     #[error("超过最大重试次数")]
@@ -79,6 +82,19 @@ pub enum ProxyError {
     Internal(String),
 }
 
+impl fmt::Debug for ProxyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UpstreamError { status, body } => f
+                .debug_struct("UpstreamError")
+                .field("status", status)
+                .field("body", &body.as_deref().map(crate::redact_secret_text))
+                .finish(),
+            other => write!(f, "{}", crate::redact_secret_text(&other.to_string())),
+        }
+    }
+}
+
 impl IntoResponse for ProxyError {
     fn into_response(self) -> Response {
         let (status, body) = match &self {
@@ -89,13 +105,13 @@ impl IntoResponse for ProxyError {
                 let http_status =
                     StatusCode::from_u16(*upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
 
-                // 尝试解析上游响应体为 JSON，如果失败则包装为字符串
+                // 尝试解析上游响应体为 JSON，如果失败则包装为字符串。
+                // 非 loopback 监听时调用方不可信，必须先抹掉被上游回显的密钥。
                 let error_body = if let Some(body_str) = upstream_body {
-                    if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(body_str) {
-                        // 上游返回的是 JSON，直接透传
+                    let body_str = crate::redact_secret_text(body_str);
+                    if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(&body_str) {
                         json_body
                     } else {
-                        // 上游返回的不是 JSON，包装为错误消息
                         json!({
                             "error": {
                                 "message": body_str,
@@ -167,7 +183,7 @@ impl IntoResponse for ProxyError {
 
                 let error_body = json!({
                     "error": {
-                        "message": message,
+                        "message": crate::redact_secret_text(&message),
                         "type": "proxy_error",
                     }
                 });
@@ -177,6 +193,41 @@ impl IntoResponse for ProxyError {
         };
 
         (status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn into_response_does_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let upstream = ProxyError::UpstreamError {
+            status: 401,
+            body: Some(format!(
+                r#"{{"error":{{"message":"invalid x-api-key: {key}"}}}}"#
+            )),
+        };
+        let response = upstream.into_response();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("upstream body");
+        let text = String::from_utf8(bytes.to_vec()).expect("utf8");
+        assert!(!text.contains(key), "{text}");
+        assert!(!text.contains("TESTSECRETVALUE99"), "{text}");
+        assert!(text.contains("[REDACTED]"), "{text}");
+
+        let forward = ProxyError::ForwardFailed(format!("upstream rejected api_key {key}"));
+        let response = forward.into_response();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("forward body");
+        let text = String::from_utf8(bytes.to_vec()).expect("utf8");
+        assert!(!text.contains(key), "{text}");
+        assert!(!text.contains("TESTSECRETVALUE99"), "{text}");
+        assert!(text.contains("[REDACTED]"), "{text}");
     }
 }
 

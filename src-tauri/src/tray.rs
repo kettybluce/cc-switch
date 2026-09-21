@@ -290,7 +290,7 @@ fn format_script_summary(result: &crate::provider::UsageResult) -> Option<String
         let emoji = emoji_for_utilization(worst);
         let body = parts
             .iter()
-            .map(|(label, u)| format!("{label}{}%", u.round() as i64))
+            .map(|(label, u)| format!("{}{}%", crate::redact_secret_text(label), u.round() as i64))
             .collect::<Vec<_>>()
             .join(" ");
         return Some(format!("{emoji} {body}"));
@@ -299,7 +299,7 @@ fn format_script_summary(result: &crate::provider::UsageResult) -> Option<String
     let first = data.first()?;
     let pct = tier_pct(first)?;
     let emoji = emoji_for_utilization(pct);
-    let plan = first.plan_name.as_deref().unwrap_or("");
+    let plan = crate::redact_secret_text(first.plan_name.as_deref().unwrap_or(""));
     let rounded = pct.round() as i64;
     if plan.is_empty() {
         Some(format!("{} {}%", emoji, rounded))
@@ -1224,7 +1224,10 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
                     .map(|_| ()),
                 };
                 if let Err(e) = result {
-                    log::debug!("[Tray] 刷新{log_name}供应商 {provider_id} 用量失败: {e}");
+                    log::debug!(
+                        "[Tray] 刷新{log_name}供应商 {provider_id} 用量失败: {}",
+                        crate::redact_secret_text(&e)
+                    );
                 }
             });
         }
@@ -1826,5 +1829,16 @@ mod tests {
     fn script_summary_empty_data_returns_none() {
         let r = usage_result(true, vec![]);
         assert!(format_script_summary(&r).is_none());
+    }
+
+    #[test]
+    fn tray_script_summary_does_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let r = usage_result(true, vec![usage_data(Some(key), 40.0)]);
+        let s = format_script_summary(&r).expect("should format");
+        assert!(!s.contains(key), "{s}");
+        assert!(!s.contains("TESTSECRETVALUE99"), "{s}");
+        assert!(s.contains("[REDACTED]"), "{s}");
+        assert!(s.contains("40%"), "{s}");
     }
 }

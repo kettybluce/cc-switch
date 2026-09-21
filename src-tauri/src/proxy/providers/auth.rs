@@ -2,10 +2,12 @@
 //!
 //! 定义认证信息和认证策略，支持多种上游供应商的认证方式。
 
+use std::fmt;
+
 /// 认证信息
 ///
 /// 包含 API Key 和对应的认证策略
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthInfo {
     /// API Key
     pub api_key: String,
@@ -76,6 +78,16 @@ impl AuthInfo {
                 "***".to_string()
             }
         })
+    }
+}
+
+impl fmt::Debug for AuthInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthInfo")
+            .field("api_key", &self.masked_key())
+            .field("strategy", &self.strategy)
+            .field("access_token", &self.masked_access_token())
+            .finish()
     }
 }
 
@@ -170,6 +182,17 @@ mod tests {
         let auth = AuthInfo::new("测试⚠️1234567890".to_string(), AuthStrategy::Bearer);
         let masked = auth.masked_key();
         assert!(!masked.is_empty());
+    }
+
+    #[test]
+    fn test_auth_info_debug_does_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let token = "ya29.access-token-TESTSECRETVALUE99";
+        let auth = AuthInfo::with_access_token(key.to_string(), token.to_string());
+        let debug = format!("{auth:?}");
+        assert!(!debug.contains(key), "{debug}");
+        assert!(!debug.contains(token), "{debug}");
+        assert!(!debug.contains("TESTSECRETVALUE99"), "{debug}");
     }
 
     #[test]
