@@ -8,7 +8,7 @@ Cloud / Linux / Docker Desktop can build an image and run **backend fixture + pr
 
 | Covered / 覆盖 | Not covered / 不覆盖 |
 | --- | --- |
-| `proxy_projection_linux` — POSIX stand-in for Pi / Claude / Codex takeover projection, Claude/Codex roundtrips (unknown fields, hot-switch backup, independent disable), **and** fail-closed enable (missing/malformed Live, foreign local proxy) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
+| `proxy_projection_linux` — POSIX stand-in for Pi / Claude / Codex takeover projection, Claude/Codex roundtrips (unknown fields, hot-switch backup, independent disable), **and** fail-closed enable (missing/malformed Live, foreign local proxy including Pi) | Live WSL UNC (`\\wsl.localhost\…`) on a real Windows host |
 | Isolated `CC_SWITCH_TEST_HOME` under `/tmp` **inside** the container | Windows MSI / Portable installers |
 | Optional `TEST_FILTER=all` → full `cargo test --manifest-path src-tauri/Cargo.toml` | Full Tauri GUI, tray, or WebView window |
 | SCHEMA 18 assertions (no `proxy_config` row for `pi`) | Official 3.20.x GUI QA on the user's desktop |

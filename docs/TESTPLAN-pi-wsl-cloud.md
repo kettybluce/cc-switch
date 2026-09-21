@@ -165,9 +165,10 @@ Happy-path roundtrips landed in #51. This layer only adds:
 - `live_points_at_foreign_local_proxy` — enable refuses when Live already aims at another local listen (`127.0.0.1:9999`)
 - `linux_standin_*_fails_closed_when_*_missing` — missing `settings.json` / `config.toml`
 - `linux_standin_*_fails_closed_on_malformed_*` — broken JSON/TOML
-- `linux_standin_*_fails_closed_when_proxy_already_pointing_elsewhere` — foreign local proxy
+- `linux_standin_*_fails_closed_when_proxy_already_pointing_elsewhere` — foreign local proxy (Claude / Codex / **Pi**)
+- `linux_standin_pi_takeover_fails_closed_on_malformed_models_json` — broken Pi `models.json`
 
-Enable must error, leave Live unchanged, persist no backup, and leave the takeover flag off.
+Enable must error, leave Live unchanged, persist no backup, and leave the takeover flag off (`proxy_takeover_pi` for Pi).
 
 `SCHEMA_VERSION` stays 18. No `proxy_config` row for `pi`.
 

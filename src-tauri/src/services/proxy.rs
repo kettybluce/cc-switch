@@ -2568,8 +2568,76 @@ impl ProxyService {
                     },
                 ))
             }
+            AppType::Pi => {
+                let document = match crate::pi_config::read_pi_models_document() {
+                    Ok(document) => document,
+                    Err(err) => {
+                        let err = err.to_string();
+                        if Self::live_error_is_missing_config(&err) {
+                            return Ok(false);
+                        }
+                        return Err(err);
+                    }
+                };
+                Ok(Self::pi_document_points_at_foreign_local_proxy(
+                    &document,
+                    &proxy_url,
+                    &proxy_codex_base_url,
+                ))
+            }
             _ => Ok(false),
         }
+    }
+
+    fn pi_url_is_foreign_local(url: &str, proxy_url: &str, proxy_codex_base_url: &str) -> bool {
+        Self::is_local_proxy_url(url)
+            && !Self::proxy_urls_match(url, proxy_url)
+            && !Self::proxy_urls_match(url, proxy_codex_base_url)
+    }
+
+    fn pi_node_points_at_foreign_local_proxy(
+        node: &Value,
+        proxy_url: &str,
+        proxy_codex_base_url: &str,
+    ) -> bool {
+        if node
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .is_some_and(|url| Self::pi_url_is_foreign_local(url, proxy_url, proxy_codex_base_url))
+        {
+            return true;
+        }
+        node.get("models")
+            .and_then(Value::as_array)
+            .is_some_and(|models| {
+                models.iter().any(|model| {
+                    model
+                        .get("baseUrl")
+                        .and_then(Value::as_str)
+                        .is_some_and(|url| {
+                            Self::pi_url_is_foreign_local(url, proxy_url, proxy_codex_base_url)
+                        })
+                })
+            })
+    }
+
+    fn pi_document_points_at_foreign_local_proxy(
+        document: &Value,
+        proxy_url: &str,
+        proxy_codex_base_url: &str,
+    ) -> bool {
+        document
+            .get("providers")
+            .and_then(Value::as_object)
+            .is_some_and(|providers| {
+                providers.values().any(|node| {
+                    Self::pi_node_points_at_foreign_local_proxy(
+                        node,
+                        proxy_url,
+                        proxy_codex_base_url,
+                    )
+                })
+            })
     }
 
     async fn live_takeover_matches_current_proxy(

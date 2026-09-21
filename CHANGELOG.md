@@ -12,7 +12,7 @@ Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No f
 ### Added
 
 - Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup (disable restores the new card); independent disable leaves the other app projected
-- Fail-closed takeover: refuse enable when Claude/Codex Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable (#52 unique remainder after #51)
+- Fail-closed takeover: refuse enable when Claude/Codex/Pi Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable
 
 ### Skipped (intentionally)
 

@@ -1741,3 +1741,89 @@ async fn linux_standin_codex_takeover_fails_closed_when_proxy_already_pointing_e
     );
     assert_schema18_pi_has_no_proxy_config_row(&state);
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_pi_takeover_fails_closed_on_malformed_models_json() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let test_home = ensure_test_home();
+    let user_home = wsl_standin_user_home(test_home);
+    let (_claude_dir, _codex_dir, pi_agent) = apply_wsl_standin_overrides(&user_home);
+    let models_path = pi_agent.join("models.json");
+    let malformed = "{not-json";
+    fs::write(&models_path, malformed).expect("write malformed Pi models.json");
+    assert_linux_standin_path(&models_path);
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+
+    assert_enable_fails_closed(
+        &state,
+        "pi",
+        &models_path,
+        Some(malformed),
+        &["JSON", "json", "JSONC", "解析", "格式"],
+    )
+    .await;
+    assert!(
+        !state.db.is_pi_takeover_enabled().expect("pi flag"),
+        "proxy_takeover_pi must stay off"
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_pi_takeover_fails_closed_when_proxy_already_pointing_elsewhere() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let test_home = ensure_test_home();
+    let user_home = wsl_standin_user_home(test_home);
+    let (_claude_dir, _codex_dir, pi_agent) = apply_wsl_standin_overrides(&user_home);
+    let (models_path, settings_path, auth_path) = write_pi_live_fixtures(&pi_agent);
+    let mut document = read_json(&models_path);
+    document["providers"]["anthropic"]["baseUrl"] = json!(FOREIGN_LOCAL_PROXY);
+    document["providers"]["anthropic"]["apiKey"] = json!("PROXY_MANAGED");
+    fs::write(
+        &models_path,
+        serde_json::to_string_pretty(&document).expect("serialize Pi foreign proxy live"),
+    )
+    .expect("write Pi models.json pointing at a foreign local proxy");
+    let models_before = fs::read_to_string(&models_path).expect("Pi models before");
+    let settings_before = fs::read_to_string(&settings_path).expect("Pi settings before");
+    let auth_before = fs::read_to_string(&auth_path).expect("Pi auth before");
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+
+    assert_enable_fails_closed(
+        &state,
+        "pi",
+        &models_path,
+        Some(&models_before),
+        &["其他本地代理", "another local proxy"],
+    )
+    .await;
+    assert_eq!(
+        fs::read_to_string(&settings_path).expect("Pi settings after refused enable"),
+        settings_before,
+        "refusing Pi takeover must not touch settings.json"
+    );
+    assert_eq!(
+        fs::read_to_string(&auth_path).expect("Pi auth after refused enable"),
+        auth_before,
+        "refusing Pi takeover must not touch auth.json"
+    );
+    assert!(
+        !state.db.is_pi_takeover_enabled().expect("pi flag"),
+        "proxy_takeover_pi must stay off"
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
