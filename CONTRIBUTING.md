@@ -51,7 +51,7 @@ pnpm dev
 | `pnpm typecheck` | TypeScript type checking |
 | `pnpm test:unit` | Run unit tests |
 | `pnpm test:docker` | Backend fixture/proxy self-test in Docker (minimum gate; see `docs/docker-backend-self-test.md`) |
-| `pnpm test:docker:all` | Docker full-suite self-test; **required plus a report** before shipping Portable/MSI after self-test work |
+| `pnpm test:docker:all` | Docker full-suite self-test (`TEST_FILTER=all`); **required plus a report** before shipping Portable/MSI after self-test work |
 | `pnpm lint` | ESLint check |
 | `pnpm format` | Format code (Prettier) |
 | `pnpm format:check` | Check code formatting |
@@ -187,7 +187,7 @@ pnpm dev
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test:unit` | 运行单元测试 |
 | `pnpm test:docker` | Docker 内后端夹具/代理自测（最低门槛，见 `docs/docker-backend-self-test.md`） |
-| `pnpm test:docker:all` | Docker 全量自测；自测工作之后出 Portable/MSI **必须**跑通并附报告 |
+| `pnpm test:docker:all` | Docker 全量自测（`TEST_FILTER=all`）；自测工作之后出 Portable/MSI **必须**跑通并附报告 |
 | `pnpm lint` | ESLint 检查 |
 | `pnpm format` | 格式化代码（Prettier） |
 | `pnpm format:check` | 检查代码格式 |
