@@ -539,19 +539,17 @@ pnpm test:unit:watch
 pnpm test:unit --coverage
 ```
 
-**Docker 后端自测**（Linux 镜像，不写 Windows `C:`，不跑 Tauri GUI）：
+**Docker 后端自测**（Linux 镜像，不写 Windows `C:`，不跑 Tauri GUI）。**默认全量 `src-tauri` cargo 测试**；每次运行都会在 `docs/self-test-reports/` 写出中文全量自测报告：
 
 ```bash
 # Ubuntu 22.04 镜像 + 容器内 /tmp 下隔离的 CC_SWITCH_TEST_HOME
-docker compose -f docker-compose.test.yml run --build --rm backend-self-test
-# 封装：pnpm test:docker   /   make test-docker
-
-# 完整 crate（更慢）：TEST_FILTER=all
-docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
-# 封装：pnpm test:docker:all   /   make test-docker-all
+# 默认全量；每次给全量自测报告
+pnpm test:docker
+# 同样：make test-docker   /   bash scripts/docker-self-test.sh
+# 别名：pnpm test:docker:all
 ```
 
-默认跑 `proxy_projection_linux` 与 `session_usage_scan`（SCHEMA 18 的 Pi/Claude/Codex 夹具，含接管往返与隔离 HOME 的 JSONL 用量扫描）。自测工作之后出绿色版/MSI **必须**再跑 `pnpm test:docker:all` 并附报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
+覆盖 SCHEMA 18 的 Pi/Claude/Codex 夹具（含 #51 接管往返）与隔离 HOME 的 JSONL 用量扫描（#64）。自测工作之后出绿色版/MSI **必须**附这份全量报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。SCHEMA 保持 18。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
 
 ### 技术栈
 

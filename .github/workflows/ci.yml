@@ -57,6 +57,9 @@ jobs:
               - "docker-compose.test.yml"
               - ".dockerignore"
               - "scripts/docker-backend-self-test.sh"
+              - "scripts/docker-self-test.sh"
+              - "scripts/render-docker-self-test-report.py"
+              - "docs/docker-backend-self-test.md"
               - "Makefile"
 
   # Cheap, always-on: catches missing `fi` / workflow YAML and Portable zip names
@@ -287,8 +290,8 @@ jobs:
           }
 
   # Cheap syntax check only. Building Dockerfile.test (Rust + GTK) is too
-  # heavy for every PR; run the image locally / in cloud with:
-  #   docker compose -f docker-compose.test.yml run --build --rm backend-self-test
+  # heavy for every PR; run the full suite locally / in cloud with:
+  #   pnpm test:docker   # default FULL cargo test + markdown report
   docker-compose-config:
     name: Docker compose config
     runs-on: ubuntu-latest
@@ -300,3 +303,6 @@ jobs:
 
       - name: Validate compose file
         run: docker compose -f docker-compose.test.yml config
+
+      - name: Report renderer self-check
+        run: python3 scripts/render-docker-self-test-report.py --self-check

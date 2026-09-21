@@ -45,9 +45,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 # Full crate (CI equivalent) when time allows:
 # cargo test --manifest-path src-tauri/Cargo.toml
 
-# Docker (no host GTK install, no Windows C:):
-# docker compose -f docker-compose.test.yml run --build --rm backend-self-test
-# See docs/docker-backend-self-test.md
+# Docker: default FULL src-tauri cargo test + markdown report
+# (no host GTK install, no Windows C:, SCHEMA 18, no Tauri GUI):
+# pnpm test:docker
+# See docs/docker-backend-self-test.md  — 默认全量；每次给全量自测报告
 ```
 
 Cargo's `TESTNAME` is a single substring filter; run the names above as separate invocations (or one regex if the toolchain accepts it).
