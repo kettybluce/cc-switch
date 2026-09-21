@@ -233,7 +233,7 @@ pub async fn execute_usage_script(
 }
 
 /// 请求配置结构
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct RequestConfig {
     url: String,
     method: String,
@@ -241,6 +241,27 @@ struct RequestConfig {
     headers: HashMap<String, String>,
     #[serde(default)]
     body: Option<String>,
+}
+
+impl std::fmt::Debug for RequestConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestConfig")
+            .field("url", &crate::redact_url_for_log(&self.url))
+            .field("method", &self.method)
+            .field("headers", &"[REDACTED]")
+            .field("body", &self.body.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
+fn preview_http_error_body(text: &str) -> String {
+    let redacted = crate::redact_secret_text(text);
+    if redacted.chars().count() > 200 {
+        let truncated: String = redacted.chars().take(200).collect();
+        format!("{truncated}...")
+    } else {
+        redacted
+    }
 }
 
 /// 发送 HTTP 请求
@@ -277,8 +298,11 @@ async fn send_http_request(config: &RequestConfig, timeout_secs: u64) -> Result<
     let resp = req.send().await.map_err(|e| {
         AppError::localized(
             "usage_script.request_failed",
-            format!("请求失败: {e}"),
-            format!("Request failed: {e}"),
+            format!("请求失败: {}", crate::redact_secret_text(&e.to_string())),
+            format!(
+                "Request failed: {}",
+                crate::redact_secret_text(&e.to_string())
+            ),
         )
     })?;
 
@@ -286,21 +310,19 @@ async fn send_http_request(config: &RequestConfig, timeout_secs: u64) -> Result<
     let text = resp.text().await.map_err(|e| {
         AppError::localized(
             "usage_script.read_response_failed",
-            format!("读取响应失败: {e}"),
-            format!("Failed to read response: {e}"),
+            format!(
+                "读取响应失败: {}",
+                crate::redact_secret_text(&e.to_string())
+            ),
+            format!(
+                "Failed to read response: {}",
+                crate::redact_secret_text(&e.to_string())
+            ),
         )
     })?;
 
     if !status.is_success() {
-        let preview = if text.len() > 200 {
-            let mut safe_cut = 200usize;
-            while !text.is_char_boundary(safe_cut) {
-                safe_cut = safe_cut.saturating_sub(1);
-            }
-            format!("{}...", &text[..safe_cut])
-        } else {
-            text.clone()
-        };
+        let preview = preview_http_error_body(&text);
         return Err(AppError::localized(
             "usage_script.http_error",
             format!("HTTP {status} : {preview}"),
@@ -724,5 +746,32 @@ mod tests {
             elapsed < std::time::Duration::from_secs(15),
             "interruption took too long: {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn http_error_preview_does_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let preview = super::preview_http_error_body(&format!(
+            r#"{{"error":{{"message":"invalid api_key: {key}"}}}}"#
+        ));
+        assert!(!preview.contains(key), "{preview}");
+        assert!(!preview.contains("TESTSECRETVALUE99"), "{preview}");
+        assert!(preview.contains("[REDACTED]"), "{preview}");
+    }
+
+    #[test]
+    fn request_config_debug_does_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let config = RequestConfig {
+            url: format!("https://user:{key}@api.example.com/v1"),
+            method: "POST".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), format!("Bearer {key}"))]),
+            body: Some(format!(r#"{{"api_key":"{key}"}}"#)),
+        };
+        let debug = format!("{config:?}");
+        assert!(!debug.contains(key), "{debug}");
+        assert!(!debug.contains("TESTSECRETVALUE99"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
+        assert!(debug.contains("POST"), "{debug}");
     }
 }

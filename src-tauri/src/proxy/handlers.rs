@@ -1923,9 +1923,10 @@ fn codex_proxy_error_json(
 ) -> Value {
     let (mut body, upstream_status) = match error {
         ProxyError::UpstreamError { status, body } => {
-            let parsed_body = body
-                .as_deref()
-                .map(|body| serde_json::from_str::<Value>(body).unwrap_or_else(|_| json!(body)));
+            let parsed_body = body.as_deref().map(|body| {
+                let redacted = crate::redact_secret_text(body);
+                serde_json::from_str::<Value>(&redacted).unwrap_or_else(|_| json!(redacted))
+            });
             (
                 transform_codex_chat::chat_error_to_response_error(parsed_body.as_ref()),
                 Some(*status),
@@ -2056,7 +2057,8 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
 }
 
 fn compact_error_message(message: &str, max_chars: usize) -> String {
-    let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let redacted = crate::redact_secret_text(message);
+    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= max_chars {
         return normalized;
     }
@@ -2858,7 +2860,7 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, responses_sse_stream_to_anthropic_message,
+        codex_proxy_error_json, compact_error_message, responses_sse_stream_to_anthropic_message,
         responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
         upstream_body_parse_error,
     };
@@ -3603,5 +3605,30 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert_eq!(body["error"]["provider"], "HCAI");
         assert_eq!(body["error"]["model"], "gpt-5.5");
         assert_eq!(body["error"]["endpoint"], "/responses");
+    }
+
+    #[test]
+    fn codex_proxy_error_does_not_print_raw_api_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let error = ProxyError::UpstreamError {
+            status: 401,
+            body: Some(format!(
+                r#"{{"error":{{"message":"invalid api_key: {key}","type":"auth_error"}}}}"#
+            )),
+        };
+        let body = codex_proxy_error_json("Anthropic", "claude-sonnet-4", "/responses", &error);
+        let rendered = body.to_string();
+        assert!(!rendered.contains(key), "{rendered}");
+        assert!(!rendered.contains("TESTSECRETVALUE99"), "{rendered}");
+        assert!(rendered.contains("[REDACTED]"), "{rendered}");
+    }
+
+    #[test]
+    fn compact_error_message_does_not_print_raw_keys() {
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let compact = compact_error_message(&format!("invalid api_key: {key}"), 1800);
+        assert!(!compact.contains(key), "{compact}");
+        assert!(!compact.contains("TESTSECRETVALUE99"), "{compact}");
+        assert!(compact.contains("[REDACTED]"), "{compact}");
     }
 }

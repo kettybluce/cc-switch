@@ -30,6 +30,8 @@ mod prompt;
 mod prompt_files;
 mod provider;
 mod proxy;
+mod secret_redact;
+pub(crate) use secret_redact::redact_secret_text;
 mod services;
 mod session_manager;
 mod settings;

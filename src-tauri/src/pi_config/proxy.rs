@@ -536,6 +536,25 @@ mod tests {
         );
         assert!(is_projected_provider_node(anthropic));
         assert!(document_has_proxy_projection(&document));
+
+        let serialized = serde_json::to_string(&document).expect("serialize projected models.json");
+        assert!(
+            !serialized.contains("sk-ant-live"),
+            "projected models.json must not keep the live Anthropic key: {serialized}"
+        );
+        assert!(
+            !serialized.contains("sk-openai-live"),
+            "projected models.json must not keep the live OpenAI key: {serialized}"
+        );
+        assert!(
+            !serialized.contains("gemini-key"),
+            "projected models.json must not keep the live Gemini key: {serialized}"
+        );
+        assert_eq!(openai["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
+        assert_eq!(
+            document["providers"]["gemini"]["apiKey"],
+            json!(PI_PROXY_API_KEY_PLACEHOLDER)
+        );
     }
 
     #[test]
@@ -677,6 +696,12 @@ mod tests {
         );
         assert_eq!(node["compat"]["supportsDeveloperRole"], json!(false));
         assert_eq!(node["baseUrl"], json!("http://127.0.0.1:15721/v1"));
+        assert_eq!(node["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
+        let serialized = serde_json::to_string(&node).expect("serialize node");
+        assert!(
+            !serialized.contains("sk-live"),
+            "projected node must not keep the live apiKey: {serialized}"
+        );
     }
 
     #[test]
@@ -811,6 +836,31 @@ mod tests {
         );
         assert_eq!(written["customTopLevel"], json!("keep-me"));
         assert!(written.get("defaultProvider").is_none());
+        assert_eq!(
+            written["providers"]["anthropic"]["apiKey"],
+            json!(PI_PROXY_API_KEY_PLACEHOLDER)
+        );
+        assert_eq!(
+            written["providers"]["openai"]["apiKey"],
+            json!(PI_PROXY_API_KEY_PLACEHOLDER)
+        );
+        assert_eq!(
+            written["providers"]["gemini"]["apiKey"],
+            json!(PI_PROXY_API_KEY_PLACEHOLDER)
+        );
+        let serialized = written.to_string();
+        assert!(
+            !serialized.contains("sk-ant-live"),
+            "live Anthropic key must not remain in projected models.json: {serialized}"
+        );
+        assert!(
+            !serialized.contains("sk-openai-live"),
+            "live OpenAI key must not remain in projected models.json: {serialized}"
+        );
+        assert!(
+            !serialized.contains("gemini-key"),
+            "live Gemini key must not remain in projected models.json: {serialized}"
+        );
         assert_eq!(
             fs::read_to_string(&settings_path).expect("settings after"),
             settings_before,

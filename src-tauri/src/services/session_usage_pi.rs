@@ -532,7 +532,8 @@ fn parse_usage_record(
                 };
                 let error = message
                     .and_then(|value| nonempty_string(value.get("errorMessage")))
-                    .unwrap_or(fallback)
+                    .unwrap_or(fallback);
+                let error = crate::redact_secret_text(error)
                     .chars()
                     .take(4096)
                     .collect();
@@ -1292,6 +1293,37 @@ mod tests {
                 (500, "provider failed".to_string()),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pi_session_error_message_does_not_store_raw_keys() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "key-leak");
+        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
+        let failed = assistant_line("failed", "2023-11-14T22:13:21Z", 1).replace(
+            r#""stopReason":"stop""#,
+            &format!(r#""stopReason":"error","errorMessage":"invalid api_key: {key}""#),
+        );
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-key-leak","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                &failed,
+            ],
+        );
+
+        let db = Database::memory()?;
+        assert_eq!(sync_pi_files(&db, std::slice::from_ref(&path)).imported, 1);
+        let conn = lock_conn!(db.conn);
+        let message: String = conn.query_row(
+            "SELECT error_message FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!message.contains(key), "{message}");
+        assert!(!message.contains("TESTSECRETVALUE99"), "{message}");
+        assert!(message.contains("[REDACTED]"), "{message}");
         Ok(())
     }
 
