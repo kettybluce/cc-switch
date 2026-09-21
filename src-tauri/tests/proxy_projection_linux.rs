@@ -32,6 +32,10 @@ const PI_SETTINGS_FIXTURE: &str =
 
 const PI_AUTH_FIXTURE: &str = r#"{"anthropic":{"type":"oauth"}}"#;
 
+/// A local proxy that is not the CC Switch listen under test.
+const FOREIGN_LOCAL_PROXY: &str = "http://127.0.0.1:9999";
+const FOREIGN_LOCAL_PROXY_CODEX: &str = "http://127.0.0.1:9999/v1";
+
 fn wsl_standin_user_home(test_home: &Path) -> PathBuf {
     test_home
         .join("profiles")
@@ -1448,5 +1452,292 @@ async fn linux_standin_independent_disable_leaves_the_other_app_projected() {
     assert!(!codex_restored.contains("PROXY_MANAGED"));
     let (codex_enabled_after, _) = state.db.get_proxy_flags_sync("codex");
     assert!(!codex_enabled_after);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+fn seed_current_claude(state: &cc_switch_lib::AppState) {
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &claude_provider())
+        .expect("save Claude provider");
+    state
+        .db
+        .set_current_provider(AppType::Claude.as_str(), "standin-claude")
+        .expect("set Claude current");
+}
+
+fn seed_current_codex(state: &cc_switch_lib::AppState) {
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &codex_provider())
+        .expect("save Codex provider");
+    state
+        .db
+        .set_current_provider(AppType::Codex.as_str(), "standin-codex")
+        .expect("set Codex current");
+}
+
+fn write_claude_live_settings(settings_path: &Path, base_url: &str, token: &str) {
+    let body = json!({
+        "env": {
+            "ANTHROPIC_AUTH_TOKEN": token,
+            "ANTHROPIC_BASE_URL": base_url
+        },
+        "keepUnknown": "keep-me"
+    });
+    fs::write(
+        settings_path,
+        serde_json::to_string_pretty(&body).expect("serialize Claude live"),
+    )
+    .expect("write Claude settings.json");
+}
+
+fn write_codex_live_config(config_path: &Path, base_url: &str, token: &str) {
+    fs::write(
+        config_path,
+        format!(
+            r#"model_provider = "standin"
+
+model = "gpt-5"
+keep_unknown = true
+
+[model_providers.standin]
+name = "Stand-in"
+base_url = "{base_url}"
+wire_api = "responses"
+experimental_bearer_token = "{token}"
+"#
+        ),
+    )
+    .expect("write Codex config.toml");
+}
+
+async fn assert_enable_fails_closed(
+    state: &cc_switch_lib::AppState,
+    app: &str,
+    live_path: &Path,
+    before: Option<&str>,
+    err_needles: &[&str],
+) {
+    let err = state
+        .proxy_service
+        .set_takeover_for_app(app, true)
+        .await
+        .expect_err("enable must fail closed");
+    assert!(
+        err_needles.iter().any(|needle| err.contains(needle)),
+        "unexpected fail-closed error for {app}: {err}"
+    );
+    match before {
+        None => assert!(
+            !live_path.exists(),
+            "{app} live must stay missing after fail-closed enable: {}",
+            live_path.display()
+        ),
+        Some(expected) => {
+            assert_eq!(
+                fs::read_to_string(live_path).unwrap_or_default(),
+                expected,
+                "{app} live must be left unchanged after fail-closed enable"
+            );
+        }
+    }
+    assert!(
+        state
+            .db
+            .get_live_backup(app)
+            .await
+            .expect("read backup")
+            .is_none(),
+        "{app} must not persist a live backup after fail-closed enable"
+    );
+    assert!(
+        !state
+            .db
+            .is_app_takeover_enabled(app)
+            .await
+            .expect("read takeover flag"),
+        "{app} takeover flag must stay off"
+    );
+    let _ = state.proxy_service.stop().await;
+}
+
+/// Missing Claude Live: enable must fail closed (no backup, no flag, no file).
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_claude_takeover_fails_closed_when_settings_json_missing() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, _codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    assert!(
+        !claude_settings.exists(),
+        "fixture must start without settings.json"
+    );
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    seed_current_claude(&state);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    assert_enable_fails_closed(
+        &state,
+        "claude",
+        &claude_settings,
+        None,
+        &["不存在", "missing"],
+    )
+    .await;
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_codex_takeover_fails_closed_when_config_toml_missing() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (_claude_settings, codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    assert!(
+        !codex_config.exists(),
+        "fixture must start without config.toml"
+    );
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    seed_current_codex(&state);
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+
+    assert_enable_fails_closed(&state, "codex", &codex_config, None, &["不存在", "missing"]).await;
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_claude_takeover_fails_closed_on_malformed_settings_json() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, _codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    let malformed = "{not-json";
+    fs::write(&claude_settings, malformed).expect("write malformed Claude JSON");
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    seed_current_claude(&state);
+
+    assert_enable_fails_closed(
+        &state,
+        "claude",
+        &claude_settings,
+        Some(malformed),
+        &["JSON", "json", "解析", "格式"],
+    )
+    .await;
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_codex_takeover_fails_closed_on_malformed_config_toml() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (_claude_settings, codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    let malformed = "[[[not toml";
+    fs::write(&codex_config, malformed).expect("write malformed Codex TOML");
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    seed_current_codex(&state);
+
+    assert_enable_fails_closed(
+        &state,
+        "codex",
+        &codex_config,
+        Some(malformed),
+        &["TOML", "toml", "解析", "格式"],
+    )
+    .await;
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_claude_takeover_fails_closed_when_proxy_already_pointing_elsewhere() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    write_claude_live_settings(&claude_settings, FOREIGN_LOCAL_PROXY, "PROXY_MANAGED");
+    write_codex_live_config(
+        &codex_config,
+        "https://api.openai.example/v1",
+        "codex-live-key",
+    );
+    let claude_before = fs::read_to_string(&claude_settings).expect("Claude before");
+    let codex_before = fs::read_to_string(&codex_config).expect("Codex before");
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    seed_current_claude(&state);
+    seed_current_codex(&state);
+
+    assert_enable_fails_closed(
+        &state,
+        "claude",
+        &claude_settings,
+        Some(&claude_before),
+        &["其他本地代理", "another local proxy"],
+    )
+    .await;
+    assert_eq!(
+        fs::read_to_string(&codex_config).expect("Codex after refused Claude enable"),
+        codex_before,
+        "refusing Claude takeover must not touch Codex config.toml"
+    );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_codex_takeover_fails_closed_when_proxy_already_pointing_elsewhere() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (claude_settings, codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    write_claude_live_settings(
+        &claude_settings,
+        "https://api.anthropic.example",
+        "claude-live-token",
+    );
+    write_codex_live_config(&codex_config, FOREIGN_LOCAL_PROXY_CODEX, "PROXY_MANAGED");
+    let claude_before = fs::read_to_string(&claude_settings).expect("Claude before");
+    let codex_before = fs::read_to_string(&codex_config).expect("Codex before");
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    seed_current_claude(&state);
+    seed_current_codex(&state);
+
+    assert_enable_fails_closed(
+        &state,
+        "codex",
+        &codex_config,
+        Some(&codex_before),
+        &["其他本地代理", "another local proxy"],
+    )
+    .await;
+    assert_eq!(
+        fs::read_to_string(&claude_settings).expect("Claude after refused Codex enable"),
+        claude_before,
+        "refusing Codex takeover must not touch Claude settings.json"
+    );
     assert_schema18_pi_has_no_proxy_config_row(&state);
 }

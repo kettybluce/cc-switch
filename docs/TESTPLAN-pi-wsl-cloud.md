@@ -158,6 +158,17 @@ Linux stand-in tests in `src-tauri/tests/proxy_projection_linux.rs` (same POSIX 
 - `linux_standin_claude_switch_during_takeover_refreshes_backup` / `linux_standin_codex_switch_during_takeover_refreshes_backup` — hot-switch refreshes `proxy_live_backup` so disable restores the **new** card (Pi delete-during-takeover analogue)
 - `linux_standin_independent_disable_leaves_the_other_app_projected` — disable Claude while Codex stays projected (and the reverse)
 
+### 8. Claude / Codex takeover fail-closed (unique remainder of #52)
+
+Happy-path roundtrips landed in #51. This layer only adds:
+
+- `live_points_at_foreign_local_proxy` — enable refuses when Live already aims at another local listen (`127.0.0.1:9999`)
+- `linux_standin_*_fails_closed_when_*_missing` — missing `settings.json` / `config.toml`
+- `linux_standin_*_fails_closed_on_malformed_*` — broken JSON/TOML
+- `linux_standin_*_fails_closed_when_proxy_already_pointing_elsewhere` — foreign local proxy
+
+Enable must error, leave Live unchanged, persist no backup, and leave the takeover flag off.
+
 `SCHEMA_VERSION` stays 18. No `proxy_config` row for `pi`.
 
 Docker: default `proxy_projection_linux`; full crate via `TEST_FILTER=all` / `pnpm test:docker:all` / `make test-docker-all` (see `docs/docker-backend-self-test.md`).
