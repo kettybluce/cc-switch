@@ -66,14 +66,14 @@ pub(crate) fn is_local_proxy_url(url: &str) -> bool {
         || rest.starts_with("::")
 }
 
-pub(crate) fn is_projected_provider_node(node: &Value) -> bool {
-    if node
-        .get("apiKey")
+fn provider_api_key(node: &Value) -> Option<&str> {
+    node.get("apiKey")
+        .or_else(|| node.get("api_key"))
         .and_then(Value::as_str)
-        .is_some_and(|key| key == PI_PROXY_API_KEY_PLACEHOLDER)
-    {
-        return true;
-    }
+        .map(str::trim)
+}
+
+fn node_has_local_proxy_url(node: &Value) -> bool {
     if node
         .get("baseUrl")
         .and_then(Value::as_str)
@@ -91,6 +91,22 @@ pub(crate) fn is_projected_provider_node(node: &Value) -> bool {
                     .is_some_and(is_local_proxy_url)
             })
         })
+}
+
+pub(crate) fn is_projected_provider_node(node: &Value) -> bool {
+    let api_key = provider_api_key(node).unwrap_or("");
+    if api_key == PI_PROXY_API_KEY_PLACEHOLDER {
+        return true;
+    }
+    // Live local LLMs (Ollama / vLLM / intranet yum on 127.0.0.1) keep a
+    // real apiKey. Treating any loopback URL as projected made
+    // `select_pi_providers` return 503 for those cards and skipped native
+    // sync. Empty/missing keys plus a loopback URL still count as leftover
+    // takeover projection (loop bait).
+    if !api_key.is_empty() {
+        return false;
+    }
+    node_has_local_proxy_url(node)
 }
 
 pub(crate) fn document_has_proxy_projection(document: &Value) -> bool {
@@ -784,6 +800,27 @@ mod tests {
         let projected = project_provider_node(&live, "http://127.0.0.1:15721");
         assert!(!pi_provider_is_forwardable(&projected));
         assert_eq!(projected["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
+
+        let local_llm = json!({
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:11434/v1",
+            "apiKey": "sk-pi-live",
+            "models": [{ "id": "glm-4" }]
+        });
+        assert!(
+            !is_projected_provider_node(&local_llm),
+            "loopback + real key is a live local LLM, not takeover projection"
+        );
+        assert!(pi_provider_is_forwardable(&local_llm));
+
+        let leftover = json!({
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:15721/v1",
+            "apiKey": "  ",
+            "models": [{ "id": "glm-4" }]
+        });
+        assert!(is_projected_provider_node(&leftover));
+        assert!(!pi_provider_is_forwardable(&leftover));
     }
 
     #[test]

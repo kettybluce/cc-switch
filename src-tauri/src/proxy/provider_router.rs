@@ -884,6 +884,35 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn pi_selection_forwards_loopback_openai_completions_with_real_key() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_provider(
+            "pi",
+            &pi_provider(
+                "standin-yum",
+                "openai-completions",
+                "glm-4",
+                "http://127.0.0.1:11434/v1",
+                "sk-pi-live",
+            ),
+        )
+        .unwrap();
+
+        let selected = ProviderRouter::new(db)
+            .select_pi_providers("codex", "glm-4")
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "standin-yum");
+        assert_eq!(
+            selected[0].settings_config["base_url"],
+            json!("http://127.0.0.1:11434/v1")
+        );
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn pi_selection_does_not_read_or_insert_proxy_config_pi_row() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());

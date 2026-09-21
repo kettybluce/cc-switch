@@ -1320,6 +1320,10 @@ mod tests {
             &pi_openai_provider("standin-yum", &format!("http://{mock_addr}/v1")),
         )
         .expect("save pi provider");
+        let selected = ProviderRouter::new(db.clone())
+            .select_pi_providers("codex", "glm-4")
+            .expect("loopback Pi openai-completions card must be forwardable");
+        assert_eq!(selected[0].id, "standin-yum");
 
         let proxy = ProxyServer::new(
             ProxyConfig {
@@ -1396,7 +1400,9 @@ mod tests {
             .send()
             .await
             .expect("send pi chat request");
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
+        let body = response.text().await.expect("read pi chat body");
+        assert_eq!(status, StatusCode::OK, "{body}");
 
         proxy.stop().await.expect("stop test proxy");
         mock_handle.abort();
@@ -1458,8 +1464,13 @@ mod tests {
             .send()
             .await
             .expect("send 401 request");
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unauthorized_status = unauthorized.status();
         let unauthorized_body = unauthorized.text().await.expect("read 401 body");
+        assert_eq!(
+            unauthorized_status,
+            StatusCode::UNAUTHORIZED,
+            "{unauthorized_body}"
+        );
         assert!(
             unauthorized_body.contains("401") || unauthorized_body.contains("invalid api key"),
             "{unauthorized_body}"
@@ -1473,8 +1484,13 @@ mod tests {
             .send()
             .await
             .expect("send 500 request");
-        assert_eq!(exploded.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let exploded_status = exploded.status();
         let exploded_body = exploded.text().await.expect("read 500 body");
+        assert_eq!(
+            exploded_status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{exploded_body}"
+        );
         assert!(
             exploded_body.contains("500") || exploded_body.contains("upstream exploded"),
             "{exploded_body}"
@@ -1530,8 +1546,9 @@ mod tests {
             .send()
             .await
             .expect("send truncated sse request");
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
         let body = response.text().await.expect("read truncated sse");
+        assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("\"content\":\"hi\""), "{body}");
         assert!(!body.contains("[DONE]"), "{body}");
 
