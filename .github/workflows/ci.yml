@@ -59,6 +59,34 @@ jobs:
               - "scripts/docker-backend-self-test.sh"
               - "Makefile"
 
+  # Cheap, always-on: catches missing `fi` / workflow YAML and Portable zip names
+  # without a Tauri build or version bump.
+  workflow-lint:
+    name: Workflow and shell syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: bash -n and actionlint
+        run: bash scripts/ci/lint-shell-and-workflows.sh
+
+  windows-portable-dry-run:
+    name: Windows Portable packaging dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Package dummy MSI + Portable zip
+        run: bash scripts/ci/dry-run-windows-portable.sh
+
   frontend:
     name: Frontend Checks
     runs-on: ubuntu-latest
@@ -85,7 +113,7 @@ jobs:
       - name: Get pnpm store directory
         id: pnpm-store
         shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
         uses: actions/cache@v5
