@@ -29,6 +29,8 @@ mod migration;
 mod schema;
 
 #[cfg(test)]
+mod schema18_guardrails;
+#[cfg(test)]
 mod tests;
 
 // DAO 类型导出供外部使用
