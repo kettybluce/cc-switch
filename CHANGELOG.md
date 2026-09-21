@@ -5,20 +5,15 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Wave D (SCHEMA 18)
+## [Unreleased] — SCHEMA 18
 
-Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No further SCHEMA-18-safe merged cherry-picks remain. This wave adds Linux stand-in **Claude/Codex takeover roundtrip** fixtures parallel to Pi (#43/#46). Docker `TEST_FILTER=all` shipping docs already landed on main (`1a605875`). Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved.
+Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No further SCHEMA-18-safe merged cherry-picks remain after v3.20.14. Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved.
 
-### Added
+### Pending (not in v3.20.14)
 
-- Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup (disable restores the new card); independent disable leaves the other app projected
-- Fail-closed takeover: refuse enable when Claude/Codex/Pi Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable
-- CI: `bash -n` on `scripts/**/*.sh` plus extracted GitHub Actions bash `run:` blocks, checksum-pinned actionlint 1.7.12, and a Windows Portable packaging dry-run (`scripts/ci/dry-run-windows-portable.sh`) that does not bump the version or call Tauri
-- Burn-in checklist for a future v3.20.14 Portable ship: `docs/release-v3.20.14-burn-in-zh.md` (do **not** tag until #49 is on main; #51/#53 already landed, do not squash overlapping #52)
-
-### Changed
-
-- Release workflow: do not cancel an in-flight Windows MSI/Portable job; publish when Windows artifacts exist even if the macOS matrix cell failed (`needs.release.result == 'success'` skipped publish on v3.20.12); `pnpm tauri build --ci --bundles msi`; secrets via `env:`; `workflow_dispatch` `dry_run` packages without creating a GitHub Release
+- #65 Docker self-test default `TEST_FILTER=all` + markdown report (kept over dirty #54; #49 closed as duplicate)
+- #58 `http_client` / `model_fetch` global-proxy matrix (macOS CI red)
+- #64 session JSONL usage scan fixtures; #66 Fable tray / dist-tags; #67 OpenCode/Hermes/OpenClaw fixtures
 
 ### Skipped (intentionally)
 
@@ -28,6 +23,51 @@ Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No f
 - #7522 sponsor CTA / Atlas de-sponsor (`f2d0b2a6` / `f21e0944`)
 - Unmerged official PRs (#7543, #7541, #7535, #7531, #7520, #7514, #7510, #7509, #7505, #7502, …)
 - Schema bump (`SCHEMA_VERSION` stays 18)
+- Do **not** squash #52 (fail-closed already landed via #53 / #60)
+
+## [3.20.14] - 2026-09-21
+
+Ships current `main` after v3.20.13 (tag `7b2bd5c9` / squash `0f3fbcd9`): #50 Docker shipping docs, #51 Claude/Codex takeover roundtrips, #57 frontend Pi tests, #53/#60 fail-closed takeover, #61 secret redaction, #62 i18n/preset lock, #63 SCHEMA 18 guardrails, #55 Portable/release.yml harden, #59 WSL UNC deepen, **#56 proxy hot-path hardening**. Does **not** claim official 3.20.3 / 3.20.14. `SCHEMA_VERSION` stays 18. Default Cursor pool model and fork Pi/WSL/proxy surfaces are preserved. Windows x64 Portable (preferred) + MSI; macOS `.dmg` / `.zip` best-effort.
+
+### Fixed
+
+- Refuse takeover enable when Claude/Codex Live already points at another local proxy; missing or malformed Live files fail closed with no backup (#53)
+- Same fail-closed guard for Pi `models.json` / `baseUrl` pointing at a foreign local proxy (#60)
+- Redact API keys from proxy request logs, tray/plan text, `crash.log`, Pi session `errorMessage`, Codex error JSON, `AuthInfo` Debug, and frontend request-detail `errorMessage` (#61)
+- Proxy hot path: no DeepSeek `unwrap` on non-object JSON; flush truncated SSE remainder for usage; `ResponseBodyTooLarge` maps to 502; loopback Pi cards with a real API key forward instead of 503; refuse `proxy_config` `pi` rows (#56)
+- Opening a v13-CHECK database no longer aborts startup when seeding a `grokbuild` `proxy_config` row; skip and let `migrate_v13_to_v14` rebuild the table (#63)
+
+### Added
+
+- Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup; independent disable leaves the other app projected (#51)
+- SCHEMA 18 guardrail tests: `SCHEMA_VERSION == 18`, no `migrate_v18_to_v19`, WAL/`busy_timeout`/`synchronous=NORMAL`, `proxy_config` CHECK never accepts `pi` (#63)
+- Frontend Vitest for Pi form `supportsDeveloperRole`, default-provider reassignment copy, OpenCode batch add, fetch-models, and 30s `staleTime` (#57)
+- Four-locale i18n key parity (`settings.oneClickInstall`) plus tests locking Pi live `providerKey` append-only and Cursor pool default `gpt-5.6-sol` (#62)
+- Deeper WSL UNC / path-normalization regression coverage (#59)
+- CI: `bash -n` + checksum-pinned actionlint 1.7.12 + Windows Portable packaging dry-run; burn-in checklist `docs/release-v3.20.14-burn-in-zh.md` (#55)
+- Release docs: after self-test work, Portable/MSI requires `pnpm test:docker:all` plus a report (#50)
+
+### Changed
+
+- Release workflow: do not cancel an in-flight Windows MSI/Portable job; publish when Windows artifacts exist even if the macOS matrix cell failed; `pnpm tauri build --ci --bundles msi`; secrets via `env:`; `workflow_dispatch` `dry_run` packages without creating a GitHub Release (#55)
+
+### Not in this ship
+
+- #65 Docker compose default-full-suite + on-disk report (successor of #49/#54)
+- #58 model_fetch / global proxy matrix tests (macOS CI red)
+- #64 / #66 / #67 additional fixture PRs still open
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / 3.20.14 version number / wholesale main merge
+- #7383 SCHEMA 19 / MiniMax Code
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- v3.20.13 users need this for fail-closed takeover, secret redaction, SCHEMA 18 guardrails, proxy hot-path hardening (#56), and Portable publish harden.
 
 ## [3.20.13] - 2026-09-21
 
