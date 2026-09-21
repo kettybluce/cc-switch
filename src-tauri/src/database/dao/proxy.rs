@@ -16,12 +16,14 @@ pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
 /// SCHEMA 18 CHECK only allows claude/codex/gemini/grokbuild.
 /// Pi takeover must stay in `settings.proxy_takeover_pi`.
 fn schema18_proxy_config_app_type_error(app_type: &str) -> AppError {
-    if app_type == "pi" {
-        AppError::InvalidInput(
+    match app_type {
+        "pi" => AppError::InvalidInput(
             "SCHEMA 18 has no proxy_config row for pi; use settings.proxy_takeover_pi".to_string(),
-        )
-    } else {
-        AppError::InvalidInput(format!("unsupported proxy_config app_type: {app_type}"))
+        ),
+        "claude-desktop" => AppError::InvalidInput(
+            "SCHEMA 18 has no proxy_config row for claude-desktop; reuse Claude listen (proxy_config.app_type='claude')".to_string(),
+        ),
+        _ => AppError::InvalidInput(format!("unsupported proxy_config app_type: {app_type}")),
     }
 }
 
@@ -1107,6 +1109,41 @@ mod tests {
             .expect("count pi rows")
         };
         assert_eq!(pi_rows, 0);
+
+        let err = db
+            .update_proxy_config_for_app(crate::proxy::types::AppProxyConfig {
+                app_type: "claude-desktop".to_string(),
+                enabled: true,
+                auto_failover_enabled: false,
+                max_retries: 3,
+                streaming_first_byte_timeout: 60,
+                streaming_idle_timeout: 120,
+                non_streaming_timeout: 600,
+                circuit_failure_threshold: 4,
+                circuit_success_threshold: 2,
+                circuit_timeout_seconds: 60,
+                circuit_error_rate_threshold: 0.6,
+                circuit_min_requests: 10,
+            })
+            .await
+            .unwrap_err();
+        match err {
+            AppError::InvalidInput(msg) => {
+                assert!(msg.contains("claude-desktop"), "{msg}");
+                assert!(msg.contains("claude"), "{msg}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+        let desktop_rows: i64 = {
+            let conn = db.conn.lock().expect("db lock");
+            conn.query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'claude-desktop'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count claude-desktop rows")
+        };
+        assert_eq!(desktop_rows, 0);
         assert_eq!(crate::database::SCHEMA_VERSION, 18);
 
         Ok(())
