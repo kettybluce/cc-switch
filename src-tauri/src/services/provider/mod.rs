@@ -5034,15 +5034,18 @@ impl ProviderService {
             Self::set_provider_live_config_managed(&mut provider, add_to_live);
         }
 
-        let is_managed_codex_add = matches!(app_type, AppType::Codex)
-            && Self::managed_codex_oauth_account_id(&provider).is_some();
-        let _managed_codex_add_guard = if is_managed_codex_add {
+        // Serialize live writes with takeover / switch. Managed Codex adds
+        // previously took this lock only for themselves; Claude/Gemini/Grok
+        // first-provider live commits need the same exclusion window.
+        let _switch_guard = if app_type.supports_local_proxy() {
             Some(futures::executor::block_on(
                 state.proxy_service.lock_switch_for_app(app_type.as_str()),
             ))
         } else {
             None
         };
+        let is_managed_codex_add = matches!(app_type, AppType::Codex)
+            && Self::managed_codex_oauth_account_id(&provider).is_some();
 
         if is_managed_codex_add {
             let effective_current =
@@ -5145,13 +5148,12 @@ impl ProviderService {
         let mut provider = provider;
         let original_id = original_id.unwrap_or(provider.id.as_str()).to_string();
         let provider_id_changed = original_id != provider.id;
-        // Serialize the read/decide/commit window for every Codex update. We do
-        // not yet know whether the stored row is managed (the request may be an
-        // unbind), so the existing row and effective current must both be read
-        // only after this lock is held. Non-managed Codex updates release it
-        // before entering the legacy path, whose proxy helpers take the lock
-        // themselves.
-        let codex_update_switch_guard = if matches!(app_type, AppType::Codex) {
+        // Serialize the read/decide/commit window for every proxy-capable
+        // update. Claude/Gemini/GrokBuild current-provider saves write live
+        // (or the restore backup) and must not overlap takeover enable/disable.
+        // Codex still needs the lock before reading existing/current because
+        // the request may be an unbind of a managed account.
+        let switch_guard = if app_type.supports_local_proxy() {
             Some(futures::executor::block_on(
                 state.proxy_service.lock_switch_for_app(app_type.as_str()),
             ))
@@ -5453,14 +5455,18 @@ impl ProviderService {
             return Ok(true);
         }
 
-        drop(codex_update_switch_guard);
-
         // Save to database
         state.db.save_provider(app_type.as_str(), &provider)?;
 
         if is_current {
-            let outcome =
-                live::sync_live_for_provider_respecting_takeover(state, &app_type, &provider)?;
+            let locked = switch_guard.is_some();
+            let outcome = if locked {
+                live::sync_live_for_provider_respecting_takeover_locked(
+                    state, &app_type, &provider, true,
+                )?
+            } else {
+                live::sync_live_for_provider_respecting_takeover(state, &app_type, &provider)?
+            };
             if outcome == LiveSyncOutcome::WroteLive {
                 // MCP is stored in the database and projected after a successful
                 // live write. Keep the failure best-effort so the provider save
@@ -5473,6 +5479,7 @@ impl ProviderService {
             }
         }
 
+        drop(switch_guard);
         Ok(true)
     }
 
@@ -5496,6 +5503,14 @@ impl ProviderService {
         if app_type == AppType::Pi {
             return pi::delete(state, id);
         }
+
+        let _switch_guard = if app_type.supports_local_proxy() {
+            Some(futures::executor::block_on(
+                state.proxy_service.lock_switch_for_app(app_type.as_str()),
+            ))
+        } else {
+            None
+        };
 
         // Additive mode apps - no current provider concept
         if app_type.is_additive_mode() {
@@ -5640,20 +5655,42 @@ impl ProviderService {
             return pi::enable(state, id);
         }
 
-        // Check if provider exists
+        // Provider switches and takeover toggles both mutate live config and the
+        // restore backup. Serialize them per app, then decide from the locked
+        // current state so a just-started takeover cannot be overwritten by a
+        // normal live write. Re-read the provider row after the lock so a
+        // concurrent delete cannot pass the existence check and then vanish.
+        let switch_guard = if app_type.supports_local_proxy() {
+            Some(futures::executor::block_on(
+                state.proxy_service.lock_switch_for_app(app_type.as_str()),
+            ))
+        } else {
+            None
+        };
+
+        let result = Self::switch_locked(state, app_type, id);
+        drop(switch_guard);
+        result
+    }
+
+    /// 调用方必须已经持有该 app 的切换锁（或不需要锁的应用）。
+    pub(crate) fn switch_locked(
+        state: &AppState,
+        app_type: AppType,
+        id: &str,
+    ) -> Result<SwitchResult, AppError> {
         let providers = state.db.get_all_providers(app_type.as_str())?;
-        let _provider = providers
+        let provider = providers
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
         // OMO providers are switched through their own exclusive path.
-        if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {
+        if matches!(app_type, AppType::OpenCode) && provider.category.as_deref() == Some("omo") {
             return Self::switch_normal(state, app_type, id, &providers);
         }
 
         // OMO Slim providers are switched through their own exclusive path.
-        if matches!(app_type, AppType::OpenCode)
-            && _provider.category.as_deref() == Some("omo-slim")
+        if matches!(app_type, AppType::OpenCode) && provider.category.as_deref() == Some("omo-slim")
         {
             return Self::switch_normal(state, app_type, id, &providers);
         }
@@ -5661,18 +5698,6 @@ impl ProviderService {
         if matches!(app_type, AppType::ClaudeDesktop) {
             return Self::switch_normal(state, app_type, id, &providers);
         }
-
-        // Provider switches and takeover toggles both mutate live config and the
-        // restore backup. Serialize them per app, then decide from the locked
-        // current state so a just-started takeover cannot be overwritten by a
-        // normal live write.
-        let _switch_guard = if app_type.supports_local_proxy() {
-            Some(futures::executor::block_on(
-                state.proxy_service.lock_switch_for_app(app_type.as_str()),
-            ))
-        } else {
-            None
-        };
 
         // Backup or live placeholders mean the live file is owned by proxy
         // takeover, even if the proxy server is temporarily stopped or is in the
@@ -5691,8 +5716,8 @@ impl ProviderService {
         // Block switching to unsupported official providers when proxy takeover
         // is active. Codex official account cards use native auth passthrough.
         if should_hot_switch
-            && _provider.category.as_deref() == Some("official")
-            && !official_provider_supports_proxy_takeover(&app_type, _provider)
+            && provider.category.as_deref() == Some("official")
+            && !official_provider_supports_proxy_takeover(&app_type, provider)
         {
             return Err(AppError::localized(
                 "switch.official_blocked_by_proxy",

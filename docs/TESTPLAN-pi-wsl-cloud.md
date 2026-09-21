@@ -173,7 +173,7 @@ Enable must error, leave Live unchanged, persist no backup, and leave the takeov
 
 `SCHEMA_VERSION` stays 18. No `proxy_config` row for `pi`.
 
-Docker: default `proxy_projection_linux` + `session_usage_scan`; full crate via `TEST_FILTER=all` / `pnpm test:docker:all` / `make test-docker-all` (see `docs/docker-backend-self-test.md`).
+Docker: default `proxy_projection_linux` + `session_usage_scan` + `provider_profile_race`; full crate via `TEST_FILTER=all` / `pnpm test:docker:all` / `make test-docker-all` (see `docs/docker-backend-self-test.md`).
 
 ## Hard no (must stay true after merge)
 

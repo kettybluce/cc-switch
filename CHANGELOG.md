@@ -12,9 +12,14 @@ Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No f
 ### Added
 
 - Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup (disable restores the new card); independent disable leaves the other app projected
+- Concurrent SCHEMA 18 fixtures: overlapping profile apply, provider switch/save/delete, and takeover enable-disable under `CC_SWITCH_TEST_HOME`
 - Fail-closed takeover: refuse enable when Claude/Codex/Pi Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable
 - CI: `bash -n` on `scripts/**/*.sh` plus extracted GitHub Actions bash `run:` blocks, checksum-pinned actionlint 1.7.12, and a Windows Portable packaging dry-run (`scripts/ci/dry-run-windows-portable.sh`) that does not bump the version or call Tauri
 - Burn-in checklist for a future v3.20.14 Portable ship: `docs/release-v3.20.14-burn-in-zh.md` (do **not** tag until #49 is on main; #51/#53 already landed, do not squash overlapping #52)
+
+### Fixed
+
+- Profile apply and Claude/Gemini/GrokBuild provider save/delete now share the per-app switch lock with takeover, so overlapping enable/disable cannot split `is_current`, live files, and restore backups
 
 ### Changed
 

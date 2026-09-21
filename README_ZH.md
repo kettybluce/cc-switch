@@ -551,7 +551,7 @@ docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all ba
 # 封装：pnpm test:docker:all   /   make test-docker-all
 ```
 
-默认跑 `proxy_projection_linux` 与 `session_usage_scan`（SCHEMA 18 的 Pi/Claude/Codex 夹具，含接管往返与隔离 HOME 的 JSONL 用量扫描）。自测工作之后出绿色版/MSI **必须**再跑 `pnpm test:docker:all` 并附报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
+默认跑 `proxy_projection_linux`、`session_usage_scan` 与 `provider_profile_race`（SCHEMA 18 的 Pi/Claude/Codex 夹具，含接管往返、隔离 HOME 的 JSONL 用量扫描、并发 CRUD/切换压测）。自测工作之后出绿色版/MSI **必须**再跑 `pnpm test:docker:all` 并附报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
 
 ### 技术栈
 
