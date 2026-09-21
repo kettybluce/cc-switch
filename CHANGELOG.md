@@ -5,6 +5,42 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.11] - 2026-09-21
+
+Fork cherry-pick of official Wave A + Wave B onto SCHEMA 18. Does **not** claim official 3.20.3 / 3.20.11. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- npm latest probe uses `/-/package/{name}/dist-tags` with the 15s timeout (#7346)
+- Refresh enabled prompts from live CLAUDE.md / AGENTS.md after external edits; window-focus reload (#7194). Pi CRUD / `get_pi_prompts` unchanged
+- Skill archive entry cap 10_000 → 30_000 plus per-file 4 KiB minimum charge (#7489)
+- Recover stale Codex ChatGPT account bindings during takeover / switch / restore (`CodexLiveAuthSwitchGuard`, #7395)
+- Claude Fable weekly limit from usage API `limits[]` on the card and tray (`bfbbf15c`)
+
+### Added
+
+- OpenCode fetched-model picker: search and batch-add selected models (#7515)
+- New-card presets only: Kimi Global / Kimi For Coding Global twins (#7526). Distinct Pi `providerKey`s; live `models.json` keys are not rewritten
+
+### Changed
+
+- APIKEY.FUN preset URLs → apikey.fan; old `.fun` hosts kept as endpoint candidates (`1d5d90f4`)
+
+### Skipped (intentionally)
+
+- Official 3.20.3 / 3.20.11 version number / wholesale main merge
+- #7383 SCHEMA 19 / MiniMax Code
+- #7331 Linux Claude Desktop 3P
+- #7522 sponsor CTA / Atlas de-sponsor
+- Anything from broken fork branch `release/v3.20.11`
+- Schema bump (`SCHEMA_VERSION` stays 18)
+
+### Upgrade notes
+
+- **No database migration**: `SCHEMA_VERSION` stays at 18.
+- Prefer **Portable** if MSI install/upgrade fails with Error 5.
+- Preset changes apply only to newly created cards.
+
 ## [3.20.10] - 2026-09-15
 
 Fork cherry-pick of official 3.20.3 Wave 1 + Wave 2 + optional UI/presets onto SCHEMA 18. Does **not** claim official 3.20.3. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable only.
