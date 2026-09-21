@@ -12,6 +12,7 @@ mod config;
 mod database;
 mod deeplink;
 mod error;
+mod exit_lifecycle;
 mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
@@ -281,16 +282,7 @@ fn handle_deeplink_url(
             }
 
             if focus_main_window {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    #[cfg(target_os = "linux")]
-                    {
-                        linux_fix::nudge_main_window(window.clone());
-                    }
-                    log::info!("✓ Window shown and focused");
-                }
+                reveal_main_window(app, "deeplink");
             }
         }
         Err(e) => {
@@ -309,6 +301,12 @@ fn handle_deeplink_url(
     }
 
     true
+}
+
+fn reveal_main_window(app: &tauri::AppHandle, source: &str) {
+    if let Err(e) = crate::lightweight::reveal_or_recreate_main_window(app) {
+        log::error!("{source} 恢复主窗口失败: {e}");
+    }
 }
 
 /// 更新托盘菜单的Tauri命令
@@ -362,12 +360,6 @@ pub fn run() {
                 log::debug!("  arg[{i}]: {}", url_for_log(arg));
             }
 
-            if crate::lightweight::is_lightweight_mode() {
-                if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
-                    log::error!("退出轻量模式重建窗口失败: {e}");
-                }
-            }
-
             // Check for deep link URL in args (mainly for Windows/Linux command line)
             let mut found_deeplink = false;
             for arg in &args {
@@ -381,16 +373,8 @@ pub fn run() {
                 log::info!("ℹ No deep link URL found in args (this is expected on macOS when launched via system)");
             }
 
-            // Show and focus window regardless
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                {
-                    linux_fix::nudge_main_window(window.clone());
-                }
-            }
+            // ExitRequested(None) StayInTray 之后主窗口可能已不在且未标轻量模式。
+            reveal_main_window(app, "single_instance");
         }));
     }
 
@@ -1063,12 +1047,6 @@ pub fn run() {
                     let urls = event.urls();
                     log::info!("Received {} URL(s)", urls.len());
 
-                    if crate::lightweight::is_lightweight_mode() {
-                        if let Err(e) = crate::lightweight::exit_lightweight_mode(&app_handle) {
-                            log::error!("退出轻量模式重建窗口失败: {e}");
-                        }
-                    }
-
                     for (i, url) in urls.iter().enumerate() {
                         let url_str = url.as_str();
                         log::debug!("  URL[{i}]: {}", url_for_log(url_str));
@@ -1732,13 +1710,22 @@ pub fn run() {
     app.run(|app_handle, event| {
         // 处理退出请求（所有平台）
         if let RunEvent::ExitRequested { api, code, .. } = &event {
-            let has_main_window = app_handle.get_webview_window("main").is_some();
-            match classify_exit_request(*code, has_main_window) {
-                // code 为 None 表示运行时自动触发（如隐藏窗口的 WebView 被回收导致无存活窗口），
-                // 此时应仅阻止退出、保持托盘后台运行。
-                ExitRequestAction::StayInTray => {
-                    log::info!("运行时触发退出请求（无存活窗口），阻止退出以保持托盘后台运行");
+            let presence = exit_lifecycle::window_presence_from_app(app_handle);
+            match exit_lifecycle::classify_exit_request(*code, presence) {
+                // code 为 None 且当前没有可见窗口：运行时自动触发（隐藏到托盘、
+                // WebView 被回收、轻量模式）。只阻止退出、保持托盘后台运行。
+                exit_lifecycle::ExitRequestAction::StayInTray => {
+                    log::info!(
+                        "运行时触发退出请求（无可见窗口, has_main={}），阻止退出以保持托盘后台运行",
+                        presence.has_main
+                    );
                     api.prevent_exit();
+                    if matches!(
+                        exit_lifecycle::stay_in_tray_followup(presence),
+                        exit_lifecycle::StayInTrayFollowup::MarkLightweightAndRecreateOnShow
+                    ) {
+                        crate::lightweight::mark_as_lightweight(app_handle);
+                    }
                     return;
                 }
                 // code 为 RESTART_EXIT_CODE：app.restart() / 自更新 relaunch 发起的重启。
@@ -1757,35 +1744,19 @@ pub fn run() {
                 //   - 代理/Live 配置：无需恢复，重启后新实例立即接管并恢复代理状态
                 //   - 100ms 落盘等待：重启前的 DB 写入均为命令驱动、此刻已完成，
                 //     与所有 Tauri 应用默认重启路径的行为一致，无需额外等待
-                ExitRequestAction::DeferToTauriRestart => {
+                exit_lifecycle::ExitRequestAction::DeferToTauriRestart => {
                     log::info!("收到重启请求 (code={code:?})，交由 Tauri 默认重启流程 re-exec");
                     return;
                 }
                 // 其它 Some(_)：用户主动调用 app.exit() 退出（如托盘菜单"退出"），
-                // 此时执行清理后退出。
-                ExitRequestAction::CleanupAndExit => {}
+                // 以及仍有可见窗口时的 ExitRequested(None)（macOS Cmd+Q）。
+                // 此时执行与 SIGTERM 相同的 Live 恢复清理后退出。
+                exit_lifecycle::ExitRequestAction::CleanupAndExit => {}
             }
 
             log::info!("收到用户主动退出请求 (code={code:?})，开始清理...");
             api.prevent_exit();
-
-            let app_handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                save_window_state_before_exit(&app_handle);
-                cleanup_before_exit(&app_handle).await;
-                // 先于 std::process::exit 显式移除托盘图标。
-                // 进程直接退出时 Tauri 运行时不走正常 Drop 流程，
-                // 不会向 Windows Shell 发送 NIM_DELETE，导致已退出的进程
-                // 注册的图标仍残留在系统托盘（鼠标悬停 Shell 才会重绘发现进程已死）。
-                remove_tray_icon_before_exit(&app_handle);
-                log::info!("清理完成，退出应用");
-
-                // 短暂等待确保所有 I/O 操作（如数据库写入）刷新到磁盘
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                // 使用 std::process::exit 避免再次触发 ExitRequested
-                std::process::exit(0);
-            });
+            spawn_user_exit_cleanup(app_handle.clone());
             return;
         }
 
@@ -1794,20 +1765,7 @@ pub fn run() {
             match event {
                 // macOS 在 Dock 图标被点击并重新激活应用时会触发 Reopen 事件，这里手动恢复主窗口
                 RunEvent::Reopen { .. } => {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let _ = window.set_skip_taskbar(false);
-                        }
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        tray::apply_tray_policy(app_handle, true);
-                    } else if crate::lightweight::is_lightweight_mode() {
-                        if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle) {
-                            log::error!("退出轻量模式重建窗口失败: {e}");
-                        }
-                    }
+                    reveal_main_window(app_handle, "macos Reopen");
                 }
                 // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitch://...）
                 RunEvent::Opened { urls } => {
@@ -1819,13 +1777,6 @@ pub fn run() {
                         );
 
                         if url_str.starts_with("ccswitch://") {
-                            if crate::lightweight::is_lightweight_mode() {
-                                if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
-                                {
-                                    log::error!("退出轻量模式重建窗口失败: {e}");
-                                }
-                            }
-
                             // 解析并广播深链接事件，复用与 single_instance 相同的逻辑
                             match crate::deeplink::parse_deeplink_url(&url_str) {
                                 Ok(request) => {
@@ -1862,12 +1813,7 @@ pub fn run() {
                                 }
                             }
 
-                            // 确保主窗口可见
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                            reveal_main_window(app_handle, "macos Opened");
                         }
                     }
                 }
@@ -2217,35 +2163,37 @@ fn show_database_init_error_dialog(
 }
 
 // ============================================================
-// 退出请求分类
+// 退出清理编排（托盘退出 / Cmd+Q / SIGTERM 共用）
 // ============================================================
 
-/// `RunEvent::ExitRequested` 的三类来源，处理方式必须区分。
-///
-/// 关键约束：重启请求（`code == RESTART_EXIT_CODE`）上 `prevent_exit()` 会被
-/// Tauri 静默忽略（见 `ExitRequestApi::prevent_exit` 文档），事件循环必定继续
-/// 退出并触发各插件的 `RunEvent::Exit` 钩子；任何与之并发的自定义清理任务都
-/// 可能与插件退出钩子争用同一状态而死锁。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExitRequestAction {
-    /// `code` 为 `None` 且无主窗口：运行时自动触发（如隐藏窗口的 WebView 被回收
-    /// 导致无存活窗口），阻止退出、保持托盘后台运行。
-    /// 有主窗口时的 `None` 按用户退出清理，减少 SIGTERM/关窗被记成「异常退出」。
-    StayInTray,
-    /// `code` 为 `RESTART_EXIT_CODE`：`app.restart()` / 自更新 relaunch 发起的
-    /// 重启，不拦截、不做自定义清理，交还 Tauri 默认 re-exec 流程。
-    DeferToTauriRestart,
-    /// 其它 `Some(_)`：用户主动退出（托盘「退出」等），执行完整异步清理后结束进程。
-    CleanupAndExit,
+fn spawn_user_exit_cleanup(app_handle: tauri::AppHandle) {
+    if !exit_lifecycle::begin_exit_cleanup() {
+        log::info!("退出清理已在进行（SIGTERM 与 ExitRequested 竞态），忽略重复请求");
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        run_user_exit_cleanup(&app_handle).await;
+    });
 }
 
-fn classify_exit_request(code: Option<i32>, has_main_window: bool) -> ExitRequestAction {
-    match code {
-        None if has_main_window => ExitRequestAction::CleanupAndExit,
-        None => ExitRequestAction::StayInTray,
-        Some(tauri::RESTART_EXIT_CODE) => ExitRequestAction::DeferToTauriRestart,
-        Some(_) => ExitRequestAction::CleanupAndExit,
-    }
+async fn run_user_exit_cleanup(app_handle: &tauri::AppHandle) {
+    save_window_state_before_exit(app_handle);
+    cleanup_before_exit(app_handle).await;
+    // 先于 std::process::exit 显式移除托盘图标。
+    // 进程直接退出时 Tauri 运行时不走正常 Drop 流程，
+    // 不会向 Windows Shell 发送 NIM_DELETE，导致已退出的进程
+    // 注册的图标仍残留在系统托盘（鼠标悬停 Shell 才会重绘发现进程已死）。
+    remove_tray_icon_before_exit(app_handle);
+    // macOS single-instance 使用 `/tmp/{identifier}.sock`。std::process::exit
+    // 不会触发插件 Exit 钩子，托盘退出与 SIGTERM 都必须主动 destroy。
+    destroy_single_instance_lock(app_handle);
+    log::info!("清理完成，退出应用");
+
+    // 短暂等待确保所有 I/O 操作（如数据库写入）刷新到磁盘
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // 使用 std::process::exit 避免再次触发 ExitRequested
+    std::process::exit(0);
 }
 
 /// Unix `SIGTERM`/`SIGINT` 走与托盘退出相同的 Live 恢复，避免 kill 后残留接管。
@@ -2273,12 +2221,11 @@ fn spawn_unix_termination_handlers(app_handle: tauri::AppHandle) {
                 _ = sigterm.recv() => log::info!("收到 SIGTERM，按托盘退出路径恢复 Live"),
                 _ = sigint.recv() => log::info!("收到 SIGINT，按托盘退出路径恢复 Live"),
             }
-            save_window_state_before_exit(&app_handle);
-            cleanup_before_exit(&app_handle).await;
-            remove_tray_icon_before_exit(&app_handle);
-            destroy_single_instance_lock(&app_handle);
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            std::process::exit(0);
+            if !exit_lifecycle::begin_exit_cleanup() {
+                log::info!("退出清理已在进行，忽略重复的 SIGTERM/SIGINT");
+                return;
+            }
+            run_user_exit_cleanup(&app_handle).await;
         });
     }
     #[cfg(not(unix))]
@@ -2334,9 +2281,8 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_exit_request, enabled_proxy_apps_on_startup, redact_url_for_log,
-        redact_url_for_log_with_secrets, redact_url_origin_for_log, runtime_log_level_allows,
-        ExitRequestAction,
+        enabled_proxy_apps_on_startup, redact_url_for_log, redact_url_for_log_with_secrets,
+        redact_url_origin_for_log, runtime_log_level_allows,
     };
     use crate::database::Database;
 
@@ -2419,42 +2365,6 @@ mod tests {
             log::Level::Debug,
             log::LevelFilter::Info
         ));
-    }
-
-    #[test]
-    fn no_code_keeps_app_alive_in_tray() {
-        assert_eq!(
-            classify_exit_request(None, false),
-            ExitRequestAction::StayInTray
-        );
-    }
-
-    #[test]
-    fn no_code_with_main_window_cleans_up_like_user_exit() {
-        assert_eq!(
-            classify_exit_request(None, true),
-            ExitRequestAction::CleanupAndExit
-        );
-    }
-
-    #[test]
-    fn restart_exit_code_defers_to_tauri_default_restart() {
-        assert_eq!(
-            classify_exit_request(Some(tauri::RESTART_EXIT_CODE), false),
-            ExitRequestAction::DeferToTauriRestart
-        );
-    }
-
-    #[test]
-    fn user_exit_codes_run_cleanup_then_exit() {
-        assert_eq!(
-            classify_exit_request(Some(0), true),
-            ExitRequestAction::CleanupAndExit
-        );
-        assert_eq!(
-            classify_exit_request(Some(1), false),
-            ExitRequestAction::CleanupAndExit
-        );
     }
 
     #[tokio::test]
