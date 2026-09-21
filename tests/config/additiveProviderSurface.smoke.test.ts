@@ -43,8 +43,9 @@ describe("OpenCode / Hermes / OpenClaw preset catalogs (offline smoke)", () => {
   it("OpenClaw presets expose api + models and never point at Claude listen", () => {
     for (const preset of openclawProviderPresets) {
       expect(preset.settingsConfig.api).toBeTruthy();
-      expect(preset.settingsConfig.models.length).toBeGreaterThan(0);
-      const modelIds = preset.settingsConfig.models.map((model) => model.id);
+      const models = preset.settingsConfig.models ?? [];
+      expect(models.length).toBeGreaterThan(0);
+      const modelIds = models.map((model) => model.id);
       expect(new Set(modelIds).size).toBe(modelIds.length);
       if (preset.settingsConfig.baseUrl) {
         expect(preset.settingsConfig.baseUrl).toMatch(/^https?:\/\//);
