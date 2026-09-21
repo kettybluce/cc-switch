@@ -1301,3 +1301,38 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
         "file db should persist INCREMENTAL auto_vacuum after VACUUM rebuild"
     );
 }
+
+#[test]
+fn schema18_proxy_config_check_rejects_additive_and_pi_app_types() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    assert_eq!(SCHEMA_VERSION, 18, "this CHECK is the SCHEMA 18 contract");
+
+    for app_type in ["opencode", "openclaw", "hermes", "pi"] {
+        let err = conn
+            .execute(
+                "INSERT INTO proxy_config (app_type) VALUES (?1)",
+                [app_type],
+            )
+            .expect_err("SCHEMA 18 CHECK must reject additive/Pi proxy_config rows");
+        let msg = err.to_string();
+        assert!(
+            msg.to_ascii_lowercase().contains("check"),
+            "expected CHECK constraint failure for {app_type}, got {msg}"
+        );
+    }
+
+    for allowed in ["claude", "codex", "gemini", "grokbuild"] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE app_type = ?1",
+                [allowed],
+                |row| row.get(0),
+            )
+            .expect("count seeded proxy_config row");
+        assert_eq!(
+            count, 1,
+            "SCHEMA 18 still seeds a proxy_config row for {allowed}"
+        );
+    }
+}

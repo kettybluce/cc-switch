@@ -5213,6 +5213,24 @@ impl ProviderService {
             .map(|opt| opt.unwrap_or_default())
     }
 
+    /// Import providers from the app's live config (additive apps only).
+    ///
+    /// OpenCode / OpenClaw / Hermes / Pi coexist in native files; this is the
+    /// CRUD entry used by the corresponding Tauri commands. Switch-mode apps
+    /// keep `import_default_config`.
+    pub fn import_from_live(state: &AppState, app_type: AppType) -> Result<usize, AppError> {
+        match app_type {
+            AppType::OpenCode => import_opencode_providers_from_live(state),
+            AppType::OpenClaw => import_openclaw_providers_from_live(state),
+            AppType::Hermes => import_hermes_providers_from_live(state),
+            AppType::Pi => pi::import_from_live(state),
+            other => Err(AppError::Message(format!(
+                "App {} does not import additive live providers",
+                other.as_str()
+            ))),
+        }
+    }
+
     /// Add a new provider
     pub fn add(
         state: &AppState,

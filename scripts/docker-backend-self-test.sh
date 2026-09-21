@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Container entrypoint for the backend Docker self-test.
 # Default: FULL `cargo test` for src-tauri (SCHEMA 18), including
-# proxy_projection_linux, session_usage_scan, and provider_profile_race.
+# proxy_projection_linux, session_usage_scan, provider_profile_race,
+# and additive_provider_surface.
 # Narrower named filters are explicit overrides only.
 # Does NOT run the Tauri GUI. Isolated CC_SWITCH_TEST_HOME under /tmp.
 set -euo pipefail
@@ -55,6 +56,9 @@ case "${FILTER}" in
     ;;
   provider_profile_race|race)
     run_cargo_test --test provider_profile_race
+    ;;
+  additive_provider_surface|additive)
+    run_cargo_test --test additive_provider_surface
     ;;
   pi-crud|pi_crud|pi-crud-linux)
     # #46 Linux stand-in Pi CRUD + fetch_models / live-update lib tests.

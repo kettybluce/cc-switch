@@ -544,7 +544,7 @@ pnpm test:docker
 # alias: pnpm test:docker:all
 ```
 
-This covers SCHEMA 18 Pi/Claude/Codex fixtures including takeover roundtrips (#51), isolated-HOME JSONL usage scan (#64), concurrent profile/provider race (#77), and Codex OAuth stale-binding cases (#76). After self-test work, shipping Portable/MSI **requires** this full-suite report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. SCHEMA stays 18. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
+This covers SCHEMA 18 Pi/Claude/Codex fixtures including takeover roundtrips (#51), isolated-HOME JSONL usage scan (#64), concurrent profile/provider race (#77), Codex OAuth stale-binding cases (#76), and OpenCode/Hermes/OpenClaw additive CRUD (`additive_provider_surface`). After self-test work, shipping Portable/MSI **requires** this full-suite report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. SCHEMA stays 18. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md) and [docs/additive-provider-surface-tests-zh.md](docs/additive-provider-surface-tests-zh.md).
 
 ### Tech Stack
 
