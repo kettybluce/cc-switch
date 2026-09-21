@@ -1,0 +1,26 @@
+# One-shot backend self-test. Does not start the Tauri GUI.
+# Isolated CC_SWITCH_TEST_HOME lives under /tmp inside the container
+# (Docker volume, never the developer Windows C: profile).
+#
+#   docker compose -f docker-compose.test.yml run --build --rm backend-self-test
+#   docker compose -f docker-compose.test.yml run --build --rm -e TEST_FILTER=all backend-self-test
+name: cc-switch-backend-self-test
+
+services:
+  backend-self-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: cc-switch-backend-self-test:local
+    init: true
+    working_dir: /app
+    environment:
+      CC_SWITCH_TEST_HOME: /tmp/cc-switch-test-home
+      TEST_FILTER: ${TEST_FILTER:-}
+      CARGO_TEST_THREADS: ${CARGO_TEST_THREADS:-1}
+    volumes:
+      - cc-switch-test-home:/tmp/cc-switch-test-home
+
+volumes:
+  cc-switch-test-home:
+    name: cc-switch-test-home

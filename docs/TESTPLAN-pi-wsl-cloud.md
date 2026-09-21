@@ -44,6 +44,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
   pi_selection_
 # Full crate (CI equivalent) when time allows:
 # cargo test --manifest-path src-tauri/Cargo.toml
+
+# Docker (no host GTK install, no Windows C:):
+# docker compose -f docker-compose.test.yml run --build --rm backend-self-test
+# See docs/docker-backend-self-test.md
 ```
 
 Cargo's `TESTNAME` is a single substring filter; run the names above as separate invocations (or one regex if the toolchain accepts it).
