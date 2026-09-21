@@ -1,33 +1,43 @@
 # v3.20.14 出包烧机清单（SCHEMA 18）
 
-本页是 **v3.20.14 发 Windows x64 绿色版（Portable，优先）+ MSI** 之前的烧机清单。  
-**现在不要打 `v3.20.14` 标签、不要 bump 版本、不要出包。** 当前已发布的是 [v3.20.13](https://github.com/kettybluce/cc-switch/releases/tag/v3.20.13)。`package.json` / `src-tauri/tauri.conf.json` / `Cargo.toml` 仍是 **3.20.13**。
+本页是 **v3.20.14 发 Windows x64 绿色版（Portable，优先）+ MSI** 的烧机清单。  
+版本 bump 在 `chore(release): v3.20.14` PR。`SCHEMA_VERSION` 保持 **18**。账号默认 / **Cursor 池模型**不变。不是官方 3.20.3 / 3.20.14。
 
-`SCHEMA_VERSION` 保持 **18**。账号默认 / **Cursor 池模型**不变。不是官方 3.20.3 / 3.20.14。
+本轮发版门槛：**#61 脱敏 + #56 代理热路径硬化已在 main**（另含 #59 UNC 加深、#63 SCHEMA 护栏）。#65 Docker 默认全量仍未合入；本云端无 Docker daemon，全量报告记为缺口而非硬拦截。
 
-## 硬门槛：夹具 PR 必须全部在 main
+## 门槛：已在 main vs 本版不含
 
-**只有当 main 同时含有 #49、#52、#53 之后，才允许打 `v3.20.14` 并出 Portable。** 缺任何一个就停。#51 往返夹具已在 main。#53 是 fail-closed 增量（#52 的独有部分）；不要把旧的 #52 再 squash 一遍。
+#51 往返与 #53/#60 fail-closed 已在 main。#53 是 fail-closed 增量（#52 的独有部分）；**不要把旧的 #52 再 squash 一遍。**
 
-| PR | 内容 | 写本页时的状态 | 合入 SHA（合入后填） |
+| PR | 内容 | 写本页时的状态 | 合入 SHA |
 | --- | --- | --- | --- |
-| [#51](https://github.com/kettybluce/cc-switch/pull/51) | Linux 夹具：Claude/Codex 接管往返（SCHEMA 18） | **已合入** `bd644eaf` | `bd644eaf` |
-| [#53](https://github.com/kettybluce/cc-switch/pull/53) | 接管 fail-closed（#52 变基后的独有增量） | **已合入** `b762b3aa` | `b762b3aa` |
-| [#52](https://github.com/kettybluce/cc-switch/pull/52) | 旧基底往返 + fail-closed（draft） | **未合入** — 勿 squash；以 #53 为准 | _待关或变基_ |
-| [#49](https://github.com/kettybluce/cc-switch/pull/49) | Docker 自测默认全量并写出全量报告 | **未合入**（draft） | _待填_ |
+| [#51](https://github.com/kettybluce/cc-switch/pull/51) | Linux 夹具：Claude/Codex 接管往返 | **已合入** | `bd644eaf` |
+| [#53](https://github.com/kettybluce/cc-switch/pull/53) | Claude/Codex 接管 fail-closed | **已合入** | `b762b3aa` |
+| [#60](https://github.com/kettybluce/cc-switch/pull/60) | Pi 接管 fail-closed | **已合入** | `73bf520f` |
+| [#61](https://github.com/kettybluce/cc-switch/pull/61) | 日志/托盘/投影密钥脱敏 | **已合入** | `3addd46d` |
+| [#62](https://github.com/kettybluce/cc-switch/pull/62) | 四语键 + Pi live preset lock | **已合入** | `67475045` |
+| [#63](https://github.com/kettybluce/cc-switch/pull/63) | SCHEMA 18 护栏 | **已合入** | `329589a2` |
+| [#55](https://github.com/kettybluce/cc-switch/pull/55) | Portable dry-run + release.yml | **已合入** | `a162343a` |
+| [#57](https://github.com/kettybluce/cc-switch/pull/57) | 前端 Pi 表单单测 | **已合入** | `8c1f8a64` |
+| [#50](https://github.com/kettybluce/cc-switch/pull/50) | Docker 全量出包文档 | **已合入** | `1a605875` |
+| [#59](https://github.com/kettybluce/cc-switch/pull/59) | WSL UNC / 路径规范化加深 | **已合入** | `a8deff24` |
+| [#56](https://github.com/kettybluce/cc-switch/pull/56) | 代理热路径硬化 | **已合入** | `a2b4497b` |
+| [#52](https://github.com/kettybluce/cc-switch/pull/52) | 旧基底往返 + fail-closed | **未合入** — 勿 squash | — |
+| [#65](https://github.com/kettybluce/cc-switch/pull/65) | Docker 默认全量报告（保留；#54/#49 重复已关） | **未合入** | — |
+| [#58](https://github.com/kettybluce/cc-switch/pull/58) | model_fetch 全局代理矩阵 | **未合入**（macOS 红） | — |
 
 核对命令：
 
 ```bash
 git fetch origin main
-git merge-base --is-ancestor <sha-49> origin/main && echo '#49 on main'
-git merge-base --is-ancestor bd644eaf origin/main && echo '#51 on main'
-git merge-base --is-ancestor b762b3aa origin/main && echo '#53 on main'
+git merge-base --is-ancestor 3addd46d origin/main && echo '#61 on main'
+git merge-base --is-ancestor a2b4497b origin/main && echo '#56 on main'
+git merge-base --is-ancestor a8deff24 origin/main && echo '#59 on main'
 ```
 
-#49 未在 main 之前：**禁止** `git tag v3.20.14`，禁止用新 tag 发 GitHub Release。#52 请关或变基，不要再 squash 重叠往返。
+#52 请关或变基，不要再 squash 重叠往返。#65 Docker 全量报告本云端无 daemon，记缺口。
 
-已 Salvage、不必再修：`release.yml` Apple 检测缺 `fi`、macOS matrix `continue-on-error`、`phf` / `phf_macros` path patch。本轮只加固 Windows Portable+MSI 出包路径与 CI 语法检查。
+已 Salvage、不必再修：`release.yml` Apple 检测缺 `fi`、macOS matrix `continue-on-error`、`phf` / `phf_macros` path patch。#55 已加固 Windows Portable+MSI 出包路径与 CI 语法检查。
 
 ## 发版前 CI / 语法
 
@@ -54,7 +64,7 @@ Release workflow 现在支持 **只打包、不发 GitHub Release**：
 - `tag`：填**已存在**的 tag（例如 `v3.20.13` 回归验证）
 - `dry_run`：勾选
 
-`dry_run` 仍会上传 `release-assets-Windows-x64` / `release-assets-macOS` artifact，**不会** `softprops/action-gh-release`，也**不会**改 `latest.json`。新版本必须先有 version bump PR，再打 tag；本清单本身不是 bump。
+`dry_run` 仍会上传 `release-assets-Windows-x64` / `release-assets-macOS` artifact，**不会** `softprops/action-gh-release`，也**不会**改 `latest.json`。v3.20.14 的 version bump + tag 由发版 PR 完成。
 
 ## Docker 全量自测（出包必须）
 
@@ -65,7 +75,7 @@ pnpm test:docker:all
 # 或 make test-docker-all / TEST_FILTER=all
 ```
 
-报告至少要有：退出码、通过/失败/忽略计数、SCHEMA 仍为 18、未写宿主机 `C:`。#49 合入后报告路径为 `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md`。未合入 #49 时，把 compose / cargo 终端输出贴到发版 PR。
+报告至少要有：退出码、通过/失败/忽略计数、SCHEMA 仍为 18、未写宿主机 `C:`。#65 合入后报告路径为 `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md`。未合入 #65 时，把 compose / cargo 终端输出贴到发版 PR。
 
 ## Windows 打包（v3.20.12 已暴露的坑）
 
@@ -83,14 +93,14 @@ pnpm test:docker:all
 
 装包仍 **Portable 优先**。MSI Error 5（`D:\Config.Msi` ACL）见 [windows-msi-error-5-zh.md](windows-msi-error-5-zh.md)。WiX 保持官方 per-user 模板，不为 Error 5 改安装范围。
 
-## 允许打 tag 之后的步骤（三个夹具 PR 都在 main）
+## 打 tag / 出包步骤（#61/#56 已在 main）
 
-1. **Bump 到 3.20.14**（单独 PR，本页对应的 workflow hardening PR **不含** bump）：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`。
-2. 写 `docs/release-notes/v3.20.14.md`，必须有 `## 修复的问题` / `## 优化` / `## 自测`。写明：#51 往返夹具、#53 fail-closed、#49 Docker 全量报告、SCHEMA 18、Portable 优先、Cursor 池模型不变。
+1. **Bump 到 3.20.14**：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`Cargo.lock`。
+2. 写 `docs/release-notes/v3.20.14.md`，必须有 `## 修复的问题` / `## 优化` / `## 自测`。写明：#51 往返、#53/#60 fail-closed、#61 脱敏、**#56 代理硬化**、#59 UNC、SCHEMA 18、Portable 优先、Cursor 池模型不变。
 3. CHANGELOG `[3.20.14]`；把 `[Unreleased]` 里已合入项挪过去。
-4. CI 全绿，workflow-lint + Portable dry-run 绿。
-5. `pnpm test:docker:all` 报告贴到发版 PR。
-6. squash 合入 bump PR 后：`git tag v3.20.14` 并 push（或在已合入 SHA 上打 tag）。
+4. workflow-lint + Portable dry-run 绿。
+5. 无 Docker daemon 时在发版说明记录 `pnpm test:docker:all` 缺口。
+6. 在 bump 提交上 `git tag v3.20.14` 并 push，触发 Release workflow。若已有不含 #56 的旧 tag，删除后重打到含 #56 的 SHA。
 7. 等 Release workflow 绿。Windows 必须上传：
    - `CC-Switch-v3.20.14-Windows-Portable.zip`（推荐）
    - `CC-Switch-v3.20.14-Windows.msi`（次要）
@@ -105,9 +115,10 @@ pnpm test:docker:all
 2. MSI Error 5 → 改用绿色版，不要改 SCHEMA。
 3. #51/#53：Claude / Codex 接管往返；缺文件 / 损坏 / 他处代理应 fail-closed；关一个不影响另一个。
 4. Pi CRUD ↔ `~/.pi/agent/models.json`；删当前默认应改派。
-5. Docker 全量自测在本机或云端能复现报告（#49）。
-6. 账号默认 / Cursor 池模型与 v3.20.13 相同。
-7. 未签名 macOS：右键打开或 `xattr -cr "CC Switch.app"`。
+5. #56：DeepSeek 非 object JSON 不 panic；截断 SSE 仍记用量。
+6. Docker 全量自测在有 daemon 的机器上补报告（#65 尚未合入）。
+7. 账号默认 / Cursor 池模型与 v3.20.13 相同。
+8. 未签名 macOS：右键打开或 `xattr -cr "CC Switch.app"`。
 
 任一步 FAIL：把日志贴到 issue。SCHEMA 没升，回退 v3.20.13 / 官方 3.20.2 是安全的。
 
@@ -116,5 +127,5 @@ pnpm test:docker:all
 - 不升 SCHEMA 19 / MiniMax Code / `migrate_v18_to_v19`
 - 不把官方版本号或整段官方 `main` 合进来
 - 不为 Error 5 改 WiX
-- 不在夹具 PR 未齐时打 `v3.20.14`
-- 不在「仅 workflow 加固」PR 里 bump 3.20.14
+- 不把未合入的 #65/#58 说成已出货
+- 不在「仅 workflow 加固」PR（#55）里 bump 3.20.14
