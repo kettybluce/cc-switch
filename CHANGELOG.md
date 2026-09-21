@@ -17,6 +17,7 @@ More official `farion1231/cc-switch` cherry-picks onto fork main after Wave A+B 
 ### Changed
 
 - New-card DouBaoSeed display name → localized Volcengine Doubao / 火山 豆包AI (`f874803f`). Pi `providerKey` `cc-switch-dou-bao-seed` and other live identifiers are unchanged
+- Give `PiProviderForm` Vitest suite 15s per case so slow CI does not flake on header/auth CRUD
 
 ### Skipped (intentionally)
 
