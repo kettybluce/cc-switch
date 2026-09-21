@@ -73,10 +73,33 @@ pub async fn fetch_models(
     api_format: Option<&str>,
     request_headers: Option<&BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
+    fetch_models_with_client(
+        model_fetch_client(),
+        base_url,
+        api_key,
+        is_full_url,
+        models_url_override,
+        user_agent,
+        api_format,
+        request_headers,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_models_with_client(
+    client: reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    is_full_url: bool,
+    models_url_override: Option<&str>,
+    user_agent: Option<HeaderValue>,
+    api_format: Option<&str>,
+    request_headers: Option<&BTreeMap<String, String>>,
+) -> Result<Vec<FetchedModel>, String> {
     let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
     let headers =
         build_model_fetch_headers(api_key, api_format, user_agent.as_ref(), request_headers)?;
-    let client = model_fetch_client();
     let mut last_err: Option<String> = None;
     let mut known_secrets = vec![api_key.to_string()];
     if let Some(request_headers) = request_headers {
@@ -658,19 +681,6 @@ mod tests {
         );
     }
 
-    fn proxy_test_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
-
-    struct RestoreProxy(Option<String>);
-
-    impl Drop for RestoreProxy {
-        fn drop(&mut self) {
-            let _ = crate::proxy::http_client::apply_proxy(self.0.as_deref());
-        }
-    }
-
     fn spawn_models_list_server() -> (
         String,
         std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -721,19 +731,22 @@ mod tests {
         )
     }
 
+    fn client_for_optional_proxy(proxy_url: Option<&str>) -> reqwest::Client {
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
+        builder = match proxy_url {
+            Some(url) => builder.proxy(reqwest::Proxy::all(url).expect("proxy url")),
+            None => builder.no_proxy(),
+        };
+        builder.build().expect("build isolated fetch-models client")
+    }
+
     #[tokio::test]
     async fn fetch_models_respects_configured_global_proxy_url() {
         use std::sync::atomic::Ordering;
 
-        let _lock = proxy_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-        std::env::set_var("no_proxy", "127.0.0.1,localhost");
-
-        let previous = crate::proxy::http_client::get_current_proxy_url();
-        let _restore = RestoreProxy(previous);
-
+        // Isolated clients only — never apply_proxy on GLOBAL_CLIENT (races --lib).
+        // Production fetch_models() uses model_fetch_client() → http_client::get()
+        // after init/apply_proxy from global_proxy_url.
         let (origin, hits, shutdown, handle) = spawn_models_list_server();
         let dead_listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("reserve dead proxy port");
@@ -741,16 +754,18 @@ mod tests {
         drop(dead_listener);
         let dead_proxy = format!("http://127.0.0.1:{dead_port}");
 
-        crate::proxy::http_client::apply_proxy(Some(&dead_proxy))
-            .expect("apply dead global_proxy_url");
-        assert_eq!(
-            crate::proxy::http_client::get_current_proxy_url().as_deref(),
-            Some(dead_proxy.as_str())
-        );
-
-        let err = fetch_models(&origin, "test-key", false, None, None, None, None)
-            .await
-            .expect_err("dead global_proxy_url must fail the fetch");
+        let err = fetch_models_with_client(
+            client_for_optional_proxy(Some(&dead_proxy)),
+            &origin,
+            "test-key",
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("dead global_proxy_url-style client must fail the fetch");
         assert!(
             err.contains("Request failed"),
             "fetch-models must go through the configured proxy: {err}"
@@ -758,13 +773,21 @@ mod tests {
         assert_eq!(
             hits.load(Ordering::SeqCst),
             0,
-            "origin must not be reached when global_proxy_url is set"
+            "origin must not be reached when a proxy is configured"
         );
 
-        crate::proxy::http_client::apply_proxy(None).expect("clear global_proxy_url");
-        let models = fetch_models(&origin, "test-key", false, None, None, None, None)
-            .await
-            .expect("direct fetch-models after clearing proxy");
+        let models = fetch_models_with_client(
+            client_for_optional_proxy(None),
+            &origin,
+            "test-key",
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("direct fetch-models after clearing proxy");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "glm-5.1");
         assert!(
