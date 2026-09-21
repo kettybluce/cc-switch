@@ -450,6 +450,31 @@ mod tests {
     }
 
     #[test]
+    fn wsl_localhost_tfdx8045_trailing_slash_and_mixed_separators_are_usable() {
+        let trailing = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\");
+        assert!(is_windows_unc_path(&trailing));
+        assert!(is_usable_pi_agent_dir(&trailing));
+
+        let mixed = PathBuf::from(r"//wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi/agent/");
+        assert!(is_windows_unc_path(&mixed));
+        assert!(is_usable_pi_agent_dir(&mixed));
+
+        let resolved = crate::pi_config::resolve_pi_agent_dir(
+            Some(PathBuf::from(
+                r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\",
+            )),
+            None,
+            PathBuf::from("/unused"),
+        )
+        .expect("trailing-slash tfdx8045 .pi");
+        let normalized = resolved.to_string_lossy().replace('/', r"\");
+        assert!(
+            normalized.ends_with(r"home\tfdx8045\.pi\agent"),
+            "must canonicalize onto .pi/agent: {normalized}"
+        );
+    }
+
+    #[test]
     fn wsl_dollar_agent_dir_is_accepted() {
         let unc = PathBuf::from(r"\\wsl$\Ubuntu-22.04\home\user\.pi\agent");
         assert!(is_usable_pi_agent_dir(&unc));

@@ -150,20 +150,34 @@ pub(crate) fn resolve_pi_agent_dir(
 
 /// If the user points at `~/.pi` (or `\\wsl.localhost\…\.pi`), use the agent dir.
 /// Session JSONL and models.json live under `.pi/agent/`, not the Pi root.
+/// Trailing `/` or `\` (Explorer copy / paste) still count as the Pi root.
 fn canonicalize_pi_agent_dir(path: PathBuf) -> PathBuf {
+    if is_dot_pi_dir(&path) {
+        return trim_trailing_separators(&path).join("agent");
+    }
+    path
+}
+
+fn is_dot_pi_dir(path: &Path) -> bool {
     if path
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case(".pi"))
     {
-        return path.join("agent");
+        return true;
     }
+    let normalized = path.to_string_lossy().replace('/', r"\");
+    let trimmed = normalized.trim_end_matches('\\');
+    trimmed.len() >= 3 && trimmed.to_ascii_lowercase().ends_with(r"\.pi")
+}
+
+fn trim_trailing_separators(path: &Path) -> PathBuf {
     let raw = path.to_string_lossy();
-    let normalized = raw.replace('/', r"\");
-    if normalized.len() >= 3 && normalized.to_ascii_lowercase().ends_with(r"\.pi") {
-        path.join("agent")
+    let trimmed = raw.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() || trimmed.len() == raw.len() {
+        path.to_path_buf()
     } else {
-        path
+        PathBuf::from(trimmed)
     }
 }
 
@@ -796,6 +810,9 @@ pub(crate) mod test_support {
         }
     }
 }
+
+#[cfg(test)]
+mod wsl_unc_regress;
 
 #[cfg(test)]
 mod tests {

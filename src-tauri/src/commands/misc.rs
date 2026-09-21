@@ -4836,6 +4836,53 @@ mod tests {
         assert_eq!(wsl_distro_from_path_str(r"\\nas\share\.claude"), None);
     }
 
+    #[test]
+    fn wsl_distro_from_path_str_edge_paths_tfdx8045() {
+        let ubuntu = Some("Ubuntu-22.04");
+        let hits: &[&str] = &[
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude\",
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.codex/",
+            r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\",
+            r"//wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi/agent/",
+            r"\\wsl.localhost\Ubuntu-22.04/home/tfdx8045/.claude",
+            r"\\WSL.LOCALHOST\Ubuntu-22.04\home\tfdx8045\.claude",
+            r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.codex\",
+            r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.pi",
+            r"\\wsl.localhost\Ubuntu-22.04",
+            r"\\wsl.localhost\Ubuntu-22.04\",
+        ];
+        for input in hits {
+            assert_eq!(
+                wsl_distro_from_path_str(input).as_deref(),
+                ubuntu,
+                "distro parse failed for {input:?}"
+            );
+        }
+
+        let missing_or_non_unc: &[&str] = &[
+            r"\\wsl.localhost",
+            r"\\wsl.localhost\",
+            r"\\wsl$",
+            r"\\wsl$\",
+            r"\\",
+            "",
+            r"C:\Users\tfdx8045\.claude",
+            r"/home/tfdx8045/.claude",
+            r"/home/tfdx8045/.pi/agent",
+            r"\\nas\share\home\tfdx8045\.claude",
+            r"\\localhost\c$\Users\tfdx8045\.claude",
+            r"wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude",
+            r"D:\profiles\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.claude",
+        ];
+        for input in missing_or_non_unc {
+            assert_eq!(
+                wsl_distro_from_path_str(input),
+                None,
+                "must not invent a distro for {input:?}"
+            );
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn wsl_distro_from_path_uses_official_unc_components() {
