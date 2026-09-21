@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Container entrypoint for the backend Docker self-test.
-# Default: proxy_projection_linux + session_usage_scan + provider_profile_race
-# (SCHEMA 18 Pi/Claude/Codex fixtures, isolated HOME JSONL usage scan,
-# overlapping profile/provider CRUD + takeover).
-# TEST_FILTER=all runs the full crate; any other value is a cargo test filter.
+# Default: FULL `cargo test` for src-tauri (SCHEMA 18), including
+# proxy_projection_linux, session_usage_scan, and provider_profile_race.
+# Narrower named filters are explicit overrides only.
+# Does NOT run the Tauri GUI. Isolated CC_SWITCH_TEST_HOME under /tmp.
 set -euo pipefail
 
 TEST_HOME="${CC_SWITCH_TEST_HOME:-/tmp/cc-switch-test-home}"
@@ -14,7 +14,7 @@ export CC_SWITCH_TEST_HOME="${TEST_HOME}"
 unset USERPROFILE || true
 
 THREADS="${CARGO_TEST_THREADS:-1}"
-FILTER="${TEST_FILTER:-}"
+FILTER="${TEST_FILTER:-all}"
 
 cd /app
 
@@ -26,18 +26,41 @@ if [[ $# -gt 0 ]]; then
   exec "$@"
 fi
 
-if [[ -z "${FILTER}" ]]; then
-  run_cargo_test --test proxy_projection_linux --test session_usage_scan --test provider_profile_race
-elif [[ "${FILTER}" == "proxy_projection_linux" ]]; then
-  run_cargo_test --test proxy_projection_linux
-elif [[ "${FILTER}" == "session_usage_scan" ]]; then
-  run_cargo_test --test session_usage_scan
-elif [[ "${FILTER}" == "provider_profile_race" ]]; then
-  run_cargo_test --test provider_profile_race
-elif [[ "${FILTER}" == "all" || "${FILTER}" == "*" ]]; then
-  run_cargo_test
-else
-  # cargo treats a single positional as a test-name substring filter.
-  # shellcheck disable=SC2086
-  run_cargo_test ${FILTER}
-fi
+echo "docker-backend-self-test: TEST_FILTER=${FILTER} CARGO_TEST_THREADS=${THREADS} SCHEMA_VERSION=18"
+
+case "${FILTER}" in
+  all|"*"|"")
+    # Default: full crate (lib + integration + doc tests).
+    run_cargo_test
+    ;;
+  proxy|proxy_projection_linux)
+    run_cargo_test --test proxy_projection_linux
+    ;;
+  session_usage_scan|usage|session-usage)
+    run_cargo_test --test session_usage_scan
+    ;;
+  provider_profile_race|race)
+    run_cargo_test --test provider_profile_race
+    ;;
+  pi-crud|pi_crud|pi-crud-linux)
+    # #46 Linux stand-in Pi CRUD + fetch_models / live-update lib tests.
+    run_cargo_test --test proxy_projection_linux linux_standin_create
+    run_cargo_test --test proxy_projection_linux linux_standin_update
+    run_cargo_test --test proxy_projection_linux linux_standin_delete
+    run_cargo_test --lib fetch_models_
+    run_cargo_test --lib live_update_writes_url
+    run_cargo_test --lib malformed_takeover_backup
+    ;;
+  lib-lite|lite)
+    # Lightweight compose profile: fetch_models_ + key Pi CRUD lib tests.
+    run_cargo_test --lib fetch_models_
+    run_cargo_test --lib live_update_writes_url
+    run_cargo_test --lib malformed_takeover_backup
+    run_cargo_test --lib linux_standin_agent_dir
+    ;;
+  *)
+    # cargo treats a single positional as a test-name substring filter.
+    # shellcheck disable=SC2086
+    run_cargo_test ${FILTER}
+    ;;
+esac
