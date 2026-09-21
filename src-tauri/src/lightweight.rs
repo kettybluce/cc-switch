@@ -98,3 +98,21 @@ pub fn exit_lightweight_mode(app: &tauri::AppHandle) -> Result<(), String> {
 pub fn is_lightweight_mode() -> bool {
     LIGHTWEIGHT_MODE.load(Ordering::Acquire)
 }
+
+/// `ExitRequested(None)` 回收 WebView 后主窗口已不在，但轻量标志可能仍为 false。
+/// 标记轻量模式，让托盘菜单勾选与「打开主界面」重建路径一致。
+pub fn mark_as_lightweight(app: &tauri::AppHandle) {
+    if LIGHTWEIGHT_MODE.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    crate::tray::refresh_tray_menu(app);
+    log::info!("主窗口已不存在，标记为轻量模式以便托盘恢复");
+}
+
+/// 托盘 / Dock / 单实例 / 深链接共用：主窗口在则显示，缺失则重建。
+///
+/// 不再要求 `is_lightweight_mode()` 为 true。`ExitRequested(None)` StayInTray
+/// 之后窗口可能已没、标志仍为 false；此时仍必须能从托盘唤回。
+pub fn reveal_or_recreate_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    exit_lightweight_mode(app)
+}
