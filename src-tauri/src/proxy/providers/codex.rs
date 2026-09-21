@@ -514,6 +514,24 @@ pub fn apply_codex_upstream_model(provider: &Provider, body: &mut JsonValue) -> 
     Some(upstream_model)
 }
 
+/// Native Responses passthrough: rewrite the request model to this provider's
+/// upstream model when the client model is not in the provider catalog.
+///
+/// Chat / Anthropic conversion already call [`apply_codex_upstream_model`].
+/// Native Responses previously forwarded the client's model unchanged, so
+/// failover to another Responses provider failed because the backup rejected
+/// the primary's model id (#7547). Official ChatGPT cards keep the client
+/// model so the Codex picker still works.
+pub fn apply_codex_native_responses_upstream_model(
+    provider: &Provider,
+    body: &mut JsonValue,
+) -> Option<String> {
+    if is_codex_official_provider(provider) {
+        return None;
+    }
+    apply_codex_upstream_model(provider, body)
+}
+
 pub fn resolve_codex_chat_reasoning_config(
     provider: &Provider,
     body: &JsonValue,
@@ -1666,6 +1684,104 @@ wire_api = "anthropic"
         assert_eq!(
             body.get("model").and_then(|v| v.as_str()),
             Some("claude-opus-4-1[1m]")
+        );
+    }
+
+    #[test]
+    fn native_responses_failover_rewrites_unknown_client_model() {
+        // #7547: native Responses previously skipped model substitution, so a
+        // failover request still carried the primary's model id.
+        let provider = create_provider(json!({
+            "config": r#"
+model_provider = "deepseek"
+model = "deepseek-v4-flash"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+wire_api = "responses"
+"#
+        }));
+        let mut body = json!({
+            "model": "gpt-5.4",
+            "input": "ping"
+        });
+
+        let upstream_model = apply_codex_native_responses_upstream_model(&provider, &mut body);
+
+        assert_eq!(upstream_model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("deepseek-v4-flash")
+        );
+        // The chat-gated helper must not fire on native Responses; that was the
+        // original hole in the failover path.
+        let mut chat_body = json!({ "model": "gpt-5.4", "input": "ping" });
+        assert!(apply_codex_chat_upstream_model(&provider, &mut chat_body).is_none());
+        assert_eq!(
+            chat_body.get("model").and_then(|v| v.as_str()),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn native_responses_failover_preserves_catalog_model_selection() {
+        let provider = create_provider(json!({
+            "config": r#"
+model_provider = "hunyuan"
+model = "hunyuan-t1"
+
+[model_providers.hunyuan]
+name = "Hunyuan"
+base_url = "https://api.hunyuan.cloud.tencent.com/v1"
+wire_api = "responses"
+"#,
+            "modelCatalog": {
+                "models": [
+                    { "model": "hunyuan-t1" },
+                    { "model": "hunyuan-turbos" }
+                ]
+            }
+        }));
+        let mut body = json!({
+            "model": "hunyuan-turbos",
+            "input": "ping"
+        });
+
+        let upstream_model = apply_codex_native_responses_upstream_model(&provider, &mut body);
+
+        assert_eq!(upstream_model.as_deref(), Some("hunyuan-turbos"));
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("hunyuan-turbos")
+        );
+    }
+
+    #[test]
+    fn native_responses_keeps_official_chatgpt_client_model() {
+        let mut provider = create_provider(json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": null
+            },
+            "config": r#"
+model = "gpt-5.4"
+model_provider = "openai"
+"#
+        }));
+        provider.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
+        provider.category = Some("official".to_string());
+        assert!(is_codex_official_provider(&provider));
+
+        let mut body = json!({
+            "model": "gpt-5.6-codex",
+            "input": "ping"
+        });
+
+        assert!(apply_codex_native_responses_upstream_model(&provider, &mut body).is_none());
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("gpt-5.6-codex")
         );
     }
 

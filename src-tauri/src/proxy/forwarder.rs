@@ -1631,6 +1631,16 @@ impl RequestForwarder {
                 adapter.transform_request(mapped_body, provider)?
             }
         } else {
+            // Native Responses passthrough. Chat / Anthropic conversion already
+            // rewrite the model; this path previously forwarded the client's
+            // (primary) model, so failover to another Responses provider failed.
+            let mut mapped_body = mapped_body;
+            if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
+                super::providers::apply_codex_native_responses_upstream_model(
+                    provider,
+                    &mut mapped_body,
+                );
+            }
             mapped_body
         };
 
