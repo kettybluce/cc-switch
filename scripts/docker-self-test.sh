@@ -71,7 +71,7 @@ run_docker() {
 host_cargo() {
   # Append cargo output to the log; keep the worst non-zero status.
   set +e
-  cargo test --locked --manifest-path src-tauri/Cargo.toml "$@" -- --test-threads="${THREADS}" 2>&1 | tee -a "${LOG_PATH}"
+  cargo test --locked --no-fail-fast --manifest-path src-tauri/Cargo.toml "$@" -- --test-threads="${THREADS}" 2>&1 | tee -a "${LOG_PATH}"
   local pipe_rc="${PIPESTATUS[0]}"
   set -e
   if [[ "${pipe_rc}" -ne 0 ]]; then
