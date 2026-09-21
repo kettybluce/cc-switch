@@ -711,15 +711,18 @@ mod tests {
                 }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Windows inherits nonblocking from the listener; reqwest then
+                        // sees "error sending request" if write_all WouldBlock-drops.
+                        let _ = stream.set_nonblocking(false);
                         hits_clone.fetch_add(1, Ordering::SeqCst);
                         let mut buf = [0u8; 2048];
                         let _ = stream.read(&mut buf);
                         let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(_) => {
                         std::thread::sleep(Duration::from_millis(10));
                     }
-                    Err(_) => break,
                 }
             }
         });
