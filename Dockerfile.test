@@ -60,10 +60,12 @@ RUN mkdir -p /app/dist /app/src-tauri/src \
 
 # --- real source; prebuild the default Linux fixture/proxy test ---
 COPY src-tauri /app/src-tauri
-COPY scripts/docker-backend-self-test.sh /usr/local/bin/docker-backend-self-test.sh
-RUN chmod +x /usr/local/bin/docker-backend-self-test.sh \
-    && mkdir -p /app/dist /tmp/cc-switch-test-home \
+RUN mkdir -p /app/dist /tmp/cc-switch-test-home \
     && cargo test --locked --manifest-path src-tauri/Cargo.toml \
         --test proxy_projection_linux --no-run
+
+# Entrypoint last so script-only edits do not rebuild cargo artifacts.
+COPY scripts/docker-backend-self-test.sh /usr/local/bin/docker-backend-self-test.sh
+RUN chmod +x /usr/local/bin/docker-backend-self-test.sh
 
 ENTRYPOINT ["/usr/local/bin/docker-backend-self-test.sh"]
