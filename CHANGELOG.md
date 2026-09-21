@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — Wave D (SCHEMA 18)
 
-Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No further SCHEMA-18-safe merged cherry-picks remain. This wave adds Linux stand-in **Claude/Codex takeover roundtrip** fixtures parallel to Pi (#43/#46). Docker `TEST_FILTER=all` shipping docs already landed on main (`1a605875`). Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved.
+Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No further SCHEMA-18-safe merged cherry-picks remain. This wave adds Linux stand-in **Claude/Codex takeover roundtrip** fixtures parallel to Pi (#43/#46), and makes Docker self-test **default to the full `src-tauri` cargo suite** with a Chinese markdown report every run. Does **not** claim official 3.20.3 / SCHEMA 19. Fork Pi/WSL/`proxy_takeover_pi` work is preserved. This change does **not** ship Portable / MSI.
 
 ### Added
 
 - Linux-cloud fixtures: Claude unknown-field takeover roundtrip; Codex extra TOML + `auth.json` roundtrip; hot-switch during takeover refreshes backup (disable restores the new card); independent disable leaves the other app projected
 - Fail-closed takeover: refuse enable when Claude/Codex/Pi Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable
 - CodexLiveAuthSwitchGuard edge coverage (Wave B #7395 already on main): `MissingAccount` / `ExistingAccount(None|Some)` / stale binding switch-away and already-enabled takeover; Linux stand-in fixtures; Chinese recovery FAQ + guide. `SCHEMA_VERSION` stays 18; default Cursor pool model unchanged
+- Docker self-test default FULL crate (`pnpm test:docker` / `scripts/docker-self-test.sh`) plus `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md` on every run. `proxy` / `pi-crud` / `lib-lite` are explicit narrower filters only. SCHEMA stays 18.
 - CI: `bash -n` on `scripts/**/*.sh` plus extracted GitHub Actions bash `run:` blocks, checksum-pinned actionlint 1.7.12, and a Windows Portable packaging dry-run (`scripts/ci/dry-run-windows-portable.sh`) that does not bump the version or call Tauri
 - Burn-in checklist for a future v3.20.14 Portable ship: `docs/release-v3.20.14-burn-in-zh.md` (do **not** tag until #49 is on main; #51/#53 already landed, do not squash overlapping #52)
 
