@@ -1700,6 +1700,24 @@ impl RequestForwarder {
             }
         }
 
+        // Native Responses passthrough: Codex omits `required` on all-optional
+        // MCP tools (`list_mcp_resources`). Strict third-party validators treat
+        // that as null and 400 (`null is not of type "array"`). Official OpenAI
+        // is lenient — skip it so prompt-cache prefixes stay byte-identical.
+        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_responses_to_chat
+            && !codex_responses_to_anthropic
+            && !super::providers::is_codex_official_provider(provider)
+            && super::providers::transform_codex_chat::sanitize_codex_tool_schema_required_arrays(
+                &mut request_body,
+            )
+        {
+            log::debug!(
+                "[Codex] Normalized null/missing tool schema `required` arrays to [] (provider={})",
+                provider.id
+            );
+        }
+
         if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
             self.apply_media_prevention(&mut request_body, provider);
         }
