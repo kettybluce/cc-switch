@@ -2212,8 +2212,9 @@ async fn responses_sse_stream_to_anthropic_message(
 /// 把 OpenAI Responses SSE 流聚合成一个完整的 Responses JSON 对象，供下游转成 Anthropic
 /// 非流响应。仅在 Codex OAuth 把 `stream:false` 强制升级为 SSE 的场景下调用。
 ///
-/// 复用 `proxy::sse` 的 `take_sse_block`/`strip_sse_field`：`take_sse_block` 同时支持
-/// `\n\n` 与 `\r\n\r\n` 两种分隔符，`strip_sse_field` 兼容带/不带空格的字段写法。
+/// 复用 `proxy::sse` 的 `take_sse_block`/`strip_sse_field`：`take_sse_block` 按 WHATWG
+/// 识别 `\n\n`、`\r\n\r\n` 以及混合 `\r\n\n` / `\n\r\n` / `\r\r` 分隔符，
+/// `strip_sse_field` 兼容带/不带空格（及行首 BOM/缩进）的字段写法。
 fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
     let mut buffer = body.trim_start_matches('\u{feff}').to_string();
     let mut completed_response: Option<Value> = None;
@@ -3377,6 +3378,47 @@ data: {\"id\":\"chatcmpl-real\",\"model\":\"m\",\"created\":42,\"choices\":[{\"i
         let id2 = r2["id"].as_str().unwrap();
         assert!(!id1.is_empty());
         assert_ne!(id1, id2, "两次无 id 聚合应产出不同 id 以避免 dedup 碰撞");
+    }
+
+    #[test]
+    fn chat_sse_to_response_value_ignores_n_gt_1_when_index_0_is_not_first() {
+        let sse = concat!(
+            "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"B\"}},{\"index\":0,\"delta\":{\"content\":\"A\"}}]}\n\n",
+            "data: {\"id\":\"c1\",\"choices\":[{\"index\":1,\"delta\":{},\"finish_reason\":\"stop\"},{\"index\":0,\"delta\":{\"content\":\"a\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let response = chat_sse_to_response_value(sse).unwrap();
+        assert_eq!(response["choices"][0]["message"]["content"], "Aa");
+        assert_eq!(response["choices"][0]["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn chat_sse_to_response_value_skips_index_1_only_chunks() {
+        let sse = concat!(
+            "retry: 2000\nid: 1\n",
+            "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"NOPE\"}}]}\n\n",
+            "id: 2\ndata: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"yes\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let response = chat_sse_to_response_value(sse).unwrap();
+        assert_eq!(response["choices"][0]["message"]["content"], "yes");
+    }
+
+    #[test]
+    fn chat_sse_to_response_value_mixed_crlf_lf_delimiters() {
+        let sse = "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\r\n\n\
+data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\r\n\
+data: [DONE]\r\n\r\n";
+        let response = chat_sse_to_response_value(sse).unwrap();
+        assert_eq!(response["choices"][0]["message"]["content"], "hi");
+        assert_eq!(response["choices"][0]["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn chat_sse_to_response_value_comment_heartbeat_reconnect() {
+        let sse = ": ping\n\nretry: 3000\nid: a\ndata: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let response = chat_sse_to_response_value(sse).unwrap();
+        assert_eq!(response["choices"][0]["message"]["content"], "ok");
     }
 
     #[test]

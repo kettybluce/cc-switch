@@ -1230,4 +1230,35 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens, 0);
         assert_eq!(usage.model, None);
     }
+
+    #[test]
+    fn test_openai_stream_multi_choice_usage_still_parsed() {
+        let events = vec![
+            json!({
+                "id": "chatcmpl-n",
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 1, "delta": {"content": "B"}},
+                    {"index": 0, "delta": {"content": "A"}}
+                ]
+            }),
+            json!({
+                "id": "chatcmpl-n",
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 1, "delta": {}, "finish_reason": "stop"},
+                    {"index": 0, "delta": {}, "finish_reason": "stop"}
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 4
+                }
+            }),
+        ];
+        let usage = TokenUsage::from_openai_stream_events(&events).unwrap();
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 4);
+        assert_eq!(usage.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(usage.message_id.as_deref(), Some("chatcmpl-n"));
+    }
 }

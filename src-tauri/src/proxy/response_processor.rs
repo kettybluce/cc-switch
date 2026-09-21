@@ -9,7 +9,7 @@ use super::{
     handler_context::{RequestContext, StreamingTimeoutConfig},
     hyper_client::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     server::ProxyState,
-    sse::{strip_sse_field, take_sse_block},
+    sse::{parse_sse_event, take_sse_block, take_sse_block_eof},
     usage::parser::TokenUsage,
     ProxyError,
 };
@@ -679,32 +679,50 @@ async fn log_usage_internal(
     }
 }
 
-/// Parse one SSE block (or residual buffer at EOF) into the usage collector.
+/// 把一块 SSE（或 EOF 残余 buffer）送进用量收集器。
+/// `id` / `retry` 仅作重连诊断；透传字节本身不改写。
 async fn ingest_sse_event_text(event_text: &str, collector: &Option<SseUsageCollector>, tag: &str) {
-    if event_text.trim().is_empty() {
+    let parsed = parse_sse_event(event_text);
+    if let Some(id) = parsed.id.as_deref() {
+        log::trace!(
+            "[{tag}] SSE last-event-id={id:?} retry_ms={:?}",
+            parsed.retry_ms
+        );
+    }
+    let data = parsed.data.as_str();
+    if data.trim().is_empty() {
         return;
     }
-    for line in event_text.lines() {
-        if let Some(data) = strip_sse_field(line, "data") {
-            if data.trim() == "[DONE]" {
-                log::debug!("[{tag}] <<< SSE: [DONE]");
-                continue;
+    if parsed.is_done() {
+        log::debug!("[{tag}] <<< SSE: [DONE]");
+        return;
+    }
+    let collected = match collector {
+        Some(c) if c.should_collect(data) => match serde_json::from_str::<Value>(data) {
+            Ok(json_value) => {
+                c.push(json_value).await;
+                true
             }
-            let collected = match collector {
-                Some(c) if c.should_collect(data) => match serde_json::from_str::<Value>(data) {
-                    Ok(json_value) => {
-                        c.push(json_value).await;
-                        true
-                    }
-                    Err(_) => false,
-                },
-                _ => false,
-            };
-            log::trace!(
-                "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
-                data.len()
-            );
-        }
+            Err(_) => false,
+        },
+        _ => false,
+    };
+    log::trace!(
+        "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
+        data.len()
+    );
+}
+
+/// 流结束或出错时：冲刷半截 UTF-8，再把缺 `\n\n` 的最后一块交给用量收集器。
+async fn flush_sse_parse_tail(
+    buffer: &mut String,
+    utf8_remainder: &mut Vec<u8>,
+    collector: &Option<SseUsageCollector>,
+    tag: &str,
+) {
+    crate::proxy::sse::flush_utf8_remainder(buffer, utf8_remainder);
+    while let Some(event_text) = take_sse_block_eof(buffer) {
+        ingest_sse_event_text(&event_text, collector, tag).await;
     }
 }
 
@@ -754,9 +772,13 @@ pub fn create_logged_passthrough_stream(
                         Ok(Some(chunk)) => Some(chunk),
                         Ok(None) => None, // 流结束
                         Err(_) => {
-                            // 超时
+                            // 超时：已到的半截事件仍记用量，避免静默丢尾块。
                             let timeout_type = if is_first_chunk { "首字节" } else { "静默期" };
                             log::error!("[{tag}] 流式响应{}超时 ({}秒)", timeout_type, duration.as_secs());
+                            if inspect_sse_events {
+                                flush_sse_parse_tail(&mut buffer, &mut utf8_remainder, &collector, tag)
+                                    .await;
+                            }
                             yield Err(std::io::Error::other(format!("流式响应{timeout_type}超时")));
                             break;
                         }
@@ -787,6 +809,10 @@ pub fn create_logged_passthrough_stream(
                 }
                 Some(Err(e)) => {
                     log::error!("[{tag}] 流错误: {e}");
+                    if inspect_sse_events {
+                        flush_sse_parse_tail(&mut buffer, &mut utf8_remainder, &collector, tag)
+                            .await;
+                    }
                     yield Err(std::io::Error::other(e.to_string()));
                     break;
                 }
@@ -794,14 +820,8 @@ pub fn create_logged_passthrough_stream(
                     // 流正常结束。半截 SSE（缺尾部空行）仍交给用量收集器，
                     // 对齐 handlers.rs 对残余 buffer 的处理。
                     if inspect_sse_events {
-                        if !utf8_remainder.is_empty() {
-                            buffer.push_str(&String::from_utf8_lossy(&utf8_remainder));
-                            utf8_remainder.clear();
-                        }
-                        if !buffer.trim().is_empty() {
-                            ingest_sse_event_text(&buffer, &collector, tag).await;
-                            buffer.clear();
-                        }
+                        flush_sse_parse_tail(&mut buffer, &mut utf8_remainder, &collector, tag)
+                            .await;
                     }
                     break;
                 }
@@ -880,7 +900,7 @@ mod tests {
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
     use futures::stream::StreamExt;
     use rust_decimal::Decimal;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -932,22 +952,22 @@ mod tests {
     #[test]
     fn test_strip_sse_field_accepts_optional_space() {
         assert_eq!(
-            super::strip_sse_field("data: {\"ok\":true}", "data"),
+            crate::proxy::sse::strip_sse_field("data: {\"ok\":true}", "data"),
             Some("{\"ok\":true}")
         );
         assert_eq!(
-            super::strip_sse_field("data:{\"ok\":true}", "data"),
+            crate::proxy::sse::strip_sse_field("data:{\"ok\":true}", "data"),
             Some("{\"ok\":true}")
         );
         assert_eq!(
-            super::strip_sse_field("event: message_start", "event"),
+            crate::proxy::sse::strip_sse_field("event: message_start", "event"),
             Some("message_start")
         );
         assert_eq!(
-            super::strip_sse_field("event:message_start", "event"),
+            crate::proxy::sse::strip_sse_field("event:message_start", "event"),
             Some("message_start")
         );
-        assert_eq!(super::strip_sse_field("id:1", "data"), None);
+        assert_eq!(crate::proxy::sse::strip_sse_field("id:1", "data"), None);
     }
 
     #[test]
@@ -1297,35 +1317,53 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn passthrough_collects_truncated_sse_without_trailing_blank_line() {
+    fn no_timeout() -> StreamingTimeoutConfig {
+        StreamingTimeoutConfig {
+            first_byte_timeout: 0,
+            idle_timeout: 0,
+        }
+    }
+
+    async fn drain_logged(
+        stream: impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send,
+    ) -> (Vec<u8>, Vec<std::io::Error>) {
+        tokio::pin!(stream);
+        let mut forwarded = Vec::new();
+        let mut errors = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => forwarded.extend_from_slice(&bytes),
+                Err(err) => errors.push(err),
+            }
+        }
+        (forwarded, errors)
+    }
+
+    fn collector_sink() -> (SseUsageCollector, Arc<std::sync::Mutex<Vec<Value>>>) {
         let collected = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
         let collected_cb = collected.clone();
         let collector =
             SseUsageCollector::new(std::time::Instant::now(), None, move |events, _| {
                 *collected_cb.lock().expect("collected lock") = events;
             });
+        (collector, collected)
+    }
 
+    #[tokio::test]
+    async fn passthrough_collects_truncated_sse_without_trailing_blank_line() {
+        let (collector, collected) = collector_sink();
         let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from_static(
             br#"data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}"#,
         ))]);
-        let logged = create_logged_passthrough_stream(
+        let (forwarded, errors) = drain_logged(create_logged_passthrough_stream(
             stream,
             "test",
             Some(collector),
-            StreamingTimeoutConfig {
-                first_byte_timeout: 0,
-                idle_timeout: 0,
-            },
+            no_timeout(),
             None,
-        );
-        tokio::pin!(logged);
-        let mut forwarded = Vec::new();
-        while let Some(chunk) = logged.next().await {
-            forwarded.push(chunk.expect("forward chunk"));
-        }
-
-        let forwarded: Vec<u8> = forwarded.into_iter().flat_map(|b| b.to_vec()).collect();
+        ))
+        .await;
+        assert!(errors.is_empty());
         assert_eq!(
             forwarded,
             br#"data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}"#
@@ -1338,5 +1376,329 @@ mod tests {
         );
         assert_eq!(events[0]["usage"]["prompt_tokens"], 3);
         assert_eq!(events[0]["usage"]["completion_tokens"], 1);
+    }
+
+    #[tokio::test]
+    async fn passthrough_collects_partial_utf8_split_then_eof_residual() {
+        let (collector, collected) = collector_sink();
+        // Split inside "你" (E4 BD A0) across two chunks; last event has no trailing blank line.
+        let event =
+            "data: {\"text\":\"你好\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}";
+        let bytes = event.as_bytes();
+        let ni = bytes.windows(3).position(|w| w == "你".as_bytes()).unwrap();
+        let stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::copy_from_slice(&bytes[..ni + 1])),
+            Ok(Bytes::copy_from_slice(&bytes[ni + 1..])),
+        ]);
+        let (forwarded, errors) = drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        assert!(errors.is_empty());
+        assert_eq!(forwarded, bytes);
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["text"], "你好");
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 1);
+    }
+
+    #[tokio::test]
+    async fn passthrough_reconnect_fields_comments_and_done_do_not_drop_usage() {
+        let (collector, collected) = collector_sink();
+        let body = concat!(
+            ": OPENROUTER PROCESSING\n\n",
+            "retry: 3000\n",
+            "id: chunk-1\n",
+            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            ": keepalive\n\n",
+            "id: chunk-2\n",
+            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+            body.as_bytes().to_vec(),
+        ))]);
+        let (_, errors) = drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        assert!(errors.is_empty());
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["usage"]["prompt_tokens"], 8);
+        assert_eq!(events[1]["usage"]["completion_tokens"], 2);
+    }
+
+    #[tokio::test]
+    async fn passthrough_collects_multiline_data_and_crlf_events() {
+        let (collector, collected) = collector_sink();
+        let body =
+            "data: {\"usage\": {\"prompt_tokens\":4,\r\ndata: \"completion_tokens\":5}}\r\n\r\n";
+        let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+            body.as_bytes().to_vec(),
+        ))]);
+        let (_, errors) = drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        assert!(errors.is_empty());
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 4);
+        assert_eq!(events[0]["usage"]["completion_tokens"], 5);
+    }
+
+    #[tokio::test]
+    async fn passthrough_usage_filter_skips_non_usage_openai_chunks() {
+        let collected = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let collected_cb = collected.clone();
+        let collector = SseUsageCollector::new(
+            std::time::Instant::now(),
+            Some(|data: &str| data.contains("\"usage\"")),
+            move |events, _| {
+                *collected_cb.lock().expect("collected lock") = events;
+            },
+        );
+        let body = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":3}}\n\n",
+        );
+        let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+            body.as_bytes().to_vec(),
+        ))]);
+        drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 9);
+    }
+
+    #[tokio::test]
+    async fn passthrough_flush_residual_on_mid_stream_error() {
+        let (collector, collected) = collector_sink();
+        let stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from_static(
+                br#"data: {"usage":{"prompt_tokens":2,"completion_tokens":2}}"#,
+            )),
+            Err(std::io::Error::other("upstream reset")),
+        ]);
+        let (forwarded, errors) = drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        assert_eq!(errors.len(), 1);
+        assert!(forwarded.starts_with(br#"data: {"usage""#));
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 2);
+    }
+
+    #[tokio::test]
+    async fn passthrough_forwards_raw_bytes_even_when_sse_json_is_invalid() {
+        let (collector, collected) = collector_sink();
+        let body =
+            "data: not-json\n\ndata: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":0}}\n\n";
+        let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+            body.as_bytes().to_vec(),
+        ))]);
+        let (forwarded, errors) = drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        assert!(errors.is_empty());
+        assert_eq!(forwarded, body.as_bytes());
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 1);
+    }
+
+    #[tokio::test]
+    async fn passthrough_empty_chunks_and_heartbeats_are_harmless() {
+        let (collector, collected) = collector_sink();
+        let stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from_static(b"")),
+            Ok(Bytes::from_static(b": ping\n\n")),
+            Ok(Bytes::from_static(
+                br#"data: {"usage":{"prompt_tokens":6,"completion_tokens":1}}"#,
+            )),
+            Ok(Bytes::from_static(b"")),
+        ]);
+        let (_, errors) = drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        assert!(errors.is_empty());
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["usage"]["prompt_tokens"], 6);
+    }
+
+    #[tokio::test]
+    async fn passthrough_multi_choice_openai_chunk_still_collects_usage() {
+        let (collector, collected) = collector_sink();
+        let body = concat!(
+            r#"data: {"id":"chatcmpl_n","choices":[{"index":1,"delta":{"content":"B"}},{"index":0,"delta":{"content":"A"}}]}"#,
+            "\n\n",
+            r#"data: {"id":"chatcmpl_n","choices":[{"index":0,"delta":{},"finish_reason":"stop"},{"index":1,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4}}"#,
+            "\n\n",
+            "data: [DONE]\n\n",
+        );
+        let stream = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+            body.as_bytes().to_vec(),
+        ))]);
+        drain_logged(create_logged_passthrough_stream(
+            stream,
+            "test",
+            Some(collector),
+            no_timeout(),
+            None,
+        ))
+        .await;
+        let events = collected.lock().expect("collected lock");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["usage"]["prompt_tokens"], 11);
+        assert_eq!(events[0]["choices"][1]["index"], 0);
+        assert_eq!(events[0]["choices"][0]["index"], 1);
+    }
+
+    #[tokio::test]
+    async fn sse_usage_collector_finish_is_idempotent() {
+        let collected = Arc::new(std::sync::Mutex::new(0usize));
+        let collected_cb = collected.clone();
+        let collector = SseUsageCollector::new(std::time::Instant::now(), None, move |_, _| {
+            *collected_cb.lock().expect("lock") += 1;
+        });
+        collector.push(json!({"n": 1})).await;
+        collector.finish().await;
+        collector.finish().await;
+        assert_eq!(*collected.lock().expect("lock"), 1);
+    }
+
+    #[tokio::test]
+    async fn sse_usage_collector_records_first_token_ms() {
+        let first_ms = Arc::new(std::sync::Mutex::new(None::<u64>));
+        let first_ms_cb = first_ms.clone();
+        let start = std::time::Instant::now();
+        let collector = SseUsageCollector::new(start, None, move |_, first| {
+            *first_ms_cb.lock().expect("lock") = first;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        collector.push(json!({"n": 1})).await;
+        collector.finish().await;
+        let observed = first_ms.lock().expect("lock").expect("first_token_ms");
+        assert!(observed >= 5, "first_token_ms={observed}");
+    }
+
+    #[tokio::test]
+    async fn passthrough_first_byte_timeout_errors() {
+        let stream = futures::stream::pending::<Result<Bytes, std::io::Error>>();
+        let logged = create_logged_passthrough_stream(
+            stream,
+            "test",
+            None,
+            StreamingTimeoutConfig {
+                first_byte_timeout: 1,
+                idle_timeout: 0,
+            },
+            None,
+        );
+        let start = std::time::Instant::now();
+        let (forwarded, errors) = drain_logged(logged).await;
+        assert!(start.elapsed() >= std::time::Duration::from_secs(1));
+        assert!(forwarded.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].to_string().contains("首字节"));
+    }
+
+    #[tokio::test]
+    async fn passthrough_idle_timeout_after_first_chunk() {
+        let stream = async_stream::stream! {
+            yield Ok::<Bytes, std::io::Error>(Bytes::from_static(b": ping\n\n"));
+            futures::future::pending::<()>().await;
+        };
+        let logged = create_logged_passthrough_stream(
+            stream,
+            "test",
+            None,
+            StreamingTimeoutConfig {
+                first_byte_timeout: 0,
+                idle_timeout: 1,
+            },
+            None,
+        );
+        let (forwarded, errors) = drain_logged(logged).await;
+        assert_eq!(forwarded, b": ping\n\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].to_string().contains("静默期"));
+    }
+
+    #[test]
+    fn format_headers_truncates_long_safe_values() {
+        let mut headers = HeaderMap::new();
+        let long = "a".repeat(200);
+        headers.insert("x-request-id", long.parse().unwrap());
+        let formatted = format_headers(&headers);
+        assert!(formatted.contains("x-request-id="), "{formatted}");
+        assert!(formatted.contains('…'), "{formatted}");
+        assert!(!formatted.contains(&"a".repeat(200)), "{formatted}");
+    }
+
+    #[test]
+    fn strip_entity_headers_for_rebuilt_body_clears_length_and_encoding() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_ENCODING,
+            axum::http::HeaderValue::from_static("gzip"),
+        );
+        headers.insert(
+            axum::http::header::CONTENT_LENGTH,
+            axum::http::HeaderValue::from_static("12"),
+        );
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        strip_entity_headers_for_rebuilt_body(&mut headers);
+        assert!(!headers.contains_key(axum::http::header::CONTENT_ENCODING));
+        assert!(!headers.contains_key(axum::http::header::CONTENT_LENGTH));
+        assert_eq!(
+            headers.get(axum::http::header::CONTENT_TYPE),
+            Some(&axum::http::HeaderValue::from_static("application/json"))
+        );
+    }
+
+    #[test]
+    fn schema18_version_unchanged_by_sse_passthrough() {
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
     }
 }
