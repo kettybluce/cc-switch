@@ -128,9 +128,10 @@ CC_SWITCH_SELFTEST_HOST_FALLBACK=1 pnpm test:docker
 
 - `CC_SWITCH_TEST_HOME=/tmp/cc-switch-test-home` inside the container
 - Named Docker volume `cc-switch-test-home` — **not** the host user profile, **not** `C:\Users\…`
+- Container drops to uid `tester` (1000) after chowning that volume. Tests run as a regular user (same as CI), not root.
 - Tests still assert they do not write `pi-wsl-sessions` or Windows `C:` paths
 
-容器内 `CC_SWITCH_TEST_HOME=/tmp/cc-switch-test-home`；命名卷 `cc-switch-test-home`，不是宿主机用户目录，也不是 `C:\Users\…`。测试仍会断言不写 `pi-wsl-sessions` / Windows `C:`。
+容器内 `CC_SWITCH_TEST_HOME=/tmp/cc-switch-test-home`；命名卷 `cc-switch-test-home`，不是宿主机用户目录，也不是 `C:\Users\…`。入口脚本会把卷交给非 root 用户 `tester` 再跑 cargo（与 CI 一致）。测试仍会断言不写 `pi-wsl-sessions` / Windows `C:`。
 
 Reset the volume if needed / 需要时重置卷：
 

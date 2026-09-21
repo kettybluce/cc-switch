@@ -42,7 +42,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup toolchain install "${channel}" --profile minimal --component rustfmt,clippy \
     && rustup default "${channel}" \
     && rustc --version \
-    && cargo --version
+    && cargo --version \
+    && useradd --create-home --uid 1000 --shell /bin/bash tester \
+    && mkdir -p /tmp/cc-switch-test-home /app/dist \
+    && chown -R tester:tester /usr/local/cargo /usr/local/rustup /app /tmp/cc-switch-test-home /home/tester
 
 # --- cargo fetch + dummy compile so crate deps stay cached ---
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock /app/src-tauri/
@@ -55,15 +58,29 @@ COPY src-tauri/common-controls.manifest /app/src-tauri/common-controls.manifest
 RUN mkdir -p /app/dist /app/src-tauri/src \
     && printf 'fn main() {}\n' > /app/src-tauri/src/main.rs \
     && printf '// docker dep-cache placeholder\n' > /app/src-tauri/src/lib.rs \
-    && cargo fetch --locked --manifest-path src-tauri/Cargo.toml \
-    && cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
+    && chown -R tester:tester /app \
+    && runuser -u tester -- env HOME=/home/tester \
+        cargo fetch --locked --manifest-path src-tauri/Cargo.toml \
+    && runuser -u tester -- env HOME=/home/tester \
+        cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
 
-# --- real source; prebuild the default FULL crate tests (not just fixtures) ---
+# --- real source; prebuild FULL crate tests as non-root (CI is not root).
+# Touch lib/main after COPY so dummy-layer mtimes cannot keep a 0-test binary.
 COPY src-tauri /app/src-tauri
-RUN mkdir -p /app/dist /tmp/cc-switch-test-home \
-    && cargo test --locked --manifest-path src-tauri/Cargo.toml --no-run
+RUN chown -R tester:tester /app/src-tauri \
+    && touch /app/src-tauri/src/lib.rs /app/src-tauri/src/main.rs /app/src-tauri/build.rs \
+    && mkdir -p /app/dist /tmp/cc-switch-test-home \
+    && chown tester:tester /app/dist /tmp/cc-switch-test-home \
+    && runuser -u tester -- env HOME=/home/tester \
+        cargo test --locked --manifest-path src-tauri/Cargo.toml --no-run \
+    && runuser -u tester -- env HOME=/home/tester \
+        cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- --list \
+        > /tmp/cc-switch-lib-tests.list \
+    && grep -c ': test$' /tmp/cc-switch-lib-tests.list \
+    && test "$(grep -c ': test$' /tmp/cc-switch-lib-tests.list)" -gt 100
 
 # Entrypoint last so script-only edits do not rebuild cargo artifacts.
+# Image stays root so the entrypoint can chown the named volume, then drops to tester.
 COPY scripts/docker-backend-self-test.sh /usr/local/bin/docker-backend-self-test.sh
 RUN chmod +x /usr/local/bin/docker-backend-self-test.sh
 
