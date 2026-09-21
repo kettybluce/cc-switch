@@ -40,7 +40,7 @@ static NAMED_SECRET_CONTAINER: LazyLock<Regex> = LazyLock::new(|| {
 
 static QUOTED_NAMED_SECRET: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|auth|password|passwd|pwd|secret|cookie)\s*["']?\s*[:=]\s*)(["'])(.*?)\2"#,
+        r#"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|auth|password|passwd|pwd|secret|cookie)\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*')"#,
     )
     .expect("quoted named secret regex")
 });
@@ -74,7 +74,7 @@ pub(crate) fn redact_secret_text(input: &str) -> String {
         .replace_all(&output, "${1}[REDACTED]")
         .into_owned();
     output = QUOTED_NAMED_SECRET
-        .replace_all(&output, "${1}${2}[REDACTED]${2}")
+        .replace_all(&output, "${1}[REDACTED]")
         .into_owned();
     NAMED_SECRET
         .replace_all(&output, "${1}[REDACTED]")
