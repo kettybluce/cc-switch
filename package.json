@@ -13,7 +13,9 @@
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "test:unit": "vitest run",
-    "test:unit:watch": "vitest watch"
+    "test:unit:watch": "vitest watch",
+    "test:docker": "docker compose -f docker-compose.test.yml run --rm backend-self-test",
+    "test:docker:all": "docker compose -f docker-compose.test.yml run --rm -e TEST_FILTER=all backend-self-test"
   },
   "keywords": [],
   "author": "Jason Young",

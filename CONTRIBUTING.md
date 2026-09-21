@@ -50,6 +50,7 @@ pnpm dev
 | `pnpm build` | Production build |
 | `pnpm typecheck` | TypeScript type checking |
 | `pnpm test:unit` | Run unit tests |
+| `pnpm test:docker` | Backend fixture/proxy self-test in Docker (see `docs/docker-backend-self-test.md`) |
 | `pnpm lint` | ESLint check |
 | `pnpm format` | Format code (Prettier) |
 | `pnpm format:check` | Check code formatting |
@@ -184,6 +185,7 @@ pnpm dev
 | `pnpm build` | 构建生产版本 |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test:unit` | 运行单元测试 |
+| `pnpm test:docker` | Docker 内后端夹具/代理自测（见 `docs/docker-backend-self-test.md`） |
 | `pnpm lint` | ESLint 检查 |
 | `pnpm format` | 格式化代码（Prettier） |
 | `pnpm format:check` | 检查代码格式 |

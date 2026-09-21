@@ -534,6 +534,16 @@ pnpm test:unit:watch
 pnpm test:unit --coverage
 ```
 
+**Docker backend self-test** (Linux image, no Windows `C:`, no Tauri GUI):
+
+```bash
+# Ubuntu 22.04 image + isolated CC_SWITCH_TEST_HOME under /tmp
+docker compose -f docker-compose.test.yml run --rm backend-self-test
+# wrappers: pnpm test:docker   /   make test-docker
+```
+
+This runs `proxy_projection_linux` (SCHEMA 18 Pi/Claude/Codex fixtures). It does **not** cover WSL UNC, Windows MSI/Portable, or the full desktop GUI. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md).
+
 ### Tech Stack
 
 **Frontend**: React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit

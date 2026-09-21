@@ -539,6 +539,16 @@ pnpm test:unit:watch
 pnpm test:unit --coverage
 ```
 
+**Docker 后端自测**（Linux 镜像，不写 Windows `C:`，不跑 Tauri GUI）：
+
+```bash
+# Ubuntu 22.04 镜像 + 容器内 /tmp 下隔离的 CC_SWITCH_TEST_HOME
+docker compose -f docker-compose.test.yml run --rm backend-self-test
+# 封装：pnpm test:docker   /   make test-docker
+```
+
+默认跑 `proxy_projection_linux`（SCHEMA 18 的 Pi/Claude/Codex 夹具）。**不覆盖** WSL UNC、Windows MSI/绿色版、完整桌面 GUI。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md)。
+
 ### 技术栈
 
 **前端**：React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit

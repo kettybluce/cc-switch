@@ -20,6 +20,7 @@ jobs:
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       backend: ${{ steps.filter.outputs.backend }}
+      docker: ${{ steps.filter.outputs.docker }}
     steps:
       # On pull_request the filter reads changed files via the API (no checkout);
       # on push it needs a local git history to diff against.
@@ -51,6 +52,12 @@ jobs:
               - "src-tauri/**"
               - "rust-toolchain.toml"
               - ".github/workflows/**"
+            docker:
+              - "Dockerfile.test"
+              - "docker-compose.test.yml"
+              - ".dockerignore"
+              - "scripts/docker-backend-self-test.sh"
+              - "Makefile"
 
   frontend:
     name: Frontend Checks
@@ -250,3 +257,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+  # Cheap syntax check only. Building Dockerfile.test (Rust + GTK) is too
+  # heavy for every PR; run the image locally / in cloud with:
+  #   docker compose -f docker-compose.test.yml run --rm backend-self-test
+  docker-compose-config:
+    name: Docker compose config
+    runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.docker == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate compose file
+        run: docker compose -f docker-compose.test.yml config
