@@ -122,9 +122,10 @@ vi.mock("@/components/UsageScriptModal", () => ({
 }));
 
 vi.mock("@/components/ConfirmDialog", () => ({
-  ConfirmDialog: ({ isOpen, message, onConfirm, onCancel }: any) =>
+  ConfirmDialog: ({ isOpen, title, message, onConfirm, onCancel }: any) =>
     isOpen ? (
       <div data-testid="confirm-dialog">
+        <div data-testid="confirm-title">{title}</div>
         <div data-testid="confirm-message">{message}</div>
         <button onClick={() => onConfirm()}>confirm-delete</button>
         <button onClick={() => onCancel()}>cancel-delete</button>
@@ -197,6 +198,51 @@ const renderApp = (AppComponent: ComponentType) => {
     </QueryClientProvider>,
   );
 };
+
+function seedPiProviders(
+  defaultProviderId: string | null,
+  extra: Record<string, { id: string; name: string }> = {},
+) {
+  localStorage.setItem("cc-switch-last-app", "pi");
+  const piConfig = {
+    baseUrl: "https://api.example.com/v1",
+    apiKey: "test-key",
+    api: "openai-completions",
+    models: [{ id: "model-a" }],
+  };
+  const providers = {
+    custom: {
+      id: "custom",
+      name: "Custom Pi",
+      settingsConfig: piConfig,
+      category: "custom" as const,
+      sortIndex: 0,
+      createdAt: Date.now(),
+    },
+    ...Object.fromEntries(
+      Object.entries(extra).map(([id, provider], index) => [
+        id,
+        {
+          id: provider.id,
+          name: provider.name,
+          settingsConfig: piConfig,
+          category: "custom" as const,
+          sortIndex: index + 1,
+          createdAt: Date.now(),
+        },
+      ]),
+    ),
+  };
+  setProviders("pi", providers);
+  server.use(
+    http.post("http://tauri.local/get_pi_current_state", () =>
+      HttpResponse.json({
+        enabledProviderIds: Object.keys(providers),
+        defaultProviderId,
+      }),
+    ),
+  );
+}
 
 describe("App integration with MSW", () => {
   beforeEach(() => {
@@ -352,30 +398,7 @@ describe("App integration with MSW", () => {
   });
 
   it("warns without blocking when removing Pi's global default provider", async () => {
-    localStorage.setItem("cc-switch-last-app", "pi");
-    setProviders("pi", {
-      custom: {
-        id: "custom",
-        name: "Custom Pi",
-        settingsConfig: {
-          baseUrl: "https://api.example.com/v1",
-          apiKey: "test-key",
-          api: "openai-completions",
-          models: [{ id: "model-a" }],
-        },
-        category: "custom",
-        sortIndex: 0,
-        createdAt: Date.now(),
-      },
-    });
-    server.use(
-      http.post("http://tauri.local/get_pi_current_state", () =>
-        HttpResponse.json({
-          enabledProviderIds: ["custom"],
-          defaultProviderId: "custom",
-        }),
-      ),
-    );
+    seedPiProviders("custom");
 
     const { default: App } = await import("@/App");
     renderApp(App);
@@ -387,12 +410,140 @@ describe("App integration with MSW", () => {
     );
     fireEvent.click(screen.getByText("remove"));
 
+    expect(screen.getByTestId("confirm-title")).toHaveTextContent(
+      "confirm.removeProvider",
+    );
+    expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+      "confirm.removeProviderMessage",
+    );
     expect(screen.getByTestId("confirm-message")).toHaveTextContent(
       "confirm.piDefaultProviderWarning",
     );
     fireEvent.click(screen.getByText("confirm-delete"));
     await waitFor(() =>
       expect(screen.queryByTestId("confirm-dialog")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("appends the same reassignment warning when deleting Pi's global default", async () => {
+    seedPiProviders("custom");
+
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "Custom Pi",
+      ),
+    );
+    fireEvent.click(screen.getByText("delete"));
+
+    expect(screen.getByTestId("confirm-title")).toHaveTextContent(
+      "confirm.deleteProvider",
+    );
+    expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+      "confirm.deleteProviderMessage",
+    );
+    expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+      "confirm.piDefaultProviderWarning",
+    );
+  });
+
+  it("does not warn when deleting a Pi provider that is not the global default", async () => {
+    localStorage.setItem("cc-switch-last-app", "pi");
+    setProviders("pi", {
+      other: {
+        id: "other",
+        name: "Other Pi",
+        settingsConfig: {
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "test-key",
+          api: "openai-completions",
+          models: [{ id: "model-a" }],
+        },
+        category: "custom",
+        sortIndex: 0,
+        createdAt: Date.now(),
+      },
+      custom: {
+        id: "custom",
+        name: "Custom Pi",
+        settingsConfig: {
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "test-key",
+          api: "openai-completions",
+          models: [{ id: "model-a" }],
+        },
+        category: "custom",
+        sortIndex: 1,
+        createdAt: Date.now(),
+      },
+    });
+    server.use(
+      http.post("http://tauri.local/get_pi_current_state", () =>
+        HttpResponse.json({
+          enabledProviderIds: ["other", "custom"],
+          defaultProviderId: "custom",
+        }),
+      ),
+    );
+
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "Other Pi",
+      ),
+    );
+    fireEvent.click(screen.getByText("delete"));
+
+    expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+      "confirm.deleteProviderMessage",
+    );
+    expect(screen.getByTestId("confirm-message")).not.toHaveTextContent(
+      "confirm.piDefaultProviderWarning",
+    );
+  });
+
+  it("cancels Pi default-provider deletion without dismissing the warning as a no-op block", async () => {
+    seedPiProviders("custom");
+
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "Custom Pi",
+      ),
+    );
+    fireEvent.click(screen.getByText("delete"));
+    expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+      "confirm.piDefaultProviderWarning",
+    );
+    fireEvent.click(screen.getByText("cancel-delete"));
+    expect(screen.queryByTestId("confirm-dialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("provider-list").textContent).toContain(
+      "Custom Pi",
+    );
+  });
+
+  it("does not attach the Pi reassignment warning to Claude provider deletion", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "claude-1",
+      ),
+    );
+    fireEvent.click(screen.getByText("delete"));
+
+    expect(screen.getByTestId("confirm-title")).toHaveTextContent(
+      "confirm.deleteProvider",
+    );
+    expect(screen.getByTestId("confirm-message")).not.toHaveTextContent(
+      "confirm.piDefaultProviderWarning",
     );
   });
 

@@ -145,6 +145,45 @@ describe("OpenCodeFormFields", () => {
     });
   });
 
+  it("filters fetched models by vendor and batch-adds without rewriting existing extras", async () => {
+    vi.mocked(fetchModelsForConfig).mockResolvedValue([
+      { id: "kimi-k2", ownedBy: "moonshot" },
+      { id: "model-a", ownedBy: "vendor-a" },
+      { id: "model-b", ownedBy: "vendor-b" },
+    ]);
+    const { props } = renderOpenCodeForm({
+      models: {
+        "kimi-k2": {
+          name: "Kimi K2",
+          limit: { context: 1048576, output: 131072 },
+          options: { keep: true },
+        },
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "providerForm.fetchModels" }),
+    );
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Search models..." }), {
+      target: { value: "VENDOR-B" },
+    });
+    expect(
+      screen.queryByRole("checkbox", { name: "model-a" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "model-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add selected (1)" }));
+
+    expect(props.onModelsChange).toHaveBeenCalledTimes(1);
+    expect(props.onModelsChange).toHaveBeenCalledWith({
+      "kimi-k2": {
+        name: "Kimi K2",
+        limit: { context: 1048576, output: 131072 },
+        options: { keep: true },
+      },
+      "model-b": { name: "model-b" },
+    });
+  });
+
   it("does not submit the provider form when Enter is pressed in the model search", async () => {
     vi.mocked(fetchModelsForConfig).mockResolvedValue([
       { id: "model-a", ownedBy: "vendor" },

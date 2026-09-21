@@ -801,7 +801,8 @@ describe("useProviderActions", () => {
   it("sets the Pi default provider from the card action", async () => {
     piApiSetDefaultProviderMock.mockResolvedValueOnce(undefined);
 
-    const { wrapper } = createWrapper();
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     const provider = createProvider({ id: "cc-switch-test" });
 
     const { result } = renderHook(() => useProviderActions("pi"), {
@@ -815,6 +816,30 @@ describe("useProviderActions", () => {
     expect(piApiSetDefaultProviderMock).toHaveBeenCalledWith("cc-switch-test");
     expect(openclawApiSetDefaultModelMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["pi", "currentState"],
+    });
+  });
+
+  it("surfaces a Pi set-default failure without touching OpenClaw", async () => {
+    piApiSetDefaultProviderMock.mockRejectedValueOnce(new Error("busy"));
+
+    const { wrapper } = createWrapper();
+    const provider = createProvider({ id: "cc-switch-test" });
+
+    const { result } = renderHook(() => useProviderActions("pi"), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await result.current.setAsDefaultModel(provider);
+    });
+
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      expect.stringContaining("busy"),
+    );
+    expect(openclawApiSetDefaultModelMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
   it("sets the explicitly selected OpenClaw model and preserves existing fallbacks", async () => {

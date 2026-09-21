@@ -200,4 +200,30 @@ describe("Pi provider presets", () => {
     );
     expect(preset("Tencent Token Plan (Intl)").modelsUrl).toBeUndefined();
   });
+
+  it("never defaults supportsDeveloperRole to true for openai-completions", () => {
+    const completions = piProviderPresets.filter(
+      (preset) => preset.settingsConfig.api === "openai-completions",
+    );
+    expect(completions.length).toBeGreaterThan(0);
+
+    for (const preset of completions) {
+      expect(preset.settingsConfig.compat?.supportsDeveloperRole).not.toBe(
+        true,
+      );
+      for (const model of preset.settingsConfig.models) {
+        expect(model.compat?.supportsDeveloperRole).not.toBe(true);
+      }
+    }
+
+    expect(
+      completions.some(
+        (preset) =>
+          preset.settingsConfig.compat?.supportsDeveloperRole === false ||
+          preset.settingsConfig.models.some(
+            (model) => model.compat?.supportsDeveloperRole === false,
+          ),
+      ),
+    ).toBe(true);
+  });
 });
