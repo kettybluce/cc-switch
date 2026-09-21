@@ -31,7 +31,10 @@ function interpolationVariables(value: string): string[] {
 const reference = flattenStrings(en);
 const piKeysOutsideNamespace = new Set([
   "apps.pi",
+  "confirm.piDefaultProviderWarning",
   "deeplink.api",
+  "notifications.piDefaultProviderSet",
+  "notifications.piDefaultProviderSetFailed",
   "sessionManager.piDiscoveryUnavailable",
   "sessionManager.piRelativeSessionDir",
   "settings.browsePlaceholderPi",
@@ -91,4 +94,14 @@ describe("locale coverage", () => {
       expect(missingMentions).toEqual([]);
     },
   );
+
+  it("tells users that deleting Pi's default reassigns or clears it", () => {
+    expect(en.confirm.piDefaultProviderWarning).toMatch(/reassign/i);
+    expect(en.confirm.piDefaultProviderWarning).toMatch(/auth\.json/i);
+    expect(zh.confirm.piDefaultProviderWarning).toMatch(/改到另一个/);
+    expect(zh.confirm.piDefaultProviderWarning).toMatch(/清除默认/);
+    expect(zh.confirm.piDefaultProviderWarning).toMatch(/auth\.json/);
+    expect(ja.confirm.piDefaultProviderWarning).toMatch(/付け替える|クリア/);
+    expect(zhTW.confirm.piDefaultProviderWarning).toMatch(/改到|清除預設/);
+  });
 });

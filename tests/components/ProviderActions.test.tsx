@@ -108,6 +108,24 @@ describe("ProviderActions Pi provider switching", () => {
     expect(screen.getByRole("button", { name: "common.delete" })).toBeEnabled();
   });
 
+  it("keeps set-as-default available for an enabled provider that is not the Pi default", async () => {
+    const user = userEvent.setup();
+    const { onSetAsDefault, onDelete } = renderPiActions({
+      isCurrent: true,
+      isInConfig: true,
+      isDefaultModel: false,
+      onSetAsDefault: vi.fn(),
+    });
+
+    const setDefault = screen.getByRole("button", { name: "设为默认" });
+    expect(setDefault).toBeEnabled();
+    await user.click(setDefault);
+    expect(onSetAsDefault).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "common.delete" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "common.delete" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed while Pi's authoritative state is unavailable", async () => {
     const user = userEvent.setup();
     const { onSwitch, onEdit, onDelete } = renderPiActions({
