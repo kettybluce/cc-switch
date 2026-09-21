@@ -281,9 +281,17 @@ fn resolve_pi_agent_dir_accepts_tfdx8045_unc_edge_overrides() {
         "mixed UNC .pi must land on agent: {mixed_text}"
     );
 
-    let posix = resolve_pi_agent_dir(Some(PathBuf::from("/home/tfdx8045/.pi/")), None, unused)
+    #[cfg(unix)]
+    {
+        let posix = resolve_pi_agent_dir(
+            Some(PathBuf::from("/home/tfdx8045/.pi/")),
+            None,
+            unused.clone(),
+        )
         .expect("POSIX .pi");
-    assert_eq!(posix, PathBuf::from("/home/tfdx8045/.pi/agent"));
+        assert_eq!(posix, PathBuf::from("/home/tfdx8045/.pi/agent"));
+    }
+    let _ = unused;
 }
 
 #[test]
@@ -299,9 +307,15 @@ fn windows_unc_recognition_covers_wsl_and_rejects_posix() {
         r"\\wsl$\Ubuntu-22.04\home\tfdx8045\.pi\"
     )));
     assert!(is_usable_pi_agent_dir(Path::new(&tfdx_unc(".pi\\agent"))));
+    #[cfg(unix)]
     assert!(is_usable_pi_agent_dir(Path::new(
         "/home/tfdx8045/.pi/agent"
     )));
+    #[cfg(windows)]
+    assert!(
+        !is_usable_pi_agent_dir(Path::new("/home/tfdx8045/.pi/agent")),
+        "POSIX /home is not a Windows absolute or UNC path"
+    );
 
     assert!(!is_windows_unc_path(Path::new("/home/tfdx8045/.pi/agent")));
     assert!(!is_windows_unc_path(Path::new(
@@ -313,6 +327,7 @@ fn windows_unc_recognition_covers_wsl_and_rejects_posix() {
     )));
 }
 
+#[cfg(unix)]
 #[test]
 fn linux_standin_layout_string_never_looks_like_windows_c_mirror() {
     let standin = PathBuf::from(
