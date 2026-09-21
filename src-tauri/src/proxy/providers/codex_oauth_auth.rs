@@ -215,6 +215,7 @@ enum RefreshTokenAdoptionOutcome {
 }
 
 /// Keep a deleted account distinct from an existing account with no managed live token.
+#[derive(Debug)]
 pub(crate) enum CodexLiveAuthSwitchGuard {
     ExistingAccount(Option<String>),
     MissingAccount,
@@ -2168,6 +2169,89 @@ fn extract_account_metadata_from_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::ffi::OsString;
+
+    struct IsolatedLiveHome {
+        _dir: tempfile::TempDir,
+        original_test_home: Option<OsString>,
+    }
+
+    impl IsolatedLiveHome {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("isolated Codex live home");
+            let original_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+            crate::settings::reload_settings().expect("reload settings for isolated live home");
+            Self {
+                _dir: dir,
+                original_test_home,
+            }
+        }
+
+        fn manager() -> CodexOAuthManager {
+            let dir = crate::config::get_app_config_dir();
+            fs::create_dir_all(&dir).expect("create isolated .cc-switch");
+            CodexOAuthManager::new(dir)
+        }
+    }
+
+    impl Drop for IsolatedLiveHome {
+        fn drop(&mut self) {
+            match &self.original_test_home {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            let _ = crate::settings::reload_settings();
+        }
+    }
+
+    async fn seed_managed_account(
+        manager: &CodexOAuthManager,
+        local_id: &str,
+        workspace: &str,
+        subject: &str,
+    ) {
+        let id_token = crate::codex_config::test_codex_id_token(subject);
+        manager
+            .add_test_account_with_workspace_and_access_token(
+                local_id,
+                workspace,
+                "access",
+                Some(&id_token),
+            )
+            .await
+            .unwrap();
+    }
+
+    fn seed_matching_live_auth(local_id: &str, workspace: &str, subject: &str, refresh: &str) {
+        let id_token = crate::codex_config::test_codex_id_token(subject);
+        let auth = crate::codex_config::codex_managed_oauth_auth_value(
+            workspace,
+            "access",
+            Some(&id_token),
+            refresh,
+            "2026-09-21T00:00:00Z",
+        );
+        crate::config::write_json_file(&crate::codex_config::get_codex_auth_path(), &auth).unwrap();
+        crate::codex_config::record_codex_managed_oauth_live_auth(&auth, local_id).unwrap();
+    }
+
+    fn write_native_unmanaged_auth() -> serde_json::Value {
+        let auth = serde_json::json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "access_token": "native-access",
+                "refresh_token": "native-refresh",
+                "account_id": "native-workspace"
+            },
+            "last_refresh": "2026-09-21T00:00:00Z",
+            "keepMe": "native-login"
+        });
+        crate::config::write_json_file(&crate::codex_config::get_codex_auth_path(), &auth).unwrap();
+        auth
+    }
 
     #[tokio::test]
     async fn missing_account_recovery_requires_valid_persisted_state() {
@@ -2217,6 +2301,171 @@ mod tests {
                 .is_err(),
             "an account still on disk cannot be treated as deleted"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn existing_account_without_matching_live_token_is_distinct_from_missing() {
+        let _home = IsolatedLiveHome::new();
+        let manager = IsolatedLiveHome::manager();
+        seed_managed_account(&manager, "acct-present", "workspace", "user-a").await;
+
+        let guard = manager
+            .prepare_live_auth_for_account_switch_away("acct-present")
+            .await
+            .unwrap();
+        assert!(
+            matches!(guard, CodexLiveAuthSwitchGuard::ExistingAccount(None)),
+            "account still in the store with no matching live token is ExistingAccount(None)"
+        );
+
+        let native = write_native_unmanaged_auth();
+        let guard = manager
+            .prepare_live_auth_for_account_switch_away("acct-present")
+            .await
+            .unwrap();
+        assert!(matches!(
+            guard,
+            CodexLiveAuthSwitchGuard::ExistingAccount(None)
+        ));
+        guard.clear_outgoing("acct-present").unwrap();
+        assert_eq!(
+            crate::config::read_json_file::<serde_json::Value>(
+                &crate::codex_config::get_codex_auth_path()
+            )
+            .unwrap(),
+            native,
+            "ExistingAccount(None) must not delete a native/unrelated auth.json"
+        );
+        assert!(!crate::codex_config::codex_managed_oauth_live_auth_marker_exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn existing_account_with_matching_live_refresh_carries_disk_token() {
+        let _home = IsolatedLiveHome::new();
+        let manager = IsolatedLiveHome::manager();
+        seed_managed_account(&manager, "acct-live", "workspace", "user-a").await;
+        seed_matching_live_auth("acct-live", "workspace", "user-a", "test-refresh-token");
+
+        let guard = manager
+            .prepare_live_auth_for_account_switch_away("acct-live")
+            .await
+            .unwrap();
+        match &guard {
+            CodexLiveAuthSwitchGuard::ExistingAccount(Some(token)) => {
+                assert_eq!(token, "test-refresh-token");
+            }
+            other => panic!("expected ExistingAccount(Some): {other:?}"),
+        }
+        guard.ensure_unchanged("acct-live").unwrap();
+        guard.clear_outgoing("acct-live").unwrap();
+        assert!(
+            !crate::codex_config::get_codex_auth_path().exists(),
+            "ExistingAccount(Some) cleanup deletes matching managed live auth"
+        );
+        assert!(!crate::codex_config::codex_managed_oauth_live_auth_marker_exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn existing_account_ensure_unchanged_rejects_rotated_live_refresh() {
+        let _home = IsolatedLiveHome::new();
+        let manager = IsolatedLiveHome::manager();
+        seed_managed_account(&manager, "acct-rot", "workspace", "user-a").await;
+        seed_matching_live_auth("acct-rot", "workspace", "user-a", "test-refresh-token");
+
+        let guard = manager
+            .prepare_live_auth_for_account_switch_away("acct-rot")
+            .await
+            .unwrap();
+        seed_matching_live_auth("acct-rot", "workspace", "user-a", "rotated-refresh");
+        let err = guard.ensure_unchanged("acct-rot").unwrap_err().to_string();
+        assert!(
+            err.contains("live 凭据在切换期间已刷新"),
+            "rotated live refresh must abort: {err}"
+        );
+        assert!(crate::codex_config::get_codex_auth_path().exists());
+        assert!(crate::codex_config::codex_managed_oauth_live_auth_marker_exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn missing_account_clear_outgoing_only_drops_its_ownership_marker() {
+        let _home = IsolatedLiveHome::new();
+        let manager = IsolatedLiveHome::manager();
+        fs::write(&manager.storage_path, r#"{"version":2,"accounts":{}}"#).unwrap();
+
+        let native = write_native_unmanaged_auth();
+        let id_token = crate::codex_config::test_codex_id_token("stale-user");
+        let stale_auth = crate::codex_config::codex_managed_oauth_auth_value(
+            "stale-workspace",
+            "stale-access",
+            Some(&id_token),
+            "stale-refresh",
+            "2026-09-21T00:00:00Z",
+        );
+        crate::codex_config::record_codex_managed_oauth_live_auth(&stale_auth, "deleted-local")
+            .unwrap();
+        assert!(crate::codex_config::codex_managed_oauth_live_auth_marker_exists());
+
+        let guard = manager
+            .prepare_live_auth_for_account_switch_away("deleted-local")
+            .await
+            .unwrap();
+        assert!(matches!(guard, CodexLiveAuthSwitchGuard::MissingAccount));
+        guard.ensure_unchanged("deleted-local").unwrap();
+        guard.clear_outgoing("deleted-local").unwrap();
+
+        assert!(
+            !crate::codex_config::codex_managed_oauth_live_auth_marker_exists(),
+            "MissingAccount only releases its ownership marker"
+        );
+        assert_eq!(
+            crate::config::read_json_file::<serde_json::Value>(
+                &crate::codex_config::get_codex_auth_path()
+            )
+            .unwrap(),
+            native,
+            "MissingAccount must never delete a later native login"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn workspace_mismatch_between_store_and_live_auth_is_rejected() {
+        let _home = IsolatedLiveHome::new();
+        let manager = IsolatedLiveHome::manager();
+        seed_managed_account(&manager, "acct-ws", "workspace-a", "user-a").await;
+        seed_matching_live_auth("acct-ws", "workspace-b", "user-a", "test-refresh-token");
+
+        let err = manager
+            .prepare_live_auth_for_account_switch_away("acct-ws")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("workspace 与磁盘凭据不一致"),
+            "mismatched workspace must fail closed: {err}"
+        );
+        assert!(crate::codex_config::get_codex_auth_path().exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn missing_and_existing_guards_are_debug_distinct() {
+        let missing = CodexLiveAuthSwitchGuard::MissingAccount;
+        let none = CodexLiveAuthSwitchGuard::ExistingAccount(None);
+        let some = CodexLiveAuthSwitchGuard::ExistingAccount(Some("refresh".into()));
+        assert!(matches!(missing, CodexLiveAuthSwitchGuard::MissingAccount));
+        assert!(matches!(
+            none,
+            CodexLiveAuthSwitchGuard::ExistingAccount(None)
+        ));
+        assert!(matches!(
+            some,
+            CodexLiveAuthSwitchGuard::ExistingAccount(Some(ref token)) if token == "refresh"
+        ));
     }
 
     #[test]

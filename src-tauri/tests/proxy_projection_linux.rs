@@ -22,7 +22,10 @@ use cc_switch_lib::{
 
 #[path = "support.rs"]
 mod support;
-use support::{create_test_state, ensure_test_home, reset_test_fs, test_mutex};
+use support::{
+    create_test_state, enable_codex_official_auth_preservation, ensure_test_home, reset_test_fs,
+    test_mutex,
+};
 
 const PI_MODELS_FIXTURE: &str =
     include_str!("../src/pi_config/fixtures/models_with_unknown_fields.json");
@@ -1825,5 +1828,174 @@ async fn linux_standin_pi_takeover_fails_closed_when_proxy_already_pointing_else
         !state.db.is_pi_takeover_enabled().expect("pi flag"),
         "proxy_takeover_pi must stay off"
     );
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+fn stale_managed_codex_provider(id: &str, account_id: &str) -> Provider {
+    serde_json::from_value(json!({
+        "id": id,
+        "name": format!("Managed {id}"),
+        "settingsConfig": { "auth": {}, "config": "" },
+        "category": "official",
+        "meta": {
+            "providerType": "codex_oauth",
+            "authBinding": {
+                "source": "managed_account",
+                "authProvider": "codex_oauth",
+                "accountId": account_id
+            }
+        }
+    }))
+    .expect("stale managed Codex provider")
+}
+
+fn write_valid_empty_codex_oauth_store() {
+    let store = ensure_test_home()
+        .join(".cc-switch")
+        .join("codex_oauth_auth.json");
+    fs::create_dir_all(store.parent().expect("oauth store parent")).expect("create .cc-switch");
+    fs::write(&store, r#"{"version":2,"accounts":{}}"#).expect("write empty Codex OAuth store");
+}
+
+fn write_stale_ownership_marker(account_id: &str) {
+    let marker = ensure_test_home()
+        .join(".cc-switch")
+        .join("codex_managed_oauth_live_auth.json");
+    fs::create_dir_all(marker.parent().expect("marker parent")).expect("create .cc-switch");
+    fs::write(
+        &marker,
+        serde_json::to_string_pretty(&json!({
+            "version": 3,
+            "account_id": account_id,
+            "chatgpt_account_id": "stale-workspace",
+            "user_identity": "stale-user"
+        }))
+        .expect("serialize stale marker"),
+    )
+    .expect("write stale ownership marker");
+}
+
+/// Already-enabled Codex takeover must still inspect a stale ChatGPT binding
+/// (MissingAccount target) and tell the user to 选择账号, instead of returning
+/// success without checking. SCHEMA 18 only.
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_stale_codex_oauth_target_reports_choose_account_during_takeover() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (_claude_settings, _codex_config, _codex_auth) = setup_linux_standin_claude_codex_home();
+    write_valid_empty_codex_oauth_store();
+
+    let state = create_test_state().expect("create test state");
+    use_ephemeral_shared_listen(&state).await;
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &codex_provider())
+        .expect("save API-key Codex provider");
+    ProviderService::switch(&state, AppType::Codex, "standin-codex").expect("write Codex live");
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", true)
+        .await
+        .expect("enable Codex takeover");
+    assert!(state
+        .proxy_service
+        .detect_takeover_in_live_config_for_app(&AppType::Codex));
+
+    state
+        .db
+        .save_provider(
+            AppType::Codex.as_str(),
+            &stale_managed_codex_provider("stale-target", "deleted-local"),
+        )
+        .expect("save stale managed Codex card");
+    let err = ProviderService::switch(&state, AppType::Codex, "stale-target")
+        .expect_err("stale target must not switch")
+        .to_string();
+    assert!(
+        err.contains("选择账号"),
+        "already-enabled takeover must still report 选择账号 for a MissingAccount target: {err}"
+    );
+    assert!(
+        state
+            .proxy_service
+            .detect_takeover_in_live_config_for_app(&AppType::Codex),
+        "failed stale-target switch must leave takeover live"
+    );
+    if state.proxy_service.is_running().await {
+        state.proxy_service.stop().await.expect("stop proxy");
+    }
+    assert_schema18_pi_has_no_proxy_config_row(&state);
+}
+
+/// MissingAccount current: switch away to a third-party card must succeed,
+/// drop only the stale ownership marker, and leave a later native login
+/// (extra-field auth.json) intact. SCHEMA 18 only.
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "serialize global test HOME / settings mutations across takeover awaits"
+)]
+async fn linux_standin_missing_codex_oauth_current_can_switch_away() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let (_claude_settings, _codex_config, codex_auth) = setup_linux_standin_claude_codex_home();
+    enable_codex_official_auth_preservation();
+    write_valid_empty_codex_oauth_store();
+    write_stale_ownership_marker("deleted-local");
+
+    let native = json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "access_token": "native-access",
+            "refresh_token": "native-refresh",
+            "account_id": "native-workspace"
+        },
+        "last_refresh": "2026-09-21T00:00:00Z",
+        "keepMe": "native-login"
+    });
+    fs::create_dir_all(codex_auth.parent().expect("codex dir")).expect("create stand-in .codex");
+    fs::write(
+        &codex_auth,
+        serde_json::to_string_pretty(&native).expect("serialize native auth"),
+    )
+    .expect("write native auth.json");
+
+    let state = create_test_state().expect("create test state");
+    state
+        .db
+        .save_provider(
+            AppType::Codex.as_str(),
+            &stale_managed_codex_provider("stale-current", "deleted-local"),
+        )
+        .expect("save stale current");
+    state
+        .db
+        .set_current_provider(AppType::Codex.as_str(), "stale-current")
+        .expect("mark stale current in DB");
+
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &codex_provider())
+        .expect("save third-party Codex card");
+    ProviderService::switch(&state, AppType::Codex, "standin-codex")
+        .expect("MissingAccount current must not block switch-away");
+
+    let marker = ensure_test_home()
+        .join(".cc-switch")
+        .join("codex_managed_oauth_live_auth.json");
+    assert!(
+        !marker.exists(),
+        "MissingAccount switch-away must drop the stale ownership marker"
+    );
+    let restored: Value = read_json_file(&codex_auth).expect("native auth after switch");
+    assert_eq!(
+        restored["keepMe"],
+        json!("native-login"),
+        "MissingAccount must not delete a later native login"
+    );
+    assert_eq!(restored["tokens"]["refresh_token"], json!("native-refresh"));
     assert_schema18_pi_has_no_proxy_config_row(&state);
 }
