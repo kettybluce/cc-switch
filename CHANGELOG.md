@@ -37,11 +37,8 @@ Official `farion1231/cc-switch` **main HEAD is still `8272707d`** (Wave C). No f
 - Concurrent SCHEMA 18 fixtures: overlapping profile apply, provider switch/save/delete, and takeover enable-disable under `CC_SWITCH_TEST_HOME`
 - Fail-closed takeover: refuse enable when Claude/Codex/Pi Live already points at another local proxy; Linux fixtures for missing/malformed Live and foreign-proxy enable
 - CodexLiveAuthSwitchGuard edge coverage (Wave B #7395 already on main): `MissingAccount` / `ExistingAccount(None|Some)` / stale binding switch-away and already-enabled takeover; Linux stand-in fixtures; Chinese recovery FAQ + guide. `SCHEMA_VERSION` stays 18; default Cursor pool model unchanged
-<<<<<<< HEAD
+- Docker self-test default FULL crate (`pnpm test:docker` / `scripts/docker-self-test.sh`) plus `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md` on every run. `proxy` / `session_usage_scan` / `pi-crud` / `lib-lite` are explicit narrower filters only. SCHEMA stays 18.
 - Regression tests for tray restore after `ExitRequested(None)` and multi-window visibility edges (SCHEMA 18, no schema bump)
-=======
-- Docker self-test default FULL crate (`pnpm test:docker` / `scripts/docker-self-test.sh`) plus `docs/self-test-reports/docker-self-test-YYYYMMDD-HHMM.md` on every run. `proxy` / `pi-crud` / `lib-lite` are explicit narrower filters only. SCHEMA stays 18.
->>>>>>> 10c8965e (docs: align leftover main notes after Docker full-suite rebase)
 - CI: `bash -n` on `scripts/**/*.sh` plus extracted GitHub Actions bash `run:` blocks, checksum-pinned actionlint 1.7.12, and a Windows Portable packaging dry-run (`scripts/ci/dry-run-windows-portable.sh`) that does not bump the version or call Tauri
 - Burn-in checklist for a future v3.20.14 Portable ship: `docs/release-v3.20.14-burn-in-zh.md` (do **not** tag until Docker full-suite #49/#65 is on main; #51/#53 already landed, do not squash overlapping #52)
 
