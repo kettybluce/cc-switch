@@ -1306,4 +1306,45 @@ mod tests {
             "backup must store the real upstream, not the Claude listen port"
         );
     }
+
+    #[test]
+    #[serial]
+    fn live_update_writes_url_and_key_into_models_json() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        ProviderService::add(&state, AppType::Pi, input("model-a"), true).expect("add live");
+
+        let mut updated = input("model-a");
+        updated.settings_config["baseUrl"] = json!("https://rotated.example/v1");
+        updated.settings_config["apiKey"] = json!("rotated-key");
+        update(&state, Some("cc-switch-test"), updated).expect("update url/key");
+
+        let live = crate::pi_config::read_pi_native_provider("cc-switch-test")
+            .expect("read models.json")
+            .expect("live node");
+        assert_eq!(live["baseUrl"], json!("https://rotated.example/v1"));
+        assert_eq!(live["apiKey"], json!("rotated-key"));
+        assert_eq!(live["api"], json!("openai-completions"));
+        assert_eq!(live["compat"]["supportsDeveloperRole"], json!(false));
+    }
+
+    #[test]
+    #[serial]
+    fn malformed_takeover_backup_is_invalidated_on_live_delete() {
+        let _agent = TestAgentDir::new();
+        let state = state();
+        ProviderService::add(&state, AppType::Pi, input("model-a"), true).expect("add live");
+        futures::executor::block_on(state.db.save_live_backup("pi", "}not-json{"))
+            .expect("seed malformed backup");
+
+        ProviderService::delete(&state, AppType::Pi, "cc-switch-test").expect("delete live");
+
+        assert!(!crate::pi_config::pi_provider_exists("cc-switch-test").unwrap());
+        assert!(
+            futures::executor::block_on(state.db.get_live_backup("pi"))
+                .expect("read backup")
+                .is_none(),
+            "unparseable takeover backup must be deleted so disable cannot restore it"
+        );
+    }
 }
