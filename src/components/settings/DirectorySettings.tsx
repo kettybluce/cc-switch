@@ -99,7 +99,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.claudeConfigDir")}
-          description={undefined}
+          description={t("settings.claudeConfigDirDescription")}
           value={claudeDir}
           resolvedValue={resolvedDirs.claude}
           placeholder={t("settings.browsePlaceholderClaude")}
@@ -110,7 +110,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.codexConfigDir")}
-          description={undefined}
+          description={t("settings.codexConfigDirDescription")}
           value={codexDir}
           resolvedValue={resolvedDirs.codex}
           placeholder={t("settings.browsePlaceholderCodex")}
@@ -121,7 +121,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.geminiConfigDir")}
-          description={undefined}
+          description={t("settings.geminiConfigDirDescription")}
           value={geminiDir}
           resolvedValue={resolvedDirs.gemini}
           placeholder={t("settings.browsePlaceholderGemini")}
@@ -132,7 +132,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.grokConfigDir")}
-          description={undefined}
+          description={t("settings.grokConfigDirDescription")}
           value={grokDir}
           resolvedValue={resolvedDirs.grokbuild}
           placeholder={t("settings.browsePlaceholderGrok")}
@@ -143,7 +143,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.opencodeConfigDir")}
-          description={undefined}
+          description={t("settings.opencodeConfigDirDescription")}
           value={opencodeDir}
           resolvedValue={resolvedDirs.opencode}
           placeholder={t("settings.browsePlaceholderOpencode")}
@@ -154,7 +154,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.openclawConfigDir")}
-          description={undefined}
+          description={t("settings.openclawConfigDirDescription")}
           value={openclawDir}
           resolvedValue={resolvedDirs.openclaw}
           placeholder={t("settings.browsePlaceholderOpenclaw")}
@@ -165,7 +165,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.hermesConfigDir")}
-          description={undefined}
+          description={t("settings.hermesConfigDirDescription")}
           value={hermesDir}
           resolvedValue={resolvedDirs.hermes}
           placeholder={t("settings.browsePlaceholderHermes")}
@@ -176,7 +176,7 @@ export function DirectorySettings({
 
         <DirectoryInput
           label={t("settings.piConfigDir")}
-          description={undefined}
+          description={t("settings.piConfigDirDescription")}
           value={piDir}
           resolvedValue={resolvedDirs.pi}
           placeholder={t("settings.browsePlaceholderPi")}

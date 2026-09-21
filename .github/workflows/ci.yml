@@ -47,6 +47,8 @@ jobs:
               - "tailwind.config.cjs"
               - "postcss.config.cjs"
               - "components.json"
+              - "scripts/check-i18n-parity.mjs"
+              - "scripts/lib/i18n-parity.mjs"
               - ".github/workflows/**"
             backend:
               - "src-tauri/**"
@@ -130,6 +132,9 @@ jobs:
 
       - name: Check formatting
         run: pnpm format:check
+
+      - name: i18n four-locale key parity
+        run: pnpm i18n:check
 
       - name: Unit tests
         run: pnpm test:unit
