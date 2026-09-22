@@ -1250,7 +1250,7 @@ export function PiProviderForm({
         websiteUrl: identity.websiteUrl?.trim() ?? "",
         notes: identity.notes?.trim() ?? "",
         settingsConfig: JSON.stringify(settingsConfig),
-        icon: identity.icon || selectedPreset?.icon || "pi",
+        icon: identity.icon || selectedPreset?.icon || "",
         iconColor: identity.iconColor || selectedPreset?.iconColor || "",
         providerKey: isEdit ? providerId : trimmedKey,
         presetId: selectedPresetId ?? undefined,
