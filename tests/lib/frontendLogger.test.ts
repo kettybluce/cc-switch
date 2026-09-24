@@ -287,22 +287,6 @@ describe("frontendLogger", () => {
     expect(message).toContain("[REDACTED]");
   });
 
-  it("redacts Claude, Codex and Gemini keys in request-log error text", () => {
-    const redacted = redactFrontendLogText(
-      [
-        "invalid api_key: sk-ant-api03-TESTSECRETVALUE99xxxx",
-        "codex token sk-codex-test-secret-aaaaaaa",
-        "gemini AIzaSyTestSecretValue99xxxx",
-        "x-goog-api-key: AIzaSyTestSecretValue99xxxx",
-      ].join("\n"),
-    );
-    expect(redacted).not.toContain("sk-ant-api03-TESTSECRETVALUE99xxxx");
-    expect(redacted).not.toContain("sk-codex-test-secret-aaaaaaa");
-    expect(redacted).not.toContain("AIzaSyTestSecretValue99xxxx");
-    expect(redacted).not.toContain("TESTSECRETVALUE99");
-    expect(redacted).toContain("[REDACTED]");
-  });
-
   it("handles circular rejection objects", () => {
     const reason: Record<string, unknown> = { message: "failed" };
     reason.self = reason;

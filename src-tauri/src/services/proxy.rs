@@ -6,7 +6,7 @@ use crate::app_config::AppType;
 use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
 use crate::provider::Provider;
-use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
+use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::proxy::server::ProxyServer;
 use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
@@ -720,7 +720,7 @@ impl ProxyService {
         &self,
         provider: &Provider,
         outgoing_managed_account_id: Option<&str>,
-        outgoing_guard: Option<&CodexLiveAuthSwitchGuard>,
+        expected_outgoing_refresh_token: Option<&str>,
     ) -> Result<(), String> {
         let existing_live = self.read_codex_live().ok();
         let mut effective_settings = build_effective_provider_for_live_with_codex_oauth_manager(
@@ -745,10 +745,14 @@ impl ProxyService {
             provider,
         )?;
 
-        if let (Some(account_id), Some(guard)) = (outgoing_managed_account_id, outgoing_guard) {
-            guard
-                .ensure_unchanged(account_id)
-                .map_err(|error| error.to_string())?;
+        if let (Some(account_id), Some(expected_refresh_token)) =
+            (outgoing_managed_account_id, expected_outgoing_refresh_token)
+        {
+            crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
+                account_id,
+                expected_refresh_token,
+            )
+            .map_err(|error| error.to_string())?;
         }
 
         self.write_codex_takeover_live_for_provider(&effective_settings, Some(provider))?;
@@ -1192,27 +1196,6 @@ impl ProxyService {
                 // 只看占位符会把半接管/旧端口残留误判为可复用，导致开启接管后
                 // live 文件仍停留在普通供应商配置。
                 if has_backup && live_matches_current_proxy {
-                    if matches!(app, AppType::Codex) {
-                        if let Some(provider_id) =
-                            crate::settings::get_effective_current_provider(&self.db, &app)
-                                .map_err(|error| error.to_string())?
-                        {
-                            if let Some(account_id) = self
-                                .db
-                                .get_provider_by_id(&provider_id, app_type_str)
-                                .map_err(|error| error.to_string())?
-                                .filter(crate::proxy::providers::is_codex_official_provider)
-                                .and_then(|provider| provider.meta)
-                                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-                                .filter(|id| !id.trim().is_empty())
-                            {
-                                self.codex_oauth_manager
-                                    .ensure_account_exists(account_id.trim())
-                                    .await
-                                    .map_err(|error| error.to_string())?;
-                            }
-                        }
-                    }
                     self.refresh_active_target_from_current_provider(&app).await;
                     return Ok(());
                 }
@@ -1221,17 +1204,6 @@ impl ProxyService {
                 log::warn!(
                     "{app_type_str} 标记为已接管，但 backup={has_backup} live_matches_current_proxy={live_matches_current_proxy}，正在重新接管并补齐 Live"
                 );
-            }
-
-            // Fail closed when Live already aims at a *different* local proxy
-            // (another tool / leftover listen). Do not steal that route or
-            // persist it as the restorable original. Missing files fall
-            // through to backup_live_config_strict; malformed JSON/TOML
-            // is returned as an error here.
-            if !current_enabled && self.live_points_at_foreign_local_proxy(&app).await? {
-                return Err(format!(
-                    "{app_type_str} Live 已指向其他本地代理，拒绝接管以免覆盖"
-                ));
             }
 
             // 3) 备份 Live 配置（严格：目标 app 不存在则报错）
@@ -1401,23 +1373,7 @@ impl ProxyService {
     ///
     /// 代理服务本身保持运行；当最后一个应用也关闭接管后，下次用户手动关闭
     /// 代理或程序退出时会自然停止。
-    ///
-    /// 必须持有 per-app 切换锁：否则并发的 `set_takeover_for_app(true)` /
-    /// `ProviderService::switch` 会在恢复窗口里重写 live / 备份，留下
-    /// `enabled`、占位符、备份三者不一致。
     pub fn disable_takeover_for_app_sync(&self, app_type: &AppType) -> Result<(), String> {
-        let app_type_str = app_type.as_str();
-        let guard = futures::executor::block_on(self.switch_locks.lock_for_app(app_type_str));
-        let result = self.disable_takeover_for_app_sync_inner(app_type);
-        drop(guard);
-        result
-    }
-
-    /// 调用方必须已经持有该 app 的切换锁。
-    pub(crate) fn disable_takeover_for_app_sync_inner(
-        &self,
-        app_type: &AppType,
-    ) -> Result<(), String> {
         let app_type_str = app_type.as_str();
 
         // 1) 恢复原始 Live 配置（备份 → SSOT → 清理占位符 三层兜底）
@@ -2537,125 +2493,6 @@ impl ProxyService {
             .is_some_and(predicate)
     }
 
-    fn live_error_is_missing_config(err: &str) -> bool {
-        err.contains("不存在") || err.to_ascii_lowercase().contains("missing")
-    }
-
-    /// True when Live already uses a local proxy that is not the current
-    /// CC Switch listen. Enable must fail closed so we neither overwrite
-    /// that route nor store it as the restorable original.
-    ///
-    /// Missing live files return `Ok(false)` so `backup_live_config_strict`
-    /// can emit the canonical "配置文件不存在" error.
-    async fn live_points_at_foreign_local_proxy(&self, app_type: &AppType) -> Result<bool, String> {
-        let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
-        match app_type {
-            AppType::Claude => {
-                let config = match self.read_claude_live() {
-                    Ok(config) => config,
-                    Err(err) if Self::live_error_is_missing_config(&err) => return Ok(false),
-                    Err(err) => return Err(err),
-                };
-                let Some(url) = config
-                    .get("env")
-                    .and_then(|value| value.get("ANTHROPIC_BASE_URL"))
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|url| !url.is_empty())
-                else {
-                    return Ok(false);
-                };
-                Ok(Self::is_local_proxy_url(url) && !Self::proxy_urls_match(url, &proxy_url))
-            }
-            AppType::Codex => {
-                let config = match self.read_codex_live() {
-                    Ok(config) => config,
-                    Err(err) if Self::live_error_is_missing_config(&err) => return Ok(false),
-                    Err(err) => return Err(err),
-                };
-                let Some(config_text) = config.get("config").and_then(Value::as_str) else {
-                    return Ok(false);
-                };
-                Ok(Self::codex_config_has_base_url_matching(
-                    config_text,
-                    |url| {
-                        Self::is_local_proxy_url(url)
-                            && !Self::proxy_urls_match(url, &proxy_codex_base_url)
-                    },
-                ))
-            }
-            AppType::Pi => {
-                let document = match crate::pi_config::read_pi_models_document() {
-                    Ok(document) => document,
-                    Err(err) => {
-                        let err = err.to_string();
-                        if Self::live_error_is_missing_config(&err) {
-                            return Ok(false);
-                        }
-                        return Err(err);
-                    }
-                };
-                Ok(Self::pi_document_points_at_foreign_local_proxy(
-                    &document,
-                    &proxy_url,
-                    &proxy_codex_base_url,
-                ))
-            }
-            _ => Ok(false),
-        }
-    }
-
-    fn pi_url_is_foreign_local(url: &str, proxy_url: &str, proxy_codex_base_url: &str) -> bool {
-        Self::is_local_proxy_url(url)
-            && !Self::proxy_urls_match(url, proxy_url)
-            && !Self::proxy_urls_match(url, proxy_codex_base_url)
-    }
-
-    fn pi_node_points_at_foreign_local_proxy(
-        node: &Value,
-        proxy_url: &str,
-        proxy_codex_base_url: &str,
-    ) -> bool {
-        if node
-            .get("baseUrl")
-            .and_then(Value::as_str)
-            .is_some_and(|url| Self::pi_url_is_foreign_local(url, proxy_url, proxy_codex_base_url))
-        {
-            return true;
-        }
-        node.get("models")
-            .and_then(Value::as_array)
-            .is_some_and(|models| {
-                models.iter().any(|model| {
-                    model
-                        .get("baseUrl")
-                        .and_then(Value::as_str)
-                        .is_some_and(|url| {
-                            Self::pi_url_is_foreign_local(url, proxy_url, proxy_codex_base_url)
-                        })
-                })
-            })
-    }
-
-    fn pi_document_points_at_foreign_local_proxy(
-        document: &Value,
-        proxy_url: &str,
-        proxy_codex_base_url: &str,
-    ) -> bool {
-        document
-            .get("providers")
-            .and_then(Value::as_object)
-            .is_some_and(|providers| {
-                providers.values().any(|node| {
-                    Self::pi_node_points_at_foreign_local_proxy(
-                        node,
-                        proxy_url,
-                        proxy_codex_base_url,
-                    )
-                })
-            })
-    }
-
     async fn live_takeover_matches_current_proxy(
         &self,
         app_type: &AppType,
@@ -3254,14 +3091,13 @@ impl ProxyService {
             .is_some();
         let live_taken_over = self.detect_takeover_in_live_config_for_app(&app_type_enum);
         let should_sync_backup = has_backup || live_taken_over;
-        let outgoing_live_auth_guard =
+        let outgoing_live_refresh_token =
             if should_sync_backup && matches!(app_type_enum, AppType::Codex) {
                 match outgoing_managed_codex_account_id.as_deref() {
                     Some(account_id) => self
                         .codex_oauth_manager
                         .prepare_live_auth_for_account_switch_away(account_id)
                         .await
-                        .map(Some)
                         .map_err(|error| error.to_string())?,
                     None => None,
                 }
@@ -3309,7 +3145,7 @@ impl ProxyService {
                     self.sync_codex_live_from_provider_while_proxy_active_guarded(
                         &provider,
                         outgoing_managed_codex_account_id.as_deref(),
-                        outgoing_live_auth_guard.as_ref(),
+                        outgoing_live_refresh_token.as_deref(),
                     )
                     .await?;
                 } else if live_taken_over && matches!(app_type_enum, AppType::GrokBuild) {
@@ -3340,13 +3176,15 @@ impl ProxyService {
                     &effective_provider,
                 );
 
-                if let (Some(account_id), Some(guard)) = (
+                if let (Some(account_id), Some(expected_refresh_token)) = (
                     outgoing_managed_codex_account_id.as_deref(),
-                    outgoing_live_auth_guard.as_ref(),
+                    outgoing_live_refresh_token.as_deref(),
                 ) {
-                    guard
-                        .ensure_unchanged(account_id)
-                        .map_err(|error| error.to_string())?;
+                    crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
+                        account_id,
+                        expected_refresh_token,
+                    )
+                    .map_err(|error| error.to_string())?;
                 }
 
                 crate::codex_config::write_codex_provider_live_with_catalog(
@@ -3364,13 +3202,17 @@ impl ProxyService {
             }
 
             if should_sync_backup && matches!(app_type_enum, AppType::Codex) {
-                if let (Some(account_id), Some(guard)) = (
-                    outgoing_managed_codex_account_id.as_deref(),
-                    outgoing_live_auth_guard.as_ref(),
-                ) {
-                    guard
-                        .clear_outgoing(account_id)
+                if let Some(account_id) = outgoing_managed_codex_account_id.as_deref() {
+                    if let Some(expected_refresh_token) = outgoing_live_refresh_token.as_deref() {
+                        crate::codex_config::clear_codex_live_auth_for_managed_account_if_unchanged(
+                            account_id,
+                            Some(expected_refresh_token),
+                        )
                         .map_err(|error| error.to_string())?;
+                    } else {
+                        crate::codex_config::clear_codex_live_auth_for_managed_account(account_id)
+                            .map_err(|error| error.to_string())?;
+                    }
                 }
             }
 
@@ -5301,37 +5143,6 @@ mod tests {
         );
 
         state.proxy_service.stop().await.expect("stop proxy server");
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn disable_takeover_sync_waits_for_switch_lock() {
-        let _home = TempHome::new();
-        crate::settings::reload_settings().expect("reload settings");
-        let db = Arc::new(Database::memory().expect("init db"));
-        let service = ProxyService::new(db);
-
-        let switch_guard = service.lock_switch_for_test("claude").await;
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let service_for_thread = service.clone();
-        std::thread::spawn(move || {
-            started_tx.send(()).expect("signal disable start");
-            let result = service_for_thread.disable_takeover_for_app_sync(&AppType::Claude);
-            done_tx.send(result).expect("send disable result");
-        });
-        started_rx.recv().expect("wait for disable task");
-        assert!(
-            done_rx
-                .recv_timeout(std::time::Duration::from_millis(120))
-                .is_err(),
-            "disable_takeover_for_app_sync must wait while the Claude switch lock is held"
-        );
-        drop(switch_guard);
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("disable should finish after lock release")
-            .expect("disable takeover");
     }
 
     #[test]

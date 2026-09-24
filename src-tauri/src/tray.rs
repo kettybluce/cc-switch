@@ -20,8 +20,6 @@ const W_TIER_NAMES: &[&str] = &[
     crate::services::subscription::TIER_SEVEN_DAY_OPUS,
     crate::services::subscription::TIER_SEVEN_DAY_SONNET,
 ];
-// Fable 单列显示，不能被周分组的最大值合并掉。
-const FABLE_TIER_NAMES: &[&str] = &[crate::services::subscription::TIER_SEVEN_DAY_FABLE];
 // 月窗口分组：火山方舟 Agent/Coding Plan 的月窗口（5h/周/月 三档），
 // 以及 Codex 免费方案的 30 天窗口（#3651）——两者都归入 "m" 档，避免免费
 // Codex 账号在托盘里空白（前端 footer 能看到、托盘却不显示的不对称）。
@@ -38,7 +36,6 @@ const GEMINI_FLASH_LITE_TIER_NAMES: &[&str] =
 const TIER_LABEL_GROUPS: &[(&str, &[&str])] = &[
     ("h", H_TIER_NAMES),
     ("w", W_TIER_NAMES),
-    ("Fable", FABLE_TIER_NAMES),
     ("m", M_TIER_NAMES),
     ("c", CREDITS_TIER_NAMES),
     ("p", GEMINI_PRO_TIER_NAMES),
@@ -290,7 +287,7 @@ fn format_script_summary(result: &crate::provider::UsageResult) -> Option<String
         let emoji = emoji_for_utilization(worst);
         let body = parts
             .iter()
-            .map(|(label, u)| format!("{}{}%", crate::redact_secret_text(label), u.round() as i64))
+            .map(|(label, u)| format!("{label}{}%", u.round() as i64))
             .collect::<Vec<_>>()
             .join(" ");
         return Some(format!("{emoji} {body}"));
@@ -299,7 +296,7 @@ fn format_script_summary(result: &crate::provider::UsageResult) -> Option<String
     let first = data.first()?;
     let pct = tier_pct(first)?;
     let emoji = emoji_for_utilization(pct);
-    let plan = crate::redact_secret_text(first.plan_name.as_deref().unwrap_or(""));
+    let plan = first.plan_name.as_deref().unwrap_or("");
     let rounded = pct.round() as i64;
     if plan.is_empty() {
         Some(format!("{} {}%", emoji, rounded))
@@ -1047,10 +1044,26 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
 
     match event_id {
         "show_main" => {
-            // ExitRequested(None) 回收 WebView 后主窗口可能已没、轻量标志仍为 false。
-            // 缺失时一律重建，不再门控 is_lightweight_mode()。
-            if let Err(e) = crate::lightweight::reveal_or_recreate_main_window(app) {
-                log::error!("托盘恢复主窗口失败: {e}");
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_skip_taskbar(false);
+                }
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                #[cfg(target_os = "linux")]
+                {
+                    crate::linux_fix::nudge_main_window(window.clone());
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    apply_tray_policy(app, true);
+                }
+            } else if crate::lightweight::is_lightweight_mode() {
+                if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
+                    log::error!("退出轻量模式重建窗口失败: {e}");
+                }
             }
         }
         "open_website" => {
@@ -1208,10 +1221,7 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
                     .map(|_| ()),
                 };
                 if let Err(e) = result {
-                    log::debug!(
-                        "[Tray] 刷新{log_name}供应商 {provider_id} 用量失败: {}",
-                        crate::redact_secret_text(&e)
-                    );
+                    log::debug!("[Tray] 刷新{log_name}供应商 {provider_id} 用量失败: {e}");
                 }
             });
         }
@@ -1231,9 +1241,8 @@ mod tests {
     use crate::provider::{Provider, UsageData, UsageResult};
     use crate::services::subscription::{
         CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH,
-        TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY,
-        TIER_SEVEN_DAY_FABLE, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET, TIER_THIRTY_DAY,
-        TIER_WEEKLY_LIMIT,
+        TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS,
+        TIER_SEVEN_DAY_SONNET, TIER_THIRTY_DAY, TIER_WEEKLY_LIMIT,
     };
     use crate::services::usage_cache::UsageCache;
 
@@ -1479,180 +1488,6 @@ mod tests {
         let s = format_subscription_summary(&quota).expect("should format");
         assert!(s.contains("h9%"), "expected h9% in {s}");
         assert!(s.contains("w27%"), "expected w27% in {s}");
-    }
-
-    #[test]
-    fn claude_fable_summary_keeps_weekly_total_and_model_limit_separate() {
-        let quota = make_quota(
-            "claude",
-            true,
-            vec![
-                tier(TIER_FIVE_HOUR, 12.0),
-                tier(TIER_SEVEN_DAY, 25.0),
-                tier(TIER_SEVEN_DAY_FABLE, 95.0),
-            ],
-        );
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🔴 h12% w25% Fable95%")
-        );
-        // 模板查询扁平化后的 UsageData 也必须生成相同摘要。
-        let result = usage_result(
-            true,
-            vec![
-                usage_data(Some(TIER_FIVE_HOUR), 12.0),
-                usage_data(Some(TIER_SEVEN_DAY), 25.0),
-                usage_data(Some(TIER_SEVEN_DAY_FABLE), 95.0),
-            ],
-        );
-        assert_eq!(
-            format_script_summary(&result),
-            format_subscription_summary(&quota)
-        );
-    }
-
-    #[test]
-    fn claude_fable_summary_shows_unused_model_limit() {
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 0.0)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟢 Fable0%")
-        );
-    }
-
-    #[test]
-    fn claude_fable_tray_does_not_fold_into_weekly_w_label() {
-        let quota = make_quota(
-            "claude",
-            true,
-            vec![
-                tier(TIER_SEVEN_DAY, 10.0),
-                tier(TIER_SEVEN_DAY_OPUS, 80.0),
-                tier(TIER_SEVEN_DAY_FABLE, 95.0),
-            ],
-        );
-        let s = format_subscription_summary(&quota).expect("should format");
-        assert_eq!(s, "🔴 w80% Fable95%");
-        assert!(
-            !s.contains("w95%"),
-            "Fable must not raise the weekly w bucket: {s}"
-        );
-        assert!(
-            !s.contains(TIER_SEVEN_DAY_FABLE),
-            "machine name must not leak: {s}"
-        );
-    }
-
-    #[test]
-    fn claude_fable_tray_rounds_percent_but_emoji_uses_raw() {
-        // 89.6 → 标签 90%,但未达 90 红线,仍橙色。
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 89.6)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟠 Fable90%")
-        );
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 37.5)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟢 Fable38%")
-        );
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 69.9)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟢 Fable70%")
-        );
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 70.0)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟠 Fable70%")
-        );
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 90.0)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🔴 Fable90%")
-        );
-        let quota = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, 99.5)]);
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🔴 Fable100%")
-        );
-    }
-
-    #[test]
-    fn claude_fable_tray_skips_nan_and_keeps_finite_negative() {
-        let quota = make_quota(
-            "claude",
-            true,
-            vec![
-                tier(TIER_SEVEN_DAY_FABLE, f64::NAN),
-                tier(TIER_FIVE_HOUR, 12.0),
-            ],
-        );
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟢 h12%")
-        );
-        let only_nan = make_quota(
-            "claude",
-            true,
-            vec![tier(TIER_SEVEN_DAY_FABLE, f64::INFINITY)],
-        );
-        assert!(format_subscription_summary(&only_nan).is_none());
-        let negative = make_quota("claude", true, vec![tier(TIER_SEVEN_DAY_FABLE, -5.4)]);
-        assert_eq!(
-            format_subscription_summary(&negative).as_deref(),
-            Some("🟢 Fable-5%")
-        );
-    }
-
-    #[test]
-    fn script_summary_fable_matches_subscription_and_hides_machine_name() {
-        let quota = make_quota(
-            "claude",
-            true,
-            vec![
-                tier(TIER_FIVE_HOUR, 12.0),
-                tier(TIER_WEEKLY_LIMIT, 25.0),
-                tier(TIER_SEVEN_DAY_FABLE, 0.0),
-            ],
-        );
-        let result = usage_result(
-            true,
-            vec![
-                usage_data(Some(TIER_FIVE_HOUR), 12.0),
-                usage_data(Some(TIER_WEEKLY_LIMIT), 25.0),
-                usage_data(Some(TIER_SEVEN_DAY_FABLE), 0.0),
-            ],
-        );
-        assert_eq!(
-            format_script_summary(&result).as_deref(),
-            Some("🟢 h12% w25% Fable0%")
-        );
-        assert_eq!(
-            format_script_summary(&result),
-            format_subscription_summary(&quota)
-        );
-        let s = format_script_summary(&result).unwrap();
-        assert!(!s.contains(TIER_SEVEN_DAY_FABLE));
-        assert!(!s.contains("weekly_limit"));
-    }
-
-    #[test]
-    fn claude_fable_tray_label_order_is_h_w_fable_then_month() {
-        let quota = make_quota(
-            "claude",
-            true,
-            vec![
-                tier(TIER_THIRTY_DAY, 40.0),
-                tier(TIER_SEVEN_DAY_FABLE, 15.0),
-                tier(TIER_FIVE_HOUR, 8.0),
-                tier(TIER_SEVEN_DAY, 20.0),
-            ],
-        );
-        assert_eq!(
-            format_subscription_summary(&quota).as_deref(),
-            Some("🟢 h8% w20% Fable15% m40%")
-        );
     }
 
     #[test]
@@ -1948,16 +1783,5 @@ mod tests {
     fn script_summary_empty_data_returns_none() {
         let r = usage_result(true, vec![]);
         assert!(format_script_summary(&r).is_none());
-    }
-
-    #[test]
-    fn tray_script_summary_does_not_print_raw_keys() {
-        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
-        let r = usage_result(true, vec![usage_data(Some(key), 40.0)]);
-        let s = format_script_summary(&r).expect("should format");
-        assert!(!s.contains(key), "{s}");
-        assert!(!s.contains("TESTSECRETVALUE99"), "{s}");
-        assert!(s.contains("[REDACTED]"), "{s}");
-        assert!(s.contains("40%"), "{s}");
     }
 }

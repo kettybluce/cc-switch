@@ -2,7 +2,7 @@
 //!
 //! 实现 OpenAI SSE → Anthropic SSE 格式转换
 
-use crate::proxy::sse::{parse_sse_event, take_sse_block, take_sse_block_eof};
+use crate::proxy::sse::{strip_sse_field, take_sse_block};
 use bytes::Bytes;
 use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -22,17 +22,14 @@ struct OpenAIStreamChunk {
     usage: Option<Usage>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 struct StreamChoice {
-    #[serde(default)]
-    index: u64,
-    #[serde(default)]
     delta: Delta,
     #[serde(default)]
     finish_reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 struct Delta {
     #[serde(default)]
     content: Option<String>,
@@ -45,7 +42,6 @@ struct Delta {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct DeltaToolCall {
-    #[serde(default)]
     index: usize,
     #[serde(default)]
     id: Option<String>,
@@ -177,51 +173,19 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
 
         tokio::pin!(stream);
 
-        loop {
-            let drain_tail = match stream.next().await {
-                Some(Ok(bytes)) => {
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
                     crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
-                    false
-                }
-                Some(Err(e)) => {
-                    log::error!("Stream error: {e}");
-                    stream_ended_with_error = true;
-                    let error_event = json!({
-                        "type": "error",
-                        "error": {
-                            "type": "stream_error",
-                            "message": format!("Stream error: {e}")
+
+                    while let Some(line) = take_sse_block(&mut buffer) {
+                        if line.trim().is_empty() {
+                            continue;
                         }
-                    });
-                    let sse_data = format!("event: error\ndata: {}\n\n",
-                        serde_json::to_string(&error_event).unwrap_or_default());
-                    yield Ok(Bytes::from(sse_data));
-                    break;
-                }
-                None => {
-                    crate::proxy::sse::flush_utf8_remainder(&mut buffer, &mut utf8_remainder);
-                    if buffer.trim().is_empty() {
-                        break;
-                    }
-                    true
-                }
-            };
 
-            while let Some(line) = if drain_tail {
-                take_sse_block_eof(&mut buffer)
-            } else {
-                take_sse_block(&mut buffer)
-            } {
-                if line.trim().is_empty() {
-                    continue;
-                }
-
-                let parsed = parse_sse_event(&line);
-                let data = parsed.data.as_str();
-                if data.trim().is_empty() {
-                    continue;
-                }
-                if parsed.is_done() {
+                        for l in line.lines() {
+                            if let Some(data) = strip_sse_field(l, "data") {
+                                if data.trim() == "[DONE]" {
                                     log::debug!("[Claude/OpenRouter] <<< OpenAI SSE: [DONE]");
 
                                     // 流正常结束，发出缓存的 message_delta（含完整 usage）。
@@ -261,7 +225,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                         }
                                     }
 
-                                    if let Some(choice) = chunk.choices.iter().find(|c| c.index == 0) {
+                                    if let Some(choice) = chunk.choices.first() {
                                         if !has_sent_message_start {
                                             // Build usage with cache tokens if available from first chunk
                                             let mut start_usage = json!({
@@ -668,10 +632,25 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                         }
                                     }
                                 }
-            }
-
-            if drain_tail {
-                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Stream error: {e}");
+                    stream_ended_with_error = true;
+                    let error_event = json!({
+                        "type": "error",
+                        "error": {
+                            "type": "stream_error",
+                            "message": format!("Stream error: {e}")
+                        }
+                    });
+                    let sse_data = format!("event: error\ndata: {}\n\n",
+                        serde_json::to_string(&error_event).unwrap_or_default());
+                    yield Ok(Bytes::from(sse_data));
+                    break;
+                }
             }
         }
 
@@ -748,7 +727,6 @@ fn map_stop_reason(finish_reason: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proxy::sse::strip_sse_field;
     use futures::stream;
     use futures::StreamExt;
     use serde_json::Value;
@@ -1388,137 +1366,5 @@ mod tests {
             collect_delta_text(&events, "text_delta", "/delta/text"),
             "答案是 42"
         );
-    }
-
-    #[tokio::test]
-    async fn multi_choice_chunk_uses_index_0_not_array_first() {
-        // n>1：同一 chunk 里 index:1 排在 index:0 前面时，旧实现 `.first()` 会把 B 当正文。
-        let input = concat!(
-            "data: {\"id\":\"chatcmpl_n\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"B\"}},{\"index\":0,\"delta\":{\"content\":\"A\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_n\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"bb\"},\"finish_reason\":\"stop\"},{\"index\":0,\"delta\":{\"content\":\"aa\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let events = collect_anthropic_events(input).await;
-        assert_eq!(
-            collect_delta_text(&events, "text_delta", "/delta/text"),
-            "Aaa"
-        );
-        assert!(!collect_delta_text(&events, "text_delta", "/delta/text").contains('B'));
-        assert!(events.iter().any(|event| {
-            event_type(event) == Some("message_delta")
-                && event.pointer("/delta/stop_reason").and_then(|v| v.as_str()) == Some("end_turn")
-        }));
-    }
-
-    #[tokio::test]
-    async fn multi_choice_index_1_only_chunks_are_ignored_but_usage_kept() {
-        let input = concat!(
-            "data: {\"id\":\"chatcmpl_n1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"NOPE\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_n1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"yes\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_n1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":1,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1}}\n\n",
-            "data: {\"id\":\"chatcmpl_n1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let events = collect_anthropic_events(input).await;
-        assert_eq!(
-            collect_delta_text(&events, "text_delta", "/delta/text"),
-            "yes"
-        );
-        let usage = events
-            .iter()
-            .find(|event| event_type(event) == Some("message_delta"));
-        assert_eq!(
-            usage.and_then(|e| e.pointer("/usage/input_tokens").and_then(|v| v.as_u64())),
-            Some(4)
-        );
-    }
-
-    #[tokio::test]
-    async fn finish_reason_chunk_without_delta_still_completes() {
-        let input = concat!(
-            "data: {\"id\":\"chatcmpl_nodelta\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_nodelta\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let events = collect_anthropic_events(input).await;
-        assert_eq!(
-            collect_delta_text(&events, "text_delta", "/delta/text"),
-            "hi"
-        );
-        assert!(events
-            .iter()
-            .any(|event| event_type(event) == Some("message_stop")));
-    }
-
-    #[tokio::test]
-    async fn truncated_sse_without_trailing_blank_line_still_converts() {
-        let input = concat!(
-            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}"
-        );
-        let events = collect_anthropic_events(input).await;
-        assert_eq!(
-            collect_delta_text(&events, "text_delta", "/delta/text"),
-            "hi"
-        );
-        assert!(events.iter().any(|event| {
-            event_type(event) == Some("message_delta")
-                && event.pointer("/delta/stop_reason").and_then(|v| v.as_str()) == Some("end_turn")
-        }));
-        assert!(events
-            .iter()
-            .any(|event| event_type(event) == Some("message_stop")));
-    }
-
-    #[tokio::test]
-    async fn partial_utf8_chinese_split_across_chunks() {
-        let frame = concat!(
-            "data: {\"id\":\"chatcmpl_utf8\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你好\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_utf8\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let bytes = frame.as_bytes();
-        let ni = bytes.windows(3).position(|w| w == "你".as_bytes()).unwrap();
-        let upstream = stream::iter(vec![
-            Ok::<_, std::io::Error>(Bytes::copy_from_slice(&bytes[..ni + 1])),
-            Ok(Bytes::copy_from_slice(&bytes[ni + 1..])),
-        ]);
-        let converted = create_anthropic_sse_stream(upstream);
-        let chunks: Vec<_> = converted.collect().await;
-        let merged = chunks
-            .into_iter()
-            .map(|chunk| String::from_utf8_lossy(chunk.unwrap().as_ref()).to_string())
-            .collect::<String>();
-        let events: Vec<Value> = merged
-            .split("\n\n")
-            .filter_map(|block| {
-                let data = block
-                    .lines()
-                    .find_map(|line| strip_sse_field(line, "data"))?;
-                serde_json::from_str::<Value>(data).ok()
-            })
-            .collect();
-        assert_eq!(
-            collect_delta_text(&events, "text_delta", "/delta/text"),
-            "你好"
-        );
-    }
-
-    #[tokio::test]
-    async fn reconnect_comment_retry_and_id_fields_are_ignored_for_payload() {
-        let input = concat!(
-            ": ping\n\n",
-            "retry: 3000\nid: evt-1\ndata: {\"id\":\"chatcmpl_re\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n",
-            "id: evt-2\ndata: {\"id\":\"chatcmpl_re\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let events = collect_anthropic_events(input).await;
-        assert_eq!(
-            collect_delta_text(&events, "text_delta", "/delta/text"),
-            "ok"
-        );
-        assert!(events
-            .iter()
-            .any(|event| event_type(event) == Some("message_stop")));
     }
 }

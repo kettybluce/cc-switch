@@ -19,7 +19,7 @@ const NAMED_SECRET_PATTERN =
 const NAMED_SECRET_CONTAINER_PATTERN =
   /((?:\\?["'])?\b(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|session[_-]?id|authorization|credential|password|passwd|bearer|cookie|secret|token|auth|pwd|key)s?(?:\\?["'])?\s*[:=]\s*)(\[[^\]]*\]|\{[^{}]*\})/gi;
 const SENSITIVE_HEADER_LINE_PATTERN =
-  /(^|[\r\n])([ \t]*(?:(?:proxy-)?authorization|cookie|set-cookie|x-api-key|api-key|x-goog-api-key)\s*[:=]\s*)[^\r\n]+/gim;
+  /(^|[\r\n])([ \t]*(?:(?:proxy-)?authorization|cookie|set-cookie|x-api-key|api-key)\s*[:=]\s*)[^\r\n]+/gim;
 const AUTH_SCHEME_PATTERN =
   /\b(Bearer|Basic|Token|ApiKey|Digest|Negotiate|AWS4-HMAC-SHA256)\s+[^\s"',}\]]+/gi;
 const SECRET_VALUE_IN_TEXT_PATTERN =

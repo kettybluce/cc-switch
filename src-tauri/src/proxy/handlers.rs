@@ -1923,10 +1923,9 @@ fn codex_proxy_error_json(
 ) -> Value {
     let (mut body, upstream_status) = match error {
         ProxyError::UpstreamError { status, body } => {
-            let parsed_body = body.as_deref().map(|body| {
-                let redacted = crate::redact_secret_text(body);
-                serde_json::from_str::<Value>(&redacted).unwrap_or_else(|_| json!(redacted))
-            });
+            let parsed_body = body
+                .as_deref()
+                .map(|body| serde_json::from_str::<Value>(body).unwrap_or_else(|_| json!(body)));
             (
                 transform_codex_chat::chat_error_to_response_error(parsed_body.as_ref()),
                 Some(*status),
@@ -2057,8 +2056,7 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
 }
 
 fn compact_error_message(message: &str, max_chars: usize) -> String {
-    let redacted = crate::redact_secret_text(message);
-    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= max_chars {
         return normalized;
     }
@@ -2212,9 +2210,8 @@ async fn responses_sse_stream_to_anthropic_message(
 /// 把 OpenAI Responses SSE 流聚合成一个完整的 Responses JSON 对象，供下游转成 Anthropic
 /// 非流响应。仅在 Codex OAuth 把 `stream:false` 强制升级为 SSE 的场景下调用。
 ///
-/// 复用 `proxy::sse` 的 `take_sse_block`/`strip_sse_field`：`take_sse_block` 按 WHATWG
-/// 识别 `\n\n`、`\r\n\r\n` 以及混合 `\r\n\n` / `\n\r\n` / `\r\r` 分隔符，
-/// `strip_sse_field` 兼容带/不带空格（及行首 BOM/缩进）的字段写法。
+/// 复用 `proxy::sse` 的 `take_sse_block`/`strip_sse_field`：`take_sse_block` 同时支持
+/// `\n\n` 与 `\r\n\r\n` 两种分隔符，`strip_sse_field` 兼容带/不带空格的字段写法。
 fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
     let mut buffer = body.trim_start_matches('\u{feff}').to_string();
     let mut completed_response: Option<Value> = None;
@@ -2557,10 +2554,7 @@ fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
                 .and_then(|d| d.as_object())
                 .is_some_and(|o| !o.is_empty());
             let (payload, is_full_message) = if delta_nonempty {
-                match choice.get("delta") {
-                    Some(delta) => (delta, false),
-                    None => return Ok(()),
-                }
+                (choice.get("delta").unwrap(), false)
             } else if let Some(message) = choice.get("message") {
                 (message, true)
             } else if let Some(delta) = choice.get("delta") {
@@ -2864,7 +2858,7 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, compact_error_message, responses_sse_stream_to_anthropic_message,
+        codex_proxy_error_json, responses_sse_stream_to_anthropic_message,
         responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
         upstream_body_parse_error,
     };
@@ -3341,22 +3335,6 @@ data: {\"usage\":{\"prompt_to";
     }
 
     #[test]
-    fn chat_sse_to_response_value_rejects_truncated_json_without_finish() {
-        let sse = "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"}";
-
-        let err = chat_sse_to_response_value(sse).unwrap_err();
-        match err {
-            ProxyError::TransformError(msg) => {
-                assert!(
-                    msg.contains("truncated") || msg.contains("No chat completion choices"),
-                    "{msg}"
-                );
-            }
-            other => panic!("expected TransformError, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn chat_sse_to_response_value_float_zero_does_not_freeze_envelope() {
         // C14：浮点 0.0 占位的 created 不得冻结 envelope，真值应能覆盖
         let sse = "data: {\"id\":\"\",\"model\":\"\",\"created\":0.0,\"choices\":[]}\n\n\
@@ -3378,47 +3356,6 @@ data: {\"id\":\"chatcmpl-real\",\"model\":\"m\",\"created\":42,\"choices\":[{\"i
         let id2 = r2["id"].as_str().unwrap();
         assert!(!id1.is_empty());
         assert_ne!(id1, id2, "两次无 id 聚合应产出不同 id 以避免 dedup 碰撞");
-    }
-
-    #[test]
-    fn chat_sse_to_response_value_ignores_n_gt_1_when_index_0_is_not_first() {
-        let sse = concat!(
-            "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"B\"}},{\"index\":0,\"delta\":{\"content\":\"A\"}}]}\n\n",
-            "data: {\"id\":\"c1\",\"choices\":[{\"index\":1,\"delta\":{},\"finish_reason\":\"stop\"},{\"index\":0,\"delta\":{\"content\":\"a\"},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let response = chat_sse_to_response_value(sse).unwrap();
-        assert_eq!(response["choices"][0]["message"]["content"], "Aa");
-        assert_eq!(response["choices"][0]["finish_reason"], "stop");
-    }
-
-    #[test]
-    fn chat_sse_to_response_value_skips_index_1_only_chunks() {
-        let sse = concat!(
-            "retry: 2000\nid: 1\n",
-            "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"NOPE\"}}]}\n\n",
-            "id: 2\ndata: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"yes\"},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let response = chat_sse_to_response_value(sse).unwrap();
-        assert_eq!(response["choices"][0]["message"]["content"], "yes");
-    }
-
-    #[test]
-    fn chat_sse_to_response_value_mixed_crlf_lf_delimiters() {
-        let sse = "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\r\n\n\
-data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\r\n\
-data: [DONE]\r\n\r\n";
-        let response = chat_sse_to_response_value(sse).unwrap();
-        assert_eq!(response["choices"][0]["message"]["content"], "hi");
-        assert_eq!(response["choices"][0]["finish_reason"], "stop");
-    }
-
-    #[test]
-    fn chat_sse_to_response_value_comment_heartbeat_reconnect() {
-        let sse = ": ping\n\nretry: 3000\nid: a\ndata: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        let response = chat_sse_to_response_value(sse).unwrap();
-        assert_eq!(response["choices"][0]["message"]["content"], "ok");
     }
 
     #[test]
@@ -3666,30 +3603,5 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert_eq!(body["error"]["provider"], "HCAI");
         assert_eq!(body["error"]["model"], "gpt-5.5");
         assert_eq!(body["error"]["endpoint"], "/responses");
-    }
-
-    #[test]
-    fn codex_proxy_error_does_not_print_raw_api_keys() {
-        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
-        let error = ProxyError::UpstreamError {
-            status: 401,
-            body: Some(format!(
-                r#"{{"error":{{"message":"invalid api_key: {key}","type":"auth_error"}}}}"#
-            )),
-        };
-        let body = codex_proxy_error_json("Anthropic", "claude-sonnet-4", "/responses", &error);
-        let rendered = body.to_string();
-        assert!(!rendered.contains(key), "{rendered}");
-        assert!(!rendered.contains("TESTSECRETVALUE99"), "{rendered}");
-        assert!(rendered.contains("[REDACTED]"), "{rendered}");
-    }
-
-    #[test]
-    fn compact_error_message_does_not_print_raw_keys() {
-        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
-        let compact = compact_error_message(&format!("invalid api_key: {key}"), 1800);
-        assert!(!compact.contains(key), "{compact}");
-        assert!(!compact.contains("TESTSECRETVALUE99"), "{compact}");
-        assert!(compact.contains("[REDACTED]"), "{compact}");
     }
 }

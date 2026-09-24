@@ -58,20 +58,14 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         // 转换错误：422 Unprocessable Entity
         ProxyError::TransformError(_) => 422,
 
-        // 响应体过大：与 IntoResponse 一致，502 Bad Gateway
-        ProxyError::ResponseBodyTooLarge(_) => 502,
-
-        // 绑定/停止/内部错误：500 Internal Server Error
-        ProxyError::BindFailed(_)
-        | ProxyError::StopTimeout
-        | ProxyError::StopFailed(_)
-        | ProxyError::Internal(_) => 500,
+        // 其他未知错误：500 Internal Server Error
+        _ => 500,
     }
 }
 
-/// 将 ProxyError 转换为用户友好的错误消息（密钥已脱敏，可写入请求日志）。
+/// 将 ProxyError 转换为用户友好的错误消息
 pub fn get_error_message(error: &ProxyError) -> String {
-    let raw = match error {
+    match error {
         ProxyError::UpstreamError { status, body } => {
             if let Some(body) = body {
                 format!("上游错误 ({status}): {body}")
@@ -89,8 +83,7 @@ pub fn get_error_message(error: &ProxyError) -> String {
         ProxyError::DatabaseError(msg) => format!("数据库错误: {msg}"),
         ProxyError::TransformError(msg) => format!("请求/响应转换错误: {msg}"),
         _ => error.to_string(),
-    };
-    crate::redact_secret_text(&raw)
+    }
 }
 
 #[cfg(test)]
@@ -146,28 +139,6 @@ mod tests {
             map_proxy_error_to_status(&ProxyError::StreamIdleTimeout(30)),
             504
         );
-        assert_eq!(
-            map_proxy_error_to_status(&ProxyError::ResponseBodyTooLarge(8)),
-            502
-        );
-        assert_eq!(
-            map_proxy_error_to_status(&ProxyError::Internal("boom".to_string())),
-            500
-        );
-        assert_eq!(
-            map_proxy_error_to_status(&ProxyError::UpstreamError {
-                status: 403,
-                body: None
-            }),
-            403
-        );
-        assert_eq!(
-            map_proxy_error_to_status(&ProxyError::UpstreamError {
-                status: 503,
-                body: Some("unavailable".to_string())
-            }),
-            503
-        );
     }
 
     #[test]
@@ -180,21 +151,5 @@ mod tests {
         assert!(msg.contains("上游错误"));
         assert!(msg.contains("500"));
         assert!(msg.contains("Internal Server Error"));
-    }
-
-    #[test]
-    fn get_error_message_does_not_print_raw_api_keys() {
-        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
-        let error = ProxyError::UpstreamError {
-            status: 401,
-            body: Some(format!(
-                r#"{{"error":{{"message":"invalid x-api-key: {key}"}}}}"#
-            )),
-        };
-        let msg = get_error_message(&error);
-        assert!(!msg.contains(key), "{msg}");
-        assert!(!msg.contains("TESTSECRETVALUE99"), "{msg}");
-        assert!(msg.contains("[REDACTED]"), "{msg}");
-        assert!(msg.contains("401"), "{msg}");
     }
 }

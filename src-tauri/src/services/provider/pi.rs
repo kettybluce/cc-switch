@@ -22,9 +22,6 @@ pub(super) fn list(state: &AppState) -> Result<IndexMap<String, Provider>, AppEr
             if let Err(error) = sync_native_locked(state, &native) {
                 log::warn!("Failed to sync Pi providers from native config: {error}");
             }
-            if let Err(error) = heal_pi_current_from_live(state, &native) {
-                log::warn!("Failed to heal Pi is_current from live models.json: {error}");
-            }
         }
         Err(error) => {
             log::warn!("Failed to read Pi providers; showing saved catalog: {error}");
@@ -37,9 +34,7 @@ pub(super) fn import_from_live(state: &AppState) -> Result<usize, AppError> {
     let _guard = futures::executor::block_on(state.proxy_service.lock_switch_for_app(PI_APP));
     heal_live_openai_system_roles();
     let native = crate::pi_config::read_pi_native_providers()?;
-    let changed = sync_native_locked(state, &native)?;
-    heal_pi_current_from_live(state, &native)?;
-    Ok(changed)
+    sync_native_locked(state, &native)
 }
 
 pub(super) fn add(
@@ -308,48 +303,6 @@ fn sync_native_locked(
     }
 
     Ok(changed)
-}
-
-/// Heal DB `is_current` when it diverges from the live `defaultProvider`
-/// (for example leftover `fd` vs live `flz`). Live key wins when that node
-/// exists; otherwise an orphan current is reassigned to the first live node.
-fn heal_pi_current_from_live(
-    state: &AppState,
-    native: &IndexMap<String, Value>,
-) -> Result<(), AppError> {
-    let live_default = match crate::pi_config::read_pi_native_defaults() {
-        Ok(defaults) => defaults
-            .default_provider
-            .filter(|id| !id.trim().is_empty() && native.contains_key(id)),
-        Err(error) => {
-            log::warn!("Failed to read Pi defaultProvider while healing is_current: {error}");
-            None
-        }
-    };
-    let db_current = state.db.get_current_provider(PI_APP)?;
-
-    if let Some(live) = live_default {
-        if db_current.as_deref() != Some(live.as_str()) {
-            log::info!(
-                "Healing Pi is_current {} → live key {live}",
-                db_current.as_deref().unwrap_or("-")
-            );
-            state.db.set_current_provider(PI_APP, &live)?;
-        }
-        return Ok(());
-    }
-
-    if let Some(current) = db_current {
-        if !native.contains_key(&current) {
-            if let Some((next, _)) = native.iter().find(|(id, config)| {
-                !id.is_empty() && !crate::pi_config::is_projected_provider_node(config)
-            }) {
-                log::info!("Healing orphan Pi is_current {current} → {next}");
-                state.db.set_current_provider(PI_APP, next)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 fn native_config_for_live(state: &AppState, config: &Value) -> Result<Value, AppError> {
@@ -673,44 +626,6 @@ mod tests {
         assert_eq!(
             live["baisheng"]["baseUrl"],
             json!("http://api.llm.prd.yumc.local/v1")
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn list_heals_orphan_is_current_to_live_default_key() {
-        let _agent = TestAgentDir::new();
-        let state = state();
-        let agent_dir = crate::pi_config::get_pi_agent_dir().expect("agent directory");
-        fs::create_dir_all(&agent_dir).expect("create agent directory");
-        fs::write(
-            agent_dir.join("models.json"),
-            r#"{
-              "providers": {
-                "fd": { "name": "FD", "api": "openai-completions", "models": [{ "id": "m1" }] },
-                "flz": { "name": "FLZ", "api": "openai-completions", "models": [{ "id": "m2" }] }
-              }
-            }"#,
-        )
-        .expect("write live catalog");
-        crate::pi_config::write_pi_native_defaults(Some("flz"), Some("m2"))
-            .expect("set live default to flz");
-
-        ProviderService::list(&state, AppType::Pi).expect("import live catalog");
-        state
-            .db
-            .set_current_provider(PI_APP, "fd")
-            .expect("stale is_current=fd");
-        assert_eq!(
-            state.db.get_current_provider(PI_APP).unwrap().as_deref(),
-            Some("fd")
-        );
-
-        ProviderService::list(&state, AppType::Pi).expect("heal on list");
-        assert_eq!(
-            state.db.get_current_provider(PI_APP).unwrap().as_deref(),
-            Some("flz"),
-            "live defaultProvider flz must replace orphan/stale is_current fd"
         );
     }
 
@@ -1304,47 +1219,6 @@ mod tests {
                 .unwrap_or("")
                 .contains("15721"),
             "backup must store the real upstream, not the Claude listen port"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn live_update_writes_url_and_key_into_models_json() {
-        let _agent = TestAgentDir::new();
-        let state = state();
-        ProviderService::add(&state, AppType::Pi, input("model-a"), true).expect("add live");
-
-        let mut updated = input("model-a");
-        updated.settings_config["baseUrl"] = json!("https://rotated.example/v1");
-        updated.settings_config["apiKey"] = json!("rotated-key");
-        update(&state, Some("cc-switch-test"), updated).expect("update url/key");
-
-        let live = crate::pi_config::read_pi_native_provider("cc-switch-test")
-            .expect("read models.json")
-            .expect("live node");
-        assert_eq!(live["baseUrl"], json!("https://rotated.example/v1"));
-        assert_eq!(live["apiKey"], json!("rotated-key"));
-        assert_eq!(live["api"], json!("openai-completions"));
-        assert_eq!(live["compat"]["supportsDeveloperRole"], json!(false));
-    }
-
-    #[test]
-    #[serial]
-    fn malformed_takeover_backup_is_invalidated_on_live_delete() {
-        let _agent = TestAgentDir::new();
-        let state = state();
-        ProviderService::add(&state, AppType::Pi, input("model-a"), true).expect("add live");
-        futures::executor::block_on(state.db.save_live_backup("pi", "}not-json{"))
-            .expect("seed malformed backup");
-
-        ProviderService::delete(&state, AppType::Pi, "cc-switch-test").expect("delete live");
-
-        assert!(!crate::pi_config::pi_provider_exists("cc-switch-test").unwrap());
-        assert!(
-            futures::executor::block_on(state.db.get_live_backup("pi"))
-                .expect("read backup")
-                .is_none(),
-            "unparseable takeover backup must be deleted so disable cannot restore it"
         );
     }
 }

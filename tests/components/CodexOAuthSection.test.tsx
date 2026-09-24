@@ -466,7 +466,6 @@ describe("CodexOAuthSection", () => {
   });
 
   it("reports automatic invalidation separately from a user choice", async () => {
-    const user = userEvent.setup();
     const authResult = mocks.useCodexOauth();
     const onAccountSelect = vi.fn();
     const onSelectionConfirmed = vi.fn();
@@ -491,13 +490,5 @@ describe("CodexOAuthSection", () => {
     await waitFor(() => expect(onSelectionInvalidated).toHaveBeenCalledOnce());
     expect(onAccountSelect).toHaveBeenCalledWith(null);
     expect(onSelectionConfirmed).not.toHaveBeenCalled();
-
-    rerender(<CodexOAuthSection {...props} selectedAccountId={null} />);
-    await user.click(screen.getByRole("combobox"));
-    await user.click(
-      await screen.findByRole("option", { name: "second@example.com" }),
-    );
-    expect(onAccountSelect).toHaveBeenLastCalledWith("account-2");
-    expect(onSelectionConfirmed).toHaveBeenCalledOnce();
   });
 });

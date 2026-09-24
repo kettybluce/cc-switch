@@ -20,7 +20,6 @@ jobs:
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       backend: ${{ steps.filter.outputs.backend }}
-      docker: ${{ steps.filter.outputs.docker }}
     steps:
       # On pull_request the filter reads changed files via the API (no checkout);
       # on push it needs a local git history to diff against.
@@ -47,50 +46,11 @@ jobs:
               - "tailwind.config.cjs"
               - "postcss.config.cjs"
               - "components.json"
-              - "scripts/check-i18n-parity.mjs"
-              - "scripts/lib/i18n-parity.mjs"
               - ".github/workflows/**"
             backend:
               - "src-tauri/**"
               - "rust-toolchain.toml"
               - ".github/workflows/**"
-            docker:
-              - "Dockerfile.test"
-              - "docker-compose.test.yml"
-              - ".dockerignore"
-              - "scripts/docker-backend-self-test.sh"
-              - "scripts/docker-self-test.sh"
-              - "scripts/render-docker-self-test-report.py"
-              - "docs/docker-backend-self-test.md"
-              - "Makefile"
-
-  # Cheap, always-on: catches missing `fi` / workflow YAML and Portable zip names
-  # without a Tauri build or version bump.
-  workflow-lint:
-    name: Workflow and shell syntax
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: bash -n and actionlint
-        run: bash scripts/ci/lint-shell-and-workflows.sh
-
-  windows-portable-dry-run:
-    name: Windows Portable packaging dry-run
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Package dummy MSI + Portable zip
-        run: bash scripts/ci/dry-run-windows-portable.sh
 
   frontend:
     name: Frontend Checks
@@ -118,7 +78,7 @@ jobs:
       - name: Get pnpm store directory
         id: pnpm-store
         shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
 
       - name: Cache pnpm store
         uses: actions/cache@v5
@@ -135,9 +95,6 @@ jobs:
 
       - name: Check formatting
         run: pnpm format:check
-
-      - name: i18n four-locale key parity
-        run: pnpm i18n:check
 
       - name: Unit tests
         run: pnpm test:unit
@@ -293,21 +250,3 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
-
-  # Cheap syntax check only. Building Dockerfile.test (Rust + GTK) is too
-  # heavy for every PR; run the full suite locally / in cloud with:
-  #   pnpm test:docker   # default FULL cargo test + markdown report
-  docker-compose-config:
-    name: Docker compose config
-    runs-on: ubuntu-latest
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.docker == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Validate compose file
-        run: docker compose -f docker-compose.test.yml config
-
-      - name: Report renderer self-check
-        run: python3 scripts/render-docker-self-test-report.py --self-check

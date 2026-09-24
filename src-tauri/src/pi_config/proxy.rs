@@ -66,14 +66,14 @@ pub(crate) fn is_local_proxy_url(url: &str) -> bool {
         || rest.starts_with("::")
 }
 
-fn provider_api_key(node: &Value) -> Option<&str> {
-    node.get("apiKey")
-        .or_else(|| node.get("api_key"))
+pub(crate) fn is_projected_provider_node(node: &Value) -> bool {
+    if node
+        .get("apiKey")
         .and_then(Value::as_str)
-        .map(str::trim)
-}
-
-fn node_has_local_proxy_url(node: &Value) -> bool {
+        .is_some_and(|key| key == PI_PROXY_API_KEY_PLACEHOLDER)
+    {
+        return true;
+    }
     if node
         .get("baseUrl")
         .and_then(Value::as_str)
@@ -91,22 +91,6 @@ fn node_has_local_proxy_url(node: &Value) -> bool {
                     .is_some_and(is_local_proxy_url)
             })
         })
-}
-
-pub(crate) fn is_projected_provider_node(node: &Value) -> bool {
-    let api_key = provider_api_key(node).unwrap_or("");
-    if api_key == PI_PROXY_API_KEY_PLACEHOLDER {
-        return true;
-    }
-    // Live local LLMs (Ollama / vLLM / intranet yum on 127.0.0.1) keep a
-    // real apiKey. Treating any loopback URL as projected made
-    // `select_pi_providers` return 503 for those cards and skipped native
-    // sync. Empty/missing keys plus a loopback URL still count as leftover
-    // takeover projection (loop bait).
-    if !api_key.is_empty() {
-        return false;
-    }
-    node_has_local_proxy_url(node)
 }
 
 pub(crate) fn document_has_proxy_projection(document: &Value) -> bool {
@@ -466,31 +450,6 @@ mod tests {
     }
 
     #[test]
-    fn wsl_localhost_tfdx8045_trailing_slash_and_mixed_separators_are_usable() {
-        let trailing = PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\agent\");
-        assert!(is_windows_unc_path(&trailing));
-        assert!(is_usable_pi_agent_dir(&trailing));
-
-        let mixed = PathBuf::from(r"//wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi/agent/");
-        assert!(is_windows_unc_path(&mixed));
-        assert!(is_usable_pi_agent_dir(&mixed));
-
-        let resolved = crate::pi_config::resolve_pi_agent_dir(
-            Some(PathBuf::from(
-                r"\\wsl.localhost\Ubuntu-22.04\home\tfdx8045\.pi\",
-            )),
-            None,
-            PathBuf::from("/unused"),
-        )
-        .expect("trailing-slash tfdx8045 .pi");
-        let normalized = resolved.to_string_lossy().replace('/', r"\");
-        assert!(
-            normalized.ends_with(r"home\tfdx8045\.pi\agent"),
-            "must canonicalize onto .pi/agent: {normalized}"
-        );
-    }
-
-    #[test]
     fn wsl_dollar_agent_dir_is_accepted() {
         let unc = PathBuf::from(r"\\wsl$\Ubuntu-22.04\home\user\.pi\agent");
         assert!(is_usable_pi_agent_dir(&unc));
@@ -577,25 +536,6 @@ mod tests {
         );
         assert!(is_projected_provider_node(anthropic));
         assert!(document_has_proxy_projection(&document));
-
-        let serialized = serde_json::to_string(&document).expect("serialize projected models.json");
-        assert!(
-            !serialized.contains("sk-ant-live"),
-            "projected models.json must not keep the live Anthropic key: {serialized}"
-        );
-        assert!(
-            !serialized.contains("sk-openai-live"),
-            "projected models.json must not keep the live OpenAI key: {serialized}"
-        );
-        assert!(
-            !serialized.contains("gemini-key"),
-            "projected models.json must not keep the live Gemini key: {serialized}"
-        );
-        assert_eq!(openai["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
-        assert_eq!(
-            document["providers"]["gemini"]["apiKey"],
-            json!(PI_PROXY_API_KEY_PLACEHOLDER)
-        );
     }
 
     #[test]
@@ -737,12 +677,6 @@ mod tests {
         );
         assert_eq!(node["compat"]["supportsDeveloperRole"], json!(false));
         assert_eq!(node["baseUrl"], json!("http://127.0.0.1:15721/v1"));
-        assert_eq!(node["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
-        let serialized = serde_json::to_string(&node).expect("serialize node");
-        assert!(
-            !serialized.contains("sk-live"),
-            "projected node must not keep the live apiKey: {serialized}"
-        );
     }
 
     #[test]
@@ -825,27 +759,6 @@ mod tests {
         let projected = project_provider_node(&live, "http://127.0.0.1:15721");
         assert!(!pi_provider_is_forwardable(&projected));
         assert_eq!(projected["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
-
-        let local_llm = json!({
-            "api": "openai-completions",
-            "baseUrl": "http://127.0.0.1:11434/v1",
-            "apiKey": "sk-pi-live",
-            "models": [{ "id": "glm-4" }]
-        });
-        assert!(
-            !is_projected_provider_node(&local_llm),
-            "loopback + real key is a live local LLM, not takeover projection"
-        );
-        assert!(pi_provider_is_forwardable(&local_llm));
-
-        let leftover = json!({
-            "api": "openai-completions",
-            "baseUrl": "http://127.0.0.1:15721/v1",
-            "apiKey": "  ",
-            "models": [{ "id": "glm-4" }]
-        });
-        assert!(is_projected_provider_node(&leftover));
-        assert!(!pi_provider_is_forwardable(&leftover));
     }
 
     #[test]
@@ -898,31 +811,6 @@ mod tests {
         );
         assert_eq!(written["customTopLevel"], json!("keep-me"));
         assert!(written.get("defaultProvider").is_none());
-        assert_eq!(
-            written["providers"]["anthropic"]["apiKey"],
-            json!(PI_PROXY_API_KEY_PLACEHOLDER)
-        );
-        assert_eq!(
-            written["providers"]["openai"]["apiKey"],
-            json!(PI_PROXY_API_KEY_PLACEHOLDER)
-        );
-        assert_eq!(
-            written["providers"]["gemini"]["apiKey"],
-            json!(PI_PROXY_API_KEY_PLACEHOLDER)
-        );
-        let serialized = written.to_string();
-        assert!(
-            !serialized.contains("sk-ant-live"),
-            "live Anthropic key must not remain in projected models.json: {serialized}"
-        );
-        assert!(
-            !serialized.contains("sk-openai-live"),
-            "live OpenAI key must not remain in projected models.json: {serialized}"
-        );
-        assert!(
-            !serialized.contains("gemini-key"),
-            "live Gemini key must not remain in projected models.json: {serialized}"
-        );
         assert_eq!(
             fs::read_to_string(&settings_path).expect("settings after"),
             settings_before,

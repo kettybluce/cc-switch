@@ -44,11 +44,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
   pi_selection_
 # Full crate (CI equivalent) when time allows:
 # cargo test --manifest-path src-tauri/Cargo.toml
-
-# Docker: default FULL src-tauri cargo test + markdown report
-# (no host GTK install, no Windows C:, SCHEMA 18, no Tauri GUI):
-# pnpm test:docker
-# See docs/docker-backend-self-test.md  — 默认全量；每次给全量自测报告
 ```
 
 Cargo's `TESTNAME` is a single substring filter; run the names above as separate invocations (or one regex if the toolchain accepts it).
@@ -89,7 +84,6 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 - Header stripped hop-by-hop in `forwarder.rs` (not sent upstream).
 - Shared listen still uses Claude / Codex / Gemini handlers; `x-cc-switch-app: pi` selects forwardable Pi catalog providers (not Claude/Codex current). Projected `PROXY_MANAGED` nodes are skipped.
 - Session importer already writes `app_type = "pi"` from agent JSONL (`session_usage_pi.rs`). `proxy_request_logs.app_type` has no CHECK; SCHEMA stays 18.
-- Isolated-HOME JSONL scan (`src-tauri/tests/session_usage_scan.rs`): Claude `projects/` + sub-agent, Codex `sessions/YYYY/MM/DD`, Pi `.pi/agent/sessions/<project>`. Asserts usage aggregation, stored TTFT dash (`latency_ms=0`, `first_token_ms` NULL), empty dirs, corrupt lines. No `pi-wsl-sessions`, no SCHEMA bump.
 
 ### 5. Claude-parity local proxy projection
 
@@ -107,23 +101,6 @@ Cargo's `TESTNAME` is a single substring filter; run the names above as separate
 
 - Docs only: `docs/windows-msi-error-5-zh.md`, pointers in `README_ZH.md` and `docs/user-manual/zh/1-getting-started/1.2-installation.md`.
 - WiX unchanged (`InstallScope=perUser`). This PR does **not** tag, ship MSI, or ship Portable.
-
-### 7. CodexLiveAuthSwitchGuard stale ChatGPT bindings (Wave B #7395 follow-up)
-
-Wave B already landed `CodexLiveAuthSwitchGuard`. This coverage adds the two-state edges that the cherry-pick tests did not name explicitly. **No SCHEMA bump. Default Cursor pool model unchanged.**
-
-| Case | Test |
-| --- | --- |
-| `MissingAccount` vs corrupt store | `missing_account_recovery_requires_valid_persisted_state` |
-| `ExistingAccount(None)` does not delete native `auth.json` | `existing_account_without_matching_live_token_is_distinct_from_missing`, `existing_account_without_live_token_can_switch_away_from_stale_binding` |
-| `ExistingAccount(Some)` compare-before-delete / rotated refresh | `existing_account_with_matching_live_refresh_carries_disk_token`, `existing_account_ensure_unchanged_rejects_rotated_live_refresh` |
-| MissingAccount only drops its marker | `missing_account_clear_outgoing_only_drops_its_ownership_marker`, `missing_account_current_can_switch_away_to_third_party` |
-| Workspace mismatch fail-closed | `workspace_mismatch_between_store_and_live_auth_is_rejected` |
-| Stale **target** while takeover already enabled | `stale_target_binding_reports_choose_account_even_when_takeover_already_enabled`, `linux_standin_stale_codex_oauth_target_reports_choose_account_during_takeover` |
-| Linux MissingAccount current switch-away | `linux_standin_missing_codex_oauth_current_can_switch_away` |
-| Card **选择账号** on current and non-current | `ProviderCard.codexAccount.test.tsx` |
-
-Chinese recovery: `docs/guides/codex-stale-account-binding-zh.md`, FAQ, `2.2-switch.md`.
 
 ## Untested (honest)
 
@@ -167,31 +144,6 @@ Full `cargo test --manifest-path src-tauri/Cargo.toml` was **not** re-run in ful
 | `cargo test --lib provider_router` | ok (11) |
 
 Full `cargo test --manifest-path src-tauri/Cargo.toml` (lib + integration, ~2800+ lib tests) was **not** re-run in full on this VM after the last fixture-string edit; clippy rebuilt the lib cleanly and the mapped tests above passed. GitHub Actions CI on the PR is the full crate gate.
-
-### 7. Claude / Codex takeover roundtrip (Wave D, parallel to Pi)
-
-Linux stand-in tests in `src-tauri/tests/proxy_projection_linux.rs` (same POSIX tree as #43/#46):
-
-- `linux_standin_claude_takeover_roundtrip_preserves_unknown_settings_fields` — extra `customTopLevel` / `permissions` / `CC_SWITCH_KEEP` survive projection; disable restores the real token/URL
-- `linux_standin_codex_takeover_roundtrip_preserves_toml_and_auth` — extra `[projects."/tmp/cc-switch-keep"]` survives; `auth.json` extra fields are byte-identical through enable/disable
-- `linux_standin_claude_switch_during_takeover_refreshes_backup` / `linux_standin_codex_switch_during_takeover_refreshes_backup` — hot-switch refreshes `proxy_live_backup` so disable restores the **new** card (Pi delete-during-takeover analogue)
-- `linux_standin_independent_disable_leaves_the_other_app_projected` — disable Claude while Codex stays projected (and the reverse)
-
-### 8. Claude / Codex takeover fail-closed (unique remainder of #52)
-
-Happy-path roundtrips landed in #51. This layer only adds:
-
-- `live_points_at_foreign_local_proxy` — enable refuses when Live already aims at another local listen (`127.0.0.1:9999`)
-- `linux_standin_*_fails_closed_when_*_missing` — missing `settings.json` / `config.toml`
-- `linux_standin_*_fails_closed_on_malformed_*` — broken JSON/TOML
-- `linux_standin_*_fails_closed_when_proxy_already_pointing_elsewhere` — foreign local proxy (Claude / Codex / **Pi**)
-- `linux_standin_pi_takeover_fails_closed_on_malformed_models_json` — broken Pi `models.json`
-
-Enable must error, leave Live unchanged, persist no backup, and leave the takeover flag off (`proxy_takeover_pi` for Pi).
-
-`SCHEMA_VERSION` stays 18. No `proxy_config` row for `pi`.
-
-Docker: default FULL `src-tauri` cargo test + markdown report (`pnpm test:docker` / `pnpm test:docker:all`), including `proxy_projection_linux`, `session_usage_scan`, and `provider_profile_race`. Narrower `TEST_FILTER=proxy` / `session_usage_scan` / `provider_profile_race` are explicit. See `docs/docker-backend-self-test.md` — 默认全量；每次给全量自测报告.
 
 ## Hard no (must stay true after merge)
 

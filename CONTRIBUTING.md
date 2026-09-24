@@ -50,8 +50,6 @@ pnpm dev
 | `pnpm build` | Production build |
 | `pnpm typecheck` | TypeScript type checking |
 | `pnpm test:unit` | Run unit tests |
-| `pnpm test:docker` | Full src-tauri cargo test in Docker + markdown report (see `docs/docker-backend-self-test.md`) |
-| `pnpm test:docker:all` | Same as `pnpm test:docker` (full suite is the default; report required before Portable/MSI) |
 | `pnpm lint` | ESLint check |
 | `pnpm format` | Format code (Prettier) |
 | `pnpm format:check` | Check code formatting |
@@ -120,16 +118,14 @@ By submitting a PR, you agree to the following:
 
 ## Internationalization (i18n)
 
-CC Switch ships four UI languages. When modifying user-facing text:
+CC Switch supports three languages. When modifying user-facing text:
 
-1. Update **all four** locale files:
-   - `src/i18n/locales/en.json`
-   - `src/i18n/locales/zh.json`
-   - `src/i18n/locales/zh-TW.json`
-   - `src/i18n/locales/ja.json`
+1. Update **all three** locale files:
+   - `src/locales/en/translation.json`
+   - `src/locales/zh/translation.json`
+   - `src/locales/ja/translation.json`
 2. Use the `t()` function from i18next for all UI text.
 3. Never hardcode user-facing strings.
-4. Run `pnpm i18n:check` (four-locale key parity: missing keys, orphan Pi/Claude/Codex/OpenCode keys, interpolation variables, and SCHEMA 19 MiniMax Code keys). The same lock lives in `tests/config/i18nParity.test.ts`.
 
 ## Questions?
 
@@ -188,8 +184,6 @@ pnpm dev
 | `pnpm build` | 构建生产版本 |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test:unit` | 运行单元测试 |
-| `pnpm test:docker` | Docker 内全量 src-tauri cargo 测试 + 中文报告（见 `docs/docker-backend-self-test.md`） |
-| `pnpm test:docker:all` | 与 `pnpm test:docker` 相同（默认即全量；出 Portable/MSI 前必须附报告） |
 | `pnpm lint` | ESLint 检查 |
 | `pnpm format` | 格式化代码（Prettier） |
 | `pnpm format:check` | 检查代码格式 |
@@ -258,16 +252,14 @@ chore(deps): update dependencies
 
 ## 国际化（i18n）
 
-CC Switch 提供四种界面语言。修改用户可见文本时：
+CC Switch 支持三种语言。修改用户可见文本时：
 
-1. **同时更新四个**语言文件：
-   - `src/i18n/locales/en.json`
-   - `src/i18n/locales/zh.json`
-   - `src/i18n/locales/zh-TW.json`
-   - `src/i18n/locales/ja.json`
+1. **同时更新三个**语言文件：
+   - `src/locales/en/translation.json`
+   - `src/locales/zh/translation.json`
+   - `src/locales/ja/translation.json`
 2. 所有 UI 文本使用 i18next 的 `t()` 函数。
 3. 不要硬编码用户可见的字符串。
-4. 跑 `pnpm i18n:check`（四语键对齐：缺失键、Pi/Claude/Codex/OpenCode 孤儿键、插值变量、SCHEMA 19 MiniMax Code 键）。同一套锁也在 `tests/config/i18nParity.test.ts`。
 
 ## 有疑问？
 

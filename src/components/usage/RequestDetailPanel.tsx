@@ -6,7 +6,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useRequestDetail } from "@/lib/query/usage";
-import { redactFrontendLogText } from "@/lib/frontendLogger";
 import { getFreshInputTokens, isUnpricedUsage } from "@/types/usage";
 import { formatOutputTokensPerSecond } from "./format";
 
@@ -322,9 +321,7 @@ export function RequestDetailPanel({
               <h3 className="mb-2 font-semibold text-red-800">
                 {t("usage.errorMessage", "错误信息")}
               </h3>
-              <p className="text-sm text-red-700">
-                {redactFrontendLogText(request.errorMessage)}
-              </p>
+              <p className="text-sm text-red-700">{request.errorMessage}</p>
             </div>
           )}
         </div>

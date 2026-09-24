@@ -11,7 +11,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
-pub(super) const LEGACY_SCHEMA_SQL: &str = r#"
+const LEGACY_SCHEMA_SQL: &str = r#"
     CREATE TABLE providers (
         id TEXT NOT NULL,
         app_type TEXT NOT NULL,
@@ -181,46 +181,6 @@ fn existing_skill_repo_selection_is_not_supplemented() {
     assert!(db
         .get_bool_flag("default_skill_repos_initialized")
         .expect("get initialized flag"));
-}
-
-#[test]
-fn file_backed_connection_enables_wal_and_busy_timeout() {
-    let tmp = NamedTempFile::new().expect("temp db");
-    let conn = Connection::open(tmp.path()).expect("open file db");
-    Database::configure_connection(&conn, true).expect("enable WAL");
-
-    let journal_mode: String = conn
-        .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
-        .expect("read journal_mode");
-    assert!(
-        journal_mode.eq_ignore_ascii_case("wal"),
-        "expected WAL, got {journal_mode}"
-    );
-
-    let busy_timeout: i32 = conn
-        .query_row("PRAGMA busy_timeout;", [], |row| row.get(0))
-        .expect("read busy_timeout");
-    assert_eq!(busy_timeout, 5_000);
-
-    let synchronous: i32 = conn
-        .query_row("PRAGMA synchronous;", [], |row| row.get(0))
-        .expect("read synchronous");
-    // SQLite: OFF=0, NORMAL=1, FULL=2, EXTRA=3
-    assert_eq!(synchronous, 1);
-}
-
-#[test]
-fn memory_connection_skips_wal() {
-    let conn = Connection::open_in_memory().expect("open memory db");
-    Database::configure_connection(&conn, false).expect("skip WAL");
-
-    let journal_mode: String = conn
-        .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
-        .expect("read journal_mode");
-    assert!(
-        journal_mode.eq_ignore_ascii_case("memory"),
-        "in-memory tests must stay on journal_mode=memory, got {journal_mode}"
-    );
 }
 
 #[test]
@@ -1300,39 +1260,4 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
         2,
         "file db should persist INCREMENTAL auto_vacuum after VACUUM rebuild"
     );
-}
-
-#[test]
-fn schema18_proxy_config_check_rejects_additive_and_pi_app_types() {
-    let conn = Connection::open_in_memory().expect("open memory db");
-    Database::create_tables_on_conn(&conn).expect("create tables");
-    assert_eq!(SCHEMA_VERSION, 18, "this CHECK is the SCHEMA 18 contract");
-
-    for app_type in ["opencode", "openclaw", "hermes", "pi"] {
-        let err = conn
-            .execute(
-                "INSERT INTO proxy_config (app_type) VALUES (?1)",
-                [app_type],
-            )
-            .expect_err("SCHEMA 18 CHECK must reject additive/Pi proxy_config rows");
-        let msg = err.to_string();
-        assert!(
-            msg.to_ascii_lowercase().contains("check"),
-            "expected CHECK constraint failure for {app_type}, got {msg}"
-        );
-    }
-
-    for allowed in ["claude", "codex", "gemini", "grokbuild"] {
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM proxy_config WHERE app_type = ?1",
-                [allowed],
-                |row| row.get(0),
-            )
-            .expect("count seeded proxy_config row");
-        assert_eq!(
-            count, 1,
-            "SCHEMA 18 still seeds a proxy_config row for {allowed}"
-        );
-    }
 }

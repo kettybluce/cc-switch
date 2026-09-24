@@ -1280,7 +1280,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               showInstallCommands ? "" : "-rotate-90"
             }`}
           />
-          {t("settings.oneClickInstall")}
+          {t("settings.manualInstallCommands")}
         </button>
         {showInstallCommands && (
           <div className="rounded-xl border border-border bg-gradient-to-br from-card/80 to-card/40 p-4 space-y-3 shadow-sm">

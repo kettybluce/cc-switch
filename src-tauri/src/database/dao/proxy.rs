@@ -13,27 +13,6 @@ use super::super::{lock_conn, Database};
 pub(crate) const PRICING_SOURCE_RESPONSE: &str = "response";
 pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
 
-/// SCHEMA 18 CHECK only allows claude/codex/gemini/grokbuild.
-/// Pi takeover must stay in `settings.proxy_takeover_pi`.
-fn schema18_proxy_config_app_type_error(app_type: &str) -> AppError {
-    match app_type {
-        "pi" => AppError::InvalidInput(
-            "SCHEMA 18 has no proxy_config row for pi; use settings.proxy_takeover_pi".to_string(),
-        ),
-        "claude-desktop" => AppError::InvalidInput(
-            "SCHEMA 18 has no proxy_config row for claude-desktop; reuse Claude listen (proxy_config.app_type='claude')".to_string(),
-        ),
-        _ => AppError::InvalidInput(format!("unsupported proxy_config app_type: {app_type}")),
-    }
-}
-
-fn assert_schema18_proxy_config_app_type(app_type: &str) -> Result<(), AppError> {
-    match app_type {
-        "claude" | "codex" | "gemini" | "grokbuild" => Ok(()),
-        other => Err(schema18_proxy_config_app_type_error(other)),
-    }
-}
-
 pub(crate) fn validate_cost_multiplier(value: &str) -> Result<Decimal, AppError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -297,7 +276,6 @@ impl Database {
         &self,
         config: AppProxyConfig,
     ) -> Result<(), AppError> {
-        assert_schema18_proxy_config_app_type(&config.app_type)?;
         let conn = lock_conn!(self.conn);
 
         conn.execute(
@@ -337,10 +315,8 @@ impl Database {
 
     /// 确保指定 app_type 的 proxy_config 行存在（同步版本，用于 set_* 函数）
     ///
-    /// 使用与 schema.rs seed 相同的 per-app 默认值。
-    /// SCHEMA 18 CHECK 只允许 claude/codex/gemini/grokbuild；Pi 接管走 settings。
+    /// 使用与 schema.rs seed 相同的 per-app 默认值
     fn ensure_proxy_config_row_exists(&self, app_type: &str) -> Result<(), AppError> {
-        assert_schema18_proxy_config_app_type(app_type)?;
         let conn = self
             .conn
             .lock()
@@ -353,9 +329,7 @@ impl Database {
                 "codex" => (3, 60, 120, 4, 2, 60, 0.6, 10),
                 "gemini" => (5, 60, 120, 4, 2, 60, 0.6, 10),
                 "grokbuild" => (3, 60, 120, 4, 2, 60, 0.6, 10),
-                other => {
-                    return Err(schema18_proxy_config_app_type_error(other));
-                }
+                _ => (3, 60, 120, 4, 2, 60, 0.6, 10), // 默认值
             };
 
         conn.execute(
@@ -559,22 +533,6 @@ impl Database {
 
     const PI_TAKEOVER_SETTING_KEY: &'static str = "proxy_takeover_pi";
 
-    /// Whether `proxy_config` has a row for `app_type`.
-    ///
-    /// SCHEMA 18 CHECK only allows `claude` / `codex` / `gemini` / `grokbuild`.
-    /// Pi takeover must stay in `settings.proxy_takeover_pi`.
-    pub fn has_proxy_config_row(&self, app_type: &str) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM proxy_config WHERE app_type = ?1",
-                [app_type],
-                |row| row.get(0),
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count > 0)
-    }
-
     /// Pi cannot own a `proxy_config` row under SCHEMA 18 CHECK. Persist takeover
     /// in the existing settings key-value table instead.
     pub fn is_pi_takeover_enabled(&self) -> Result<bool, AppError> {
@@ -602,15 +560,6 @@ impl Database {
     ) -> Result<(), AppError> {
         if app_type == "pi" {
             return self.set_pi_takeover_enabled(enabled);
-        }
-        if assert_schema18_proxy_config_app_type(app_type).is_err() {
-            // SCHEMA 18 has no row (`claude-desktop`, unknown). A disable used
-            // to be UPDATE 0 rows; keep that no-op so profile switch can
-            // restore Desktop live files without inserting a CHECK-illegal row.
-            if !enabled {
-                return Ok(());
-            }
-            return Err(schema18_proxy_config_app_type_error(app_type));
         }
         let mut config = self.get_proxy_config_for_app(app_type).await?;
         config.enabled = enabled;
@@ -1069,103 +1018,6 @@ mod tests {
                 ..
             }
         ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn schema18_rejects_pi_proxy_config_row() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        let err = db
-            .set_default_cost_multiplier("pi", "1.5")
-            .await
-            .unwrap_err();
-        match err {
-            AppError::InvalidInput(msg) => {
-                assert!(msg.contains("proxy_takeover_pi"), "{msg}");
-                assert!(msg.contains("SCHEMA 18"), "{msg}");
-            }
-            other => panic!("expected InvalidInput, got {other:?}"),
-        }
-
-        let err = db
-            .update_proxy_config_for_app(crate::proxy::types::AppProxyConfig {
-                app_type: "pi".to_string(),
-                enabled: true,
-                auto_failover_enabled: false,
-                max_retries: 3,
-                streaming_first_byte_timeout: 60,
-                streaming_idle_timeout: 120,
-                non_streaming_timeout: 600,
-                circuit_failure_threshold: 4,
-                circuit_success_threshold: 2,
-                circuit_timeout_seconds: 60,
-                circuit_error_rate_threshold: 0.6,
-                circuit_min_requests: 10,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::InvalidInput(_)));
-
-        let pi_rows: i64 = {
-            let conn = db.conn.lock().expect("db lock");
-            conn.query_row(
-                "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count pi rows")
-        };
-        assert_eq!(pi_rows, 0);
-
-        let err = db
-            .update_proxy_config_for_app(crate::proxy::types::AppProxyConfig {
-                app_type: "claude-desktop".to_string(),
-                enabled: true,
-                auto_failover_enabled: false,
-                max_retries: 3,
-                streaming_first_byte_timeout: 60,
-                streaming_idle_timeout: 120,
-                non_streaming_timeout: 600,
-                circuit_failure_threshold: 4,
-                circuit_success_threshold: 2,
-                circuit_timeout_seconds: 60,
-                circuit_error_rate_threshold: 0.6,
-                circuit_min_requests: 10,
-            })
-            .await
-            .unwrap_err();
-        match err {
-            AppError::InvalidInput(msg) => {
-                assert!(msg.contains("claude-desktop"), "{msg}");
-                assert!(msg.contains("claude"), "{msg}");
-            }
-            other => panic!("expected InvalidInput, got {other:?}"),
-        }
-        let desktop_rows: i64 = {
-            let conn = db.conn.lock().expect("db lock");
-            conn.query_row(
-                "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'claude-desktop'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count claude-desktop rows")
-        };
-        assert_eq!(desktop_rows, 0);
-
-        db.set_app_takeover_enabled("claude-desktop", false).await?;
-        let err = db
-            .set_app_takeover_enabled("claude-desktop", true)
-            .await
-            .unwrap_err();
-        match err {
-            AppError::InvalidInput(msg) => {
-                assert!(msg.contains("claude-desktop"), "{msg}");
-            }
-            other => panic!("expected InvalidInput, got {other:?}"),
-        }
-        assert_eq!(crate::database::SCHEMA_VERSION, 18);
 
         Ok(())
     }

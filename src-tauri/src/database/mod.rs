@@ -29,8 +29,6 @@ mod migration;
 mod schema;
 
 #[cfg(test)]
-mod schema18_guardrails;
-#[cfg(test)]
 mod tests;
 
 // DAO 类型导出供外部使用
@@ -50,20 +48,12 @@ use crate::error::AppError;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
 use std::sync::Mutex;
-use std::time::Duration;
-
-/// Wait for the single shared connection instead of failing immediately when a
-/// backup, session import, or proxy log write overlaps. SQLite's default is 0.
-const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 // DAO 方法通过 impl Database 提供，无需额外导出
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-///
-/// Fork lock: stay on 18. Pi takeover uses `settings.proxy_takeover_pi`
-/// rather than a `proxy_config.app_type = 'pi'` row.
-pub const SCHEMA_VERSION: i32 = 18;
+pub(crate) const SCHEMA_VERSION: i32 = 18;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -117,7 +107,10 @@ impl Database {
         }
 
         let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
-        Self::configure_connection(&conn, true)?;
+
+        // 启用外键约束
+        conn.execute("PRAGMA foreign_keys = ON;", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
         if !db_exists {
             // For a brand-new database, configure incremental auto-vacuum
             // before creating any tables so no rebuild is needed later.
@@ -155,9 +148,20 @@ impl Database {
             log::warn!("Failed to sync local model pricing file: {e}");
         }
 
-        // Log rollup / vacuum / stream-check cleanup run after setup returns
-        // (`periodic_backup_if_needed` in lib.rs), so first paint is not blocked
-        // by a COUNT+DELETE over a large `proxy_request_logs` table.
+        // Startup cleanup: prune old logs and reclaim space
+        if let Err(e) = db.cleanup_old_stream_check_logs(7) {
+            log::warn!("Startup stream_check_logs cleanup failed: {e}");
+        }
+        if let Err(e) = db.rollup_and_prune(30) {
+            log::warn!("Startup rollup_and_prune failed: {e}");
+        }
+        // Reclaim disk space after cleanup
+        {
+            let conn = lock_conn!(db.conn);
+            if let Err(e) = conn.execute_batch("PRAGMA incremental_vacuum;") {
+                log::warn!("Startup incremental vacuum failed: {e}");
+            }
+        }
 
         Ok(db)
     }
@@ -181,7 +185,10 @@ impl Database {
     /// 创建内存数据库（用于测试）
     pub fn memory() -> Result<Self, AppError> {
         let conn = Connection::open_in_memory().map_err(|e| AppError::Database(e.to_string()))?;
-        Self::configure_connection(&conn, false)?;
+
+        // 启用外键约束
+        conn.execute("PRAGMA foreign_keys = ON;", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         register_db_change_hook(&conn);
@@ -198,36 +205,6 @@ impl Database {
     pub(crate) fn get_auto_vacuum_mode(conn: &Connection) -> Result<i32, AppError> {
         conn.query_row("PRAGMA auto_vacuum;", [], |row| row.get(0))
             .map_err(|e| AppError::Database(format!("读取 auto_vacuum 失败: {e}")))
-    }
-
-    /// Apply runtime PRAGMAs that do not belong in schema migrations.
-    ///
-    /// WAL + `synchronous=NORMAL` avoids the DELETE-journal create/fsync/unlink
-    /// tax on every autocommit (proxy request logs, session import). Backup uses
-    /// the SQLite Backup API, which is WAL-safe. In-memory databases cannot use
-    /// WAL, so tests pass `enable_wal = false`.
-    pub(crate) fn configure_connection(
-        conn: &Connection,
-        enable_wal: bool,
-    ) -> Result<(), AppError> {
-        conn.busy_timeout(SQLITE_BUSY_TIMEOUT)
-            .map_err(|e| AppError::Database(format!("设置 busy_timeout 失败: {e}")))?;
-        conn.execute("PRAGMA foreign_keys = ON;", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        if !enable_wal {
-            return Ok(());
-        }
-
-        let journal_mode: String = conn
-            .query_row("PRAGMA journal_mode = WAL;", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(format!("设置 journal_mode 失败: {e}")))?;
-        if !journal_mode.eq_ignore_ascii_case("wal") {
-            log::warn!("SQLite WAL 未生效（journal_mode={journal_mode}），继续使用当前日志模式");
-            return Ok(());
-        }
-        conn.execute("PRAGMA synchronous = NORMAL;", [])
-            .map_err(|e| AppError::Database(format!("设置 synchronous 失败: {e}")))?;
-        Ok(())
     }
 
     fn has_user_tables(conn: &Connection) -> Result<bool, AppError> {
@@ -261,14 +238,6 @@ impl Database {
             .map_err(|e| AppError::Database(format!("执行 VACUUM 失败: {e}")))?;
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(format!("恢复 foreign_keys 失败: {e}")))?;
-        // VACUUM rebuilds the file image and can drop WAL; restore runtime PRAGMAs
-        // for file-backed connections. In-memory DBs stay on journal_mode=memory.
-        let journal_mode: String = conn
-            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(format!("读取 journal_mode 失败: {e}")))?;
-        if !journal_mode.eq_ignore_ascii_case("memory") {
-            Self::configure_connection(conn, true)?;
-        }
         Ok(true)
     }
 

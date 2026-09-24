@@ -7,8 +7,6 @@ release/
 .env.local
 *.tsbuildinfo
 .npmrc
-__pycache__/
-*.pyc
 CLAUDE.md
 AGENTS.md
 GEMINI.md
@@ -19,7 +17,6 @@ GEMINI.md
 /.idea
 /.vscode
 vitest-report.json
-docs/self-test-reports/*.log
 nul
 
 # Flatpak build artifacts

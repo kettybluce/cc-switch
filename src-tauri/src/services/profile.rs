@@ -14,7 +14,6 @@
 //! apply 为 best-effort：单项失败收集为 warning 继续，不整体回滚。
 
 use std::collections::HashSet;
-use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -193,18 +192,6 @@ fn plan_toggles(
 
 pub struct ProfileService;
 
-fn lock_profile_apply(scope: ProfileScope) -> MutexGuard<'static, ()> {
-    static CLAUDE: Mutex<()> = Mutex::new(());
-    static CLAUDE_DESKTOP: Mutex<()> = Mutex::new(());
-    static CODEX: Mutex<()> = Mutex::new(());
-    let lock = match scope {
-        ProfileScope::Claude => &CLAUDE,
-        ProfileScope::ClaudeDesktop => &CLAUDE_DESKTOP,
-        ProfileScope::Codex => &CODEX,
-    };
-    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 impl ProfileService {
     /// 抓取分组内应用的当前配置状态生成快照（组外槽位保持默认值）
     pub fn snapshot_current(
@@ -346,10 +333,6 @@ impl ProfileService {
         scope: ProfileScope,
     ) -> Result<(Vec<String>, bool), AppError> {
         let mut warnings = Vec::new();
-        // Serialize the whole apply (autosave → disable takeover → switch →
-        // current_profile_id) so overlapping applies cannot leave the live
-        // provider pointing at B while current_profile_id still says A.
-        let _scope_guard = lock_profile_apply(scope);
 
         // 自动保存旧项目当前状态（仅当前分组），失败不阻塞切换
         if let Some(current_id) = state.db.get_current_profile_id(scope.as_str())? {
@@ -376,32 +359,13 @@ impl ProfileService {
             ));
         }
 
-        // Hold per-app switch locks across disable + switch + set_current so a
-        // concurrent takeover enable cannot sneak into the gap that used to
-        // exist between disable_takeover_for_app_sync (previously unlocked)
-        // and ProviderService::switch.
-        let mut switch_guards: Vec<tokio::sync::OwnedMutexGuard<()>> = Vec::new();
-        for app in scope.apps() {
-            if app.supports_proxy_takeover() {
-                switch_guards.push(futures::executor::block_on(
-                    state.proxy_service.lock_switch_for_app(app.as_str()),
-                ));
-            }
-        }
-        let holds_switch_lock = !switch_guards.is_empty();
-
         for app in scope.apps().iter() {
             let app_str = app.as_str();
 
             // 1. 切换项目前无条件关闭当前应用的代理接管。
             // 接管态下 live 文件属于代理；用户希望切换工作目录时总是退出当前
             // 代理环境，再按快照写入真实供应商配置。
-            let disable_result = if holds_switch_lock {
-                state.proxy_service.disable_takeover_for_app_sync_inner(app)
-            } else {
-                state.proxy_service.disable_takeover_for_app_sync(app)
-            };
-            if let Err(e) = disable_result {
+            if let Err(e) = state.proxy_service.disable_takeover_for_app_sync(app) {
                 warnings.push(format!(
                     "[{app_str}] auto-disable proxy takeover before profile switch failed: {e}"
                 ));
@@ -417,12 +381,7 @@ impl ProfileService {
                 } else {
                     let current = crate::settings::get_effective_current_provider(&state.db, app)?;
                     if current.as_deref() != Some(target_pid.as_str()) {
-                        let switch_result = if holds_switch_lock {
-                            ProviderService::switch_locked(state, app.clone(), target_pid)
-                        } else {
-                            ProviderService::switch(state, app.clone(), target_pid)
-                        };
-                        match switch_result {
+                        match ProviderService::switch(state, app.clone(), target_pid) {
                             Ok(result) => warnings.extend(result.warnings),
                             Err(e) => warnings.push(format!(
                                 "[{app_str}] switch provider '{target_pid}' failed: {e}"
@@ -498,8 +457,6 @@ impl ProfileService {
         state
             .db
             .set_current_profile_id(scope.as_str(), Some(profile_id))?;
-        // Keep per-app switch locks until current_profile_id is committed.
-        drop(switch_guards);
 
         // 当前分组内所有接管已关闭；若其它应用也无接管，可停止代理服务。
         let should_stop_proxy = !state.db.is_live_takeover_active_sync();

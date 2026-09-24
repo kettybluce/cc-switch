@@ -167,7 +167,6 @@ pub fn setup_panic_hook() {
             // 尝试使用 Display trait
             format!("{panic_info}")
         };
-        let message = crate::redact_secret_text(&message);
 
         // 获取位置信息
         let location = if let Some(loc) = panic_info.location() {
@@ -260,15 +259,6 @@ mod tests {
         assert!(info.contains("OS:"));
         assert!(info.contains("Arch:"));
         assert!(info.contains("App Version:"));
-    }
-
-    #[test]
-    fn crash_message_does_not_print_raw_keys() {
-        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
-        let redacted = crate::redact_secret_text(&format!("panic while using {key}"));
-        assert!(!redacted.contains(key), "{redacted}");
-        assert!(!redacted.contains("TESTSECRETVALUE99"), "{redacted}");
-        assert!(redacted.contains("[REDACTED]"), "{redacted}");
     }
 
     #[test]

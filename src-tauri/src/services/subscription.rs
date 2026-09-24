@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::config;
 
@@ -26,7 +26,7 @@ pub enum CredentialStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaTier {
-    /// 窗口标识：five_hour, seven_day, seven_day_fable, seven_day_opus 等
+    /// 窗口标识：five_hour, seven_day, seven_day_opus, seven_day_sonnet 等
     pub name: String,
     /// 使用百分比 0–100
     pub utilization: f64,
@@ -287,13 +287,6 @@ struct ApiUsageWindow {
     resets_at: Option<String>,
 }
 
-/// `limits[]` 中的窗口使用 `percent`，而非旧顶层窗口的 `utilization`。
-#[derive(Deserialize)]
-struct ApiScopedUsageWindow {
-    percent: f64,
-    resets_at: Option<String>,
-}
-
 /// Claude OAuth 用量 API 响应中的超额用量
 #[derive(Deserialize)]
 struct ApiExtraUsage {
@@ -304,11 +297,9 @@ struct ApiExtraUsage {
     currency: Option<String>,
 }
 
-/// 已知的 Claude 用量窗口名称；未知的旧格式窗口仍保留原名称。
+/// 已知的 Claude 用量窗口名称。`QuotaTier::name` 会是其中之一。
 pub const TIER_FIVE_HOUR: &str = "five_hour";
 pub const TIER_SEVEN_DAY: &str = "seven_day";
-/// 内部统一名称：Fable 实际由 `limits[].scope.model` 标识。
-pub const TIER_SEVEN_DAY_FABLE: &str = "seven_day_fable";
 pub const TIER_SEVEN_DAY_OPUS: &str = "seven_day_opus";
 pub const TIER_SEVEN_DAY_SONNET: &str = "seven_day_sonnet";
 
@@ -341,7 +332,6 @@ pub const TIER_GEMINI_FLASH_LITE: &str = "gemini_flash_lite";
 const KNOWN_TIERS: &[&str] = &[
     TIER_FIVE_HOUR,
     TIER_SEVEN_DAY,
-    TIER_SEVEN_DAY_FABLE,
     TIER_SEVEN_DAY_OPUS,
     TIER_SEVEN_DAY_SONNET,
 ];
@@ -404,11 +394,6 @@ async fn query_claude_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         }
     };
 
-    Ok(parse_claude_quota(&body))
-}
-
-/// 兼容旧顶层窗口与新版模型专属周限额，保持查询、缓存和 UI 共用 QuotaTier。
-fn parse_claude_quota(body: &serde_json::Value) -> SubscriptionQuota {
     // 解析已知的 tier 窗口
     let mut tiers = Vec::new();
     for &tier_name in KNOWN_TIERS {
@@ -430,7 +415,7 @@ fn parse_claude_quota(body: &serde_json::Value) -> SubscriptionQuota {
     // 也解析未知窗口（API 可能返回新的窗口类型）
     if let Some(obj) = body.as_object() {
         for (key, value) in obj {
-            if key == "extra_usage" || key == "limits" || KNOWN_TIERS.contains(&key.as_str()) {
+            if key == "extra_usage" || KNOWN_TIERS.contains(&key.as_str()) {
                 continue;
             }
             if let Ok(w) = serde_json::from_value::<ApiUsageWindow>(value.clone()) {
@@ -447,61 +432,6 @@ fn parse_claude_quota(body: &serde_json::Value) -> SubscriptionQuota {
         }
     }
 
-    // 新版模型专属额度覆盖同名旧窗口。逐条解析，单个异常项目不影响其余额度。
-    let mut scoped_tiers = HashSet::new();
-    if let Some(limits) = body.get("limits").and_then(serde_json::Value::as_array) {
-        for limit in limits {
-            if limit.get("kind").and_then(serde_json::Value::as_str) != Some("weekly_scoped")
-                || limit.get("group").and_then(serde_json::Value::as_str) != Some("weekly")
-                // 不把特定使用场景的子限额合并进整个模型的周限额。
-                || limit.pointer("/scope/surface").is_some_and(|v| !v.is_null())
-            {
-                continue;
-            }
-            let Some(model) = limit
-                .pointer("/scope/model/display_name")
-                .and_then(serde_json::Value::as_str)
-            else {
-                continue;
-            };
-            let tier_name = match model.trim().to_ascii_lowercase().as_str() {
-                "fable" => TIER_SEVEN_DAY_FABLE,
-                "opus" => TIER_SEVEN_DAY_OPUS,
-                "sonnet" => TIER_SEVEN_DAY_SONNET,
-                _ => continue,
-            };
-            let Ok(window) = serde_json::from_value::<ApiScopedUsageWindow>(limit.clone()) else {
-                continue;
-            };
-            if !window.percent.is_finite()
-                || window.percent < 0.0
-                || !scoped_tiers.insert(tier_name)
-            {
-                continue;
-            }
-            // 与 Claude Code 一致：不按 is_active 过滤。0% / resets_at:null
-            // 也可能是有效的模型额度；不存在的额度由接口省略。
-            let tier = QuotaTier {
-                name: tier_name.to_string(),
-                utilization: window.percent,
-                resets_at: window.resets_at,
-                used_value_usd: None,
-                max_value_usd: None,
-            };
-            if let Some(existing) = tiers.iter_mut().find(|t| t.name == tier_name) {
-                *existing = tier;
-            } else {
-                tiers.push(tier);
-            }
-        }
-    }
-    tiers.sort_by_key(|tier| {
-        KNOWN_TIERS
-            .iter()
-            .position(|&name| name == tier.name)
-            .unwrap_or(KNOWN_TIERS.len())
-    });
-
     // 解析超额使用
     let extra_usage = body.get("extra_usage").and_then(|v| {
         serde_json::from_value::<ApiExtraUsage>(v.clone())
@@ -515,7 +445,7 @@ fn parse_claude_quota(body: &serde_json::Value) -> SubscriptionQuota {
             })
     });
 
-    SubscriptionQuota {
+    Ok(SubscriptionQuota {
         tool: "claude".to_string(),
         credential_status: CredentialStatus::Valid,
         credential_message: None,
@@ -524,7 +454,7 @@ fn parse_claude_quota(body: &serde_json::Value) -> SubscriptionQuota {
         extra_usage,
         error: None,
         queried_at: Some(now_millis()),
-    }
+    })
 }
 
 // ── Codex 凭据读取 ──────────────────────────────────────
@@ -1433,314 +1363,6 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scoped_limit(model: &str, percent: f64) -> serde_json::Value {
-        serde_json::json!({
-            "kind": "weekly_scoped",
-            "group": "weekly",
-            "percent": percent,
-            "resets_at": "2026-09-12T00:00:00Z",
-            "is_active": true,
-            "scope": { "model": { "id": null, "display_name": model }, "surface": null }
-        })
-    }
-
-    #[test]
-    fn claude_quota_preserves_legacy_windows_and_extra_usage() {
-        let quota = parse_claude_quota(&serde_json::json!({
-            "five_hour": { "utilization": 12.0, "resets_at": "2026-09-09T15:00:00Z" },
-            "seven_day": { "utilization": 25.0, "resets_at": null },
-            "seven_day_opus": { "utilization": 8.0 },
-            "seven_day_sonnet": null,
-            "other_window": { "utilization": 4.0 },
-            "extra_usage": { "is_enabled": true, "monthly_limit": 100.0,
-                "used_credits": 9.0, "utilization": 9.0, "currency": "USD" }
-        }));
-        assert!(quota.success);
-        assert_eq!(quota.tool, "claude");
-        assert_eq!(
-            quota
-                .tiers
-                .iter()
-                .map(|t| (t.name.as_str(), t.utilization))
-                .collect::<Vec<_>>(),
-            vec![
-                (TIER_FIVE_HOUR, 12.0),
-                (TIER_SEVEN_DAY, 25.0),
-                (TIER_SEVEN_DAY_OPUS, 8.0),
-                ("other_window", 4.0)
-            ]
-        );
-        assert_eq!(
-            quota.tiers[0].resets_at.as_deref(),
-            Some("2026-09-09T15:00:00Z")
-        );
-        let extra = quota.extra_usage.unwrap();
-        assert!(extra.is_enabled);
-        assert_eq!(extra.used_credits, Some(9.0));
-        assert_eq!(extra.monthly_limit, Some(100.0));
-        assert_eq!(extra.currency.as_deref(), Some("USD"));
-    }
-
-    #[test]
-    fn claude_quota_adds_fable_from_limits_array() {
-        let quota = parse_claude_quota(&serde_json::json!({
-            "five_hour": { "utilization": 12.0 },
-            "seven_day": { "utilization": 25.0 },
-            "seven_day_opus": null,
-            "seven_day_sonnet": null,
-            "limits": [scoped_limit("Fable", 37.5)]
-        }));
-        assert_eq!(quota.tiers.len(), 3);
-        let tier = &quota.tiers[2];
-        assert_eq!(tier.name, TIER_SEVEN_DAY_FABLE);
-        assert_eq!(tier.utilization, 37.5);
-        assert_eq!(tier.resets_at.as_deref(), Some("2026-09-12T00:00:00Z"));
-        // 前端与缓存使用同一份 camelCase 数据，无需额外字段。
-        let serialized = serde_json::to_value(&quota).unwrap();
-        assert_eq!(serialized["tiers"][2]["resetsAt"], "2026-09-12T00:00:00Z");
-    }
-
-    #[test]
-    fn claude_quota_scoped_windows_override_legacy_and_deduplicate() {
-        let mut fable = scoped_limit("  fAbLe  ", 0.0);
-        fable["is_active"] = serde_json::json!(false);
-        fable["resets_at"] = serde_json::Value::Null;
-        let quota = parse_claude_quota(&serde_json::json!({
-            "seven_day_fable": { "utilization": 80.0, "resets_at": "2026-09-11T00:00:00Z" },
-            "seven_day_opus": { "utilization": 20.0 },
-            "seven_day_sonnet": { "utilization": 30.0 },
-            "limits": [scoped_limit("Sonnet", 5.0), fable, scoped_limit("Fable", 90.0), scoped_limit("Opus", 6.0)]
-        }));
-        assert_eq!(
-            quota
-                .tiers
-                .iter()
-                .map(|t| (t.name.as_str(), t.utilization))
-                .collect::<Vec<_>>(),
-            vec![
-                (TIER_SEVEN_DAY_FABLE, 0.0),
-                (TIER_SEVEN_DAY_OPUS, 6.0),
-                (TIER_SEVEN_DAY_SONNET, 5.0)
-            ]
-        );
-        assert_eq!(quota.tiers[0].resets_at, None);
-    }
-
-    #[test]
-    fn claude_quota_skips_invalid_or_unrelated_scoped_rows() {
-        let valid = scoped_limit("Fable", 37.0);
-        let mut invalid = vec![serde_json::Value::Null, serde_json::json!("invalid")];
-        for (pointer, value) in [
-            ("/kind", serde_json::json!("spend")),
-            ("/group", serde_json::json!("daily")),
-            ("/percent", serde_json::Value::Null),
-            ("/percent", serde_json::json!("37")),
-            ("/percent", serde_json::json!(-1)),
-            ("/resets_at", serde_json::json!(123)),
-            ("/scope/model/display_name", serde_json::Value::Null),
-            ("/scope/model/display_name", serde_json::json!("Unknown")),
-            ("/scope/surface", serde_json::json!("claude_code")),
-        ] {
-            let mut row = valid.clone();
-            *row.pointer_mut(pointer).unwrap() = value;
-            invalid.push(row);
-        }
-        let mut body = serde_json::json!({
-            "five_hour": { "utilization": 12.0 },
-            "seven_day_fable": { "utilization": 8.0 },
-            "limits": invalid
-        });
-        let fallback = parse_claude_quota(&body);
-        assert_eq!(fallback.tiers.len(), 2);
-        assert_eq!(fallback.tiers[1].utilization, 8.0);
-        body["limits"].as_array_mut().unwrap().push(valid);
-        let quota = parse_claude_quota(&body);
-        assert_eq!(quota.tiers.len(), 2);
-        assert_eq!(quota.tiers[0].utilization, 12.0);
-        assert_eq!(quota.tiers[1].utilization, 37.0);
-    }
-
-    #[test]
-    fn claude_quota_does_not_invent_missing_fable_usage() {
-        for limits in [
-            serde_json::Value::Null,
-            serde_json::json!([]),
-            serde_json::json!({}),
-        ] {
-            let quota = parse_claude_quota(&serde_json::json!({
-                "five_hour": { "utilization": 12.0 },
-                "limits": limits
-            }));
-            assert_eq!(quota.tiers.len(), 1);
-            assert_eq!(quota.tiers[0].name, TIER_FIVE_HOUR);
-        }
-        let quota =
-            parse_claude_quota(&serde_json::json!({ "limits": [scoped_limit("Fable", 100.0)] }));
-        assert_eq!(quota.tiers.len(), 1);
-        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_FABLE);
-        assert_eq!(quota.tiers[0].utilization, 100.0);
-    }
-
-    #[test]
-    fn claude_quota_limits_percent_integer_and_over_100_are_kept() {
-        // percent 是 JSON 整数也能进 f64;>100 仍展示(渲染层再裁)。
-        let mut fable = scoped_limit("Fable", 0.0);
-        fable["percent"] = serde_json::json!(37);
-        let quota = parse_claude_quota(&serde_json::json!({
-            "limits": [fable, scoped_limit("Opus", 150.0)]
-        }));
-        assert_eq!(
-            quota
-                .tiers
-                .iter()
-                .map(|t| (t.name.as_str(), t.utilization))
-                .collect::<Vec<_>>(),
-            vec![(TIER_SEVEN_DAY_FABLE, 37.0), (TIER_SEVEN_DAY_OPUS, 150.0)]
-        );
-    }
-
-    #[test]
-    fn claude_quota_limits_skip_haiku_and_blank_or_unrelated_models() {
-        let quota = parse_claude_quota(&serde_json::json!({
-            "five_hour": { "utilization": 4.0 },
-            "limits": [
-                scoped_limit("Haiku", 88.0),
-                scoped_limit("Claude Fable", 88.0),
-                scoped_limit("", 10.0),
-                scoped_limit("   ", 11.0),
-                scoped_limit("Fable", 22.0)
-            ]
-        }));
-        assert_eq!(
-            quota
-                .tiers
-                .iter()
-                .map(|t| (t.name.as_str(), t.utilization))
-                .collect::<Vec<_>>(),
-            vec![(TIER_FIVE_HOUR, 4.0), (TIER_SEVEN_DAY_FABLE, 22.0)]
-        );
-    }
-
-    #[test]
-    fn claude_quota_limits_kind_and_group_are_case_sensitive() {
-        let mut weekly = scoped_limit("Fable", 40.0);
-        weekly["kind"] = serde_json::json!("Weekly_Scoped");
-        let mut group = scoped_limit("Fable", 41.0);
-        group["group"] = serde_json::json!("Weekly");
-        let quota = parse_claude_quota(&serde_json::json!({
-            "limits": [weekly, group, scoped_limit("Fable", 9.0)]
-        }));
-        assert_eq!(quota.tiers.len(), 1);
-        assert_eq!(quota.tiers[0].utilization, 9.0);
-    }
-
-    #[test]
-    fn claude_quota_limits_surface_empty_string_is_skipped_null_is_kept() {
-        let mut empty_surface = scoped_limit("Fable", 10.0);
-        empty_surface["scope"]["surface"] = serde_json::json!("");
-        let mut missing_surface = scoped_limit("Opus", 20.0);
-        missing_surface["scope"]
-            .as_object_mut()
-            .unwrap()
-            .remove("surface");
-        let quota = parse_claude_quota(&serde_json::json!({
-            "limits": [empty_surface, missing_surface, scoped_limit("Sonnet", 30.0)]
-        }));
-        assert_eq!(
-            quota
-                .tiers
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>(),
-            vec![TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET]
-        );
-    }
-
-    #[test]
-    fn claude_quota_limits_first_fable_row_wins_on_duplicates() {
-        let quota = parse_claude_quota(&serde_json::json!({
-            "limits": [
-                scoped_limit("Fable", 1.0),
-                scoped_limit("Fable", 99.0),
-                scoped_limit("fable", 50.0)
-            ]
-        }));
-        assert_eq!(quota.tiers.len(), 1);
-        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_FABLE);
-        assert_eq!(quota.tiers[0].utilization, 1.0);
-    }
-
-    #[test]
-    fn claude_quota_limits_unknown_fields_and_model_id_are_ignored() {
-        let mut row = scoped_limit("\n Fable \t", 12.5);
-        row["extra"] = serde_json::json!("ignored");
-        row["scope"]["model"]["id"] = serde_json::json!("claude-fable");
-        let quota = parse_claude_quota(&serde_json::json!({
-            "extra_usage": { "is_enabled": true, "used_credits": 1.0 },
-            "limits": [row]
-        }));
-        assert_eq!(quota.tiers.len(), 1);
-        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_FABLE);
-        assert_eq!(quota.tiers[0].utilization, 12.5);
-        assert!(quota.extra_usage.unwrap().is_enabled);
-    }
-
-    #[test]
-    fn claude_quota_limits_object_or_missing_does_not_invent_fable() {
-        for body in [
-            serde_json::json!({ "five_hour": { "utilization": 3.0 } }),
-            serde_json::json!({ "five_hour": { "utilization": 3.0 }, "limits": { "Fable": 1 } }),
-            serde_json::json!({ "five_hour": { "utilization": 3.0 }, "limits": "weekly" }),
-        ] {
-            let quota = parse_claude_quota(&body);
-            assert_eq!(quota.tiers.len(), 1);
-            assert_eq!(quota.tiers[0].name, TIER_FIVE_HOUR);
-        }
-    }
-
-    #[test]
-    fn claude_quota_limits_sorts_fable_among_known_tiers() {
-        let quota = parse_claude_quota(&serde_json::json!({
-            "other_window": { "utilization": 1.0 },
-            "seven_day": { "utilization": 8.0 },
-            "five_hour": { "utilization": 2.0 },
-            "limits": [scoped_limit("Sonnet", 4.0), scoped_limit("Fable", 3.0)]
-        }));
-        assert_eq!(
-            quota
-                .tiers
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                TIER_FIVE_HOUR,
-                TIER_SEVEN_DAY,
-                TIER_SEVEN_DAY_FABLE,
-                TIER_SEVEN_DAY_SONNET,
-                "other_window"
-            ]
-        );
-    }
-
-    #[test]
-    fn claude_quota_limits_empty_resets_at_is_preserved() {
-        let mut row = scoped_limit("Fable", 0.0);
-        row["resets_at"] = serde_json::json!("");
-        let quota = parse_claude_quota(&serde_json::json!({ "limits": [row] }));
-        assert_eq!(quota.tiers[0].resets_at.as_deref(), Some(""));
-    }
-
-    #[test]
-    fn claude_quota_limits_model_as_string_is_skipped() {
-        let mut row = scoped_limit("Fable", 40.0);
-        row["scope"]["model"] = serde_json::json!("Fable");
-        let quota = parse_claude_quota(&serde_json::json!({
-            "limits": [row, scoped_limit("Opus", 5.0)]
-        }));
-        assert_eq!(quota.tiers.len(), 1);
-        assert_eq!(quota.tiers[0].name, TIER_SEVEN_DAY_OPUS);
-    }
 
     #[test]
     fn window_seconds_map_to_expected_tier_names() {

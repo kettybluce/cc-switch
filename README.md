@@ -95,8 +95,8 @@ Register now via <a href="https://pateway.ai/?ch=etzpm8&aff=WB6M6F67#/">this lin
 </tr>
 
 <tr>
-<td width="180"><a href="https://apikey.fan/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
-<td>Thanks to APIKEY.FUN for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI relay platform dedicated to providing stable, efficient, and low-cost AI model API access for enterprises and individual developers. The platform supports popular mainstream models such as Claude, OpenAI, and Gemini, with prices as low as 7% of official rates. Register through this project's <a href="https://apikey.fan/register?aff=CCSwitch">exclusive link</a> to enjoy an exclusive offer of up to <strong>permanent 5% off top-ups</strong>.</td>
+<td width="180"><a href="https://apikey.fun/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
+<td>Thanks to APIKEY.FUN for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI relay platform dedicated to providing stable, efficient, and low-cost AI model API access for enterprises and individual developers. The platform supports popular mainstream models such as Claude, OpenAI, and Gemini, with prices as low as 7% of official rates. Register through this project's <a href="https://apikey.fun/register?aff=CCSwitch">exclusive link</a> to enjoy an exclusive offer of up to <strong>permanent 5% off top-ups</strong>.</td>
 </tr>
 
 <tr>
@@ -533,18 +533,6 @@ pnpm test:unit:watch
 # With coverage report
 pnpm test:unit --coverage
 ```
-
-**Docker backend self-test** (Linux image, no Windows `C:`, no Tauri GUI). **Default is the full `src-tauri` cargo suite**, and every run writes a Chinese report under `docs/self-test-reports/`:
-
-```bash
-# Ubuntu 22.04 image + isolated CC_SWITCH_TEST_HOME under /tmp
-# 默认全量；每次给全量自测报告
-pnpm test:docker
-# same: make test-docker   /   bash scripts/docker-self-test.sh
-# alias: pnpm test:docker:all
-```
-
-This covers SCHEMA 18 Pi/Claude/Codex fixtures including takeover roundtrips (#51), isolated-HOME JSONL usage scan (#64), concurrent profile/provider race (#77), Codex OAuth stale-binding cases (#76), and OpenCode/Hermes/OpenClaw additive CRUD (`additive_provider_surface`). After self-test work, shipping Portable/MSI **requires** this full-suite report. It does **not** cover WSL UNC, Windows MSI/Portable install, or the full desktop GUI. SCHEMA stays 18. See [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md) and [docs/additive-provider-surface-tests-zh.md](docs/additive-provider-surface-tests-zh.md).
 
 ### Tech Stack
 

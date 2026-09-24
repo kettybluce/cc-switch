@@ -24,12 +24,6 @@ i18n:
   - changed-files:
       - any-glob-to-any-file:
           - "src/i18n/locales/**"
-          - "scripts/check-i18n-parity.mjs"
-          - "scripts/lib/i18n-parity.mjs"
-          - "tests/config/*Locale*"
-          - "tests/config/i18n*"
-          - "tests/config/uiLocaleKeys.test.ts"
-          - "tests/config/providerPresetI18n.test.ts"
 
 actions:
   - changed-files:

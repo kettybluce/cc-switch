@@ -199,7 +199,7 @@ impl<'a> UsageLogger<'a> {
                     log.latency_ms as i64,
                     log.first_token_ms.map(|v| v as i64),
                     log.status_code as i64,
-                    log.error_message.as_deref().map(crate::redact_secret_text),
+                    log.error_message,
                     log.session_id,
                     log.provider_type,
                     log.is_streaming as i64,
@@ -764,62 +764,6 @@ mod tests {
             .unwrap();
         assert_eq!(status, 500);
         assert_eq!(error, Some("Internal Server Error".to_string()));
-        Ok(())
-    }
-
-    #[test]
-    fn request_logs_do_not_store_raw_keys_for_claude_codex_pi() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let logger = UsageLogger::new(&db);
-        let key = "sk-ant-api03-TESTSECRETVALUE99xxxx";
-        let leaked = format!("上游错误 (401): invalid api_key: {key}");
-
-        for (request_id, app_type) in [
-            ("req-claude-key", "claude"),
-            ("req-codex-key", "codex"),
-            ("req-pi-key", "pi"),
-        ] {
-            logger.log_error_with_context(
-                request_id.to_string(),
-                "provider-1".to_string(),
-                app_type.to_string(),
-                "secret-model".to_string(),
-                401,
-                leaked.clone(),
-                12,
-                false,
-                None,
-                None,
-            )?;
-        }
-
-        let conn = crate::database::lock_conn!(db.conn);
-        let rows: Vec<(String, String, Option<String>)> = conn
-            .prepare(
-                "SELECT request_id, app_type, error_message FROM proxy_request_logs
-                 WHERE request_id IN ('req-claude-key', 'req-codex-key', 'req-pi-key')
-                 ORDER BY request_id",
-            )?
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .collect::<Result<_, _>>()?;
-
-        assert_eq!(rows.len(), 3);
-        assert_eq!(crate::database::SCHEMA_VERSION, 18);
-        for (request_id, app_type, error_message) in rows {
-            let message = error_message.expect("error_message");
-            assert!(
-                !message.contains(key),
-                "{request_id}/{app_type} stored raw key: {message}"
-            );
-            assert!(
-                !message.contains("TESTSECRETVALUE99"),
-                "{request_id}/{app_type} stored key fragment: {message}"
-            );
-            assert!(
-                message.contains("[REDACTED]"),
-                "{request_id}/{app_type} missing redaction: {message}"
-            );
-        }
         Ok(())
     }
 

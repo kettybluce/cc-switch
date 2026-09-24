@@ -210,20 +210,16 @@ pub fn normalize_deepseek_thinking_disabled_strip_effort(
         .and_then(|v| v.as_object_mut())
     {
         changed |= oc.remove("effort").is_some();
-        // Clean up empty output_config. Non-object roots skip this (no panic).
+        // Clean up empty output_config
         if oc.is_empty() {
-            if let Some(obj) = body.as_object_mut() {
-                obj.remove("output_config");
-            }
+            body.as_object_mut().unwrap().remove("output_config");
         }
     }
 
     // Remove reasoning_effort (OpenAI format, may be present in passthrough)
     if body.get("reasoning_effort").is_some() {
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("reasoning_effort");
-            changed = true;
-        }
+        body.as_object_mut().unwrap().remove("reasoning_effort");
+        changed = true;
     }
 
     changed
@@ -2835,15 +2831,5 @@ mod tests {
         assert!(changed);
         assert_eq!(body["thinking"]["type"], "disabled");
         assert!(body.get("output_config").is_none());
-    }
-
-    #[test]
-    fn test_deepseek_non_object_root_does_not_panic() {
-        let mut body = json!("not-an-object");
-        assert!(!normalize_deepseek_thinking_disabled_strip_effort(
-            &mut body,
-            &deepseek_official_provider(),
-        ));
-        assert_eq!(body, json!("not-an-object"));
     }
 }

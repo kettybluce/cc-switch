@@ -46,7 +46,7 @@ vi.mock("@/components/JsonEditor", () => ({
   ),
 }));
 
-describe("PiProviderForm", { timeout: 15_000 }, () => {
+describe("PiProviderForm", () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
   });
@@ -694,8 +694,7 @@ describe("PiProviderForm", { timeout: 15_000 }, () => {
     expect(config).not.toHaveProperty("authHeader");
     expect(config.headers).not.toHaveProperty("authorization");
     expect(config.headers).not.toHaveProperty("x-api-key");
-    // Radix API-format select + userEvent is slow under CI load (default 5s flake).
-  }, 15_000);
+  });
 
   it("echoes existing Pi headers and preserves them when saving", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);

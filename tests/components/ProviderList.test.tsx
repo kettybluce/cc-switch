@@ -27,7 +27,6 @@ vi.mock("@/components/providers/ProviderCard", () => ({
       onDelete,
       onDuplicate,
       onConfigureUsage,
-      onSetAsDefault,
     } = props;
 
     return (
@@ -62,17 +61,8 @@ vi.mock("@/components/providers/ProviderCard", () => ({
         >
           delete
         </button>
-        <button
-          data-testid={`set-default-${provider.id}`}
-          onClick={() => onSetAsDefault?.(undefined)}
-        >
-          set-default
-        </button>
         <span data-testid={`is-current-${provider.id}`}>
           {props.isCurrent ? "current" : "inactive"}
-        </span>
-        <span data-testid={`is-default-${provider.id}`}>
-          {props.isDefaultModel ? "default" : "not-default"}
         </span>
         <span data-testid={`drag-attr-${provider.id}`}>
           {props.dragHandleProps?.attributes?.["data-dnd-id"] ?? "none"}
@@ -421,59 +411,6 @@ describe("ProviderList Component", () => {
       });
       expect(currentCards.at(-1)).not.toHaveProperty("piCurrentRoute");
     });
-  });
-
-  it("forwards Pi set-as-default from the matching defaultProviderId", async () => {
-    const currentProvider = createProvider({
-      id: "current-pi",
-      name: "Current Pi",
-    });
-    const inactiveProvider = createProvider({
-      id: "inactive-pi",
-      name: "Inactive Pi",
-    });
-    const onSetAsDefault = vi.fn();
-    useDragSortMock.mockReturnValue({
-      sortedProviders: [currentProvider, inactiveProvider],
-      sensors: [],
-      handleDragEnd: vi.fn(),
-    });
-    server.use(
-      http.post(`${TAURI_ENDPOINT}/get_pi_current_state`, () =>
-        HttpResponse.json({
-          enabledProviderIds: ["current-pi", "inactive-pi"],
-          defaultProviderId: "current-pi",
-        }),
-      ),
-    );
-
-    renderWithQueryClient(
-      <ProviderList
-        providers={{
-          [currentProvider.id]: currentProvider,
-          [inactiveProvider.id]: inactiveProvider,
-        }}
-        currentProviderId="current-pi"
-        appId="pi"
-        onSwitch={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-        onDuplicate={vi.fn()}
-        onOpenWebsite={vi.fn()}
-        onSetAsDefault={onSetAsDefault}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("is-default-current-pi")).toHaveTextContent(
-        "default",
-      );
-    });
-    expect(screen.getByTestId("is-default-inactive-pi")).toHaveTextContent(
-      "not-default",
-    );
-    fireEvent.click(screen.getByTestId("set-default-inactive-pi"));
-    expect(onSetAsDefault).toHaveBeenCalledWith(inactiveProvider, undefined);
   });
 
   it("derives Pi membership only from the native provider ID list", async () => {

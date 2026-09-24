@@ -130,36 +130,6 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     icon: "kimi",
     iconColor: "#6366F1",
   },
-  // API 开放平台海外/Global 变体：platform.kimi.ai + api.moonshot.ai 端点
-  {
-    name: "Kimi Global",
-    providerKey: "cc-switch-kimi-global",
-    websiteUrl: "https://platform.kimi.ai?aff=cc-switch",
-    apiKeyUrl: "https://platform.kimi.ai/console/api-keys?aff=cc-switch",
-    settingsConfig: {
-      name: "Kimi",
-      baseUrl: "https://api.moonshot.ai/v1",
-      api: "openai-completions",
-      apiKey: "",
-      models: [
-        piModel("moonshotai/kimi-k2.7-code", {
-          id: "kimi-k2.7-code",
-          thinkingProfile: "offUnsupported",
-        }),
-        {
-          ...piModel("moonshotai/kimi-k3", {
-            id: "kimi-k3",
-            thinkingProfile: "kimi3",
-          }),
-          compat: { ...KIMI_K3_COMPAT },
-        },
-      ],
-    },
-    category: "cn_official",
-    partnerPromotionKey: "kimi",
-    icon: "kimi",
-    iconColor: "#6366F1",
-  },
   {
     name: "Kimi For Coding",
     providerKey: "cc-switch-kimi-for-coding",
@@ -180,29 +150,6 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     },
     category: "cn_official",
     primePartner: true,
-    icon: "kimi",
-    iconColor: "#6366F1",
-  },
-  // 海外/Global 变体：kimi.ai/code + api.kimi.ai 端点，其余与国内版一致
-  {
-    name: "Kimi For Coding Global",
-    providerKey: "cc-switch-kimi-for-coding-global",
-    websiteUrl: "https://www.kimi.ai/code?aff=cc-switch",
-    apiKeyUrl: "https://www.kimi.ai/code?aff=cc-switch",
-    settingsConfig: {
-      name: "Kimi For Coding",
-      baseUrl: "https://api.kimi.ai/coding",
-      api: "anthropic-messages",
-      apiKey: "",
-      models: [
-        piModel("moonshotai/kimi-k2.7-code", {
-          id: "kimi-for-coding",
-          name: "Kimi For Coding",
-          maxTokens: 32768,
-        }),
-      ],
-    },
-    category: "cn_official",
     icon: "kimi",
     iconColor: "#6366F1",
   },
@@ -467,11 +414,11 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
   {
     name: "APIKEY.FUN",
     providerKey: "cc-switch-apikey-fun",
-    websiteUrl: "https://apikey.fan",
-    apiKeyUrl: "https://apikey.fan/register?aff=CCSwitch",
+    websiteUrl: "https://apikey.fun",
+    apiKeyUrl: "https://apikey.fun/register?aff=CCSwitch",
     settingsConfig: {
       name: "APIKEY.FUN",
-      baseUrl: "https://api.apikey.fan",
+      baseUrl: "https://api.apikey.fun",
       api: "anthropic-messages",
       apiKey: "",
       models: [
@@ -667,15 +614,14 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     iconColor: "#3370FF",
   },
   {
-    name: "Volcengine Doubao",
-    nameKey: "providerForm.presets.doubaoseed",
+    name: "DouBaoSeed",
     providerKey: "cc-switch-dou-bao-seed",
     websiteUrl:
       "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D&utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch",
     apiKeyUrl:
       "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D&utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch",
     settingsConfig: {
-      name: "Volcengine Doubao",
+      name: "DouBaoSeed",
       baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
       api: "openai-completions",
       apiKey: "",

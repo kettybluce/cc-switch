@@ -95,8 +95,8 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 </tr>
 
 <tr>
-<td width="180"><a href="https://apikey.fan/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
-<td>感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fan/register?aff=CCSwitch">专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。</td>
+<td width="180"><a href="https://apikey.fun/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
+<td>感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fun/register?aff=CCSwitch">专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。</td>
 </tr>
 
 <tr>
@@ -538,18 +538,6 @@ pnpm test:unit:watch
 # 带覆盖率报告
 pnpm test:unit --coverage
 ```
-
-**Docker 后端自测**（Linux 镜像，不写 Windows `C:`，不跑 Tauri GUI）。**默认全量 `src-tauri` cargo 测试**；每次运行都会在 `docs/self-test-reports/` 写出中文全量自测报告：
-
-```bash
-# Ubuntu 22.04 镜像 + 容器内 /tmp 下隔离的 CC_SWITCH_TEST_HOME
-# 默认全量；每次给全量自测报告
-pnpm test:docker
-# 同样：make test-docker   /   bash scripts/docker-self-test.sh
-# 别名：pnpm test:docker:all
-```
-
-覆盖 SCHEMA 18 的 Pi/Claude/Codex 夹具（含 #51 接管往返）、隔离 HOME 的 JSONL 用量扫描（#64）、并发 profile/供应商竞态（#77）、Codex OAuth 失效绑定（#76），以及 OpenCode/Hermes/OpenClaw 累加式 CRUD（`additive_provider_surface`）。自测工作之后出绿色版/MSI **必须**附这份全量报告。**不覆盖** WSL UNC、Windows MSI/绿色版安装、完整桌面 GUI。SCHEMA 保持 18。详见 [docs/docker-backend-self-test.md](docs/docker-backend-self-test.md) 与 [docs/additive-provider-surface-tests-zh.md](docs/additive-provider-surface-tests-zh.md)。
 
 ### 技术栈
 

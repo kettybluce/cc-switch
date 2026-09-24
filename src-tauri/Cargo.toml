@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch"
-version = "3.20.13"
+version = "3.20.10"
 description = "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
 authors = ["Jason Young"]
 license = "MIT"
@@ -44,7 +44,7 @@ arboard = "3.6"
 flate2 = "1"
 brotli = "7"
 zstd = "0.13"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 futures = "0.3"
 async-stream = "0.3"
 bytes = "1.5"
@@ -114,14 +114,8 @@ lto = "thin"
 opt-level = "s"
 # 使用 unwind 以便 panic hook 能捕获 backtrace（abort 会直接终止无法捕获）
 panic = "unwind"
-# macOS 27 + ld-27037: strip=symbols corrupts proc-macro dylibs (mis-aligned LINKEDIT)
-strip = false
+strip = "symbols"
 
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
-
-# Local patch: phf 0.10 + modern rustc (proc_macro_hack broken)
-[patch.crates-io]
-phf = { path = "patches/phf" }
-phf_macros = { path = "patches/phf_macros" }

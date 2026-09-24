@@ -150,34 +150,20 @@ pub(crate) fn resolve_pi_agent_dir(
 
 /// If the user points at `~/.pi` (or `\\wsl.localhost\…\.pi`), use the agent dir.
 /// Session JSONL and models.json live under `.pi/agent/`, not the Pi root.
-/// Trailing `/` or `\` (Explorer copy / paste) still count as the Pi root.
 fn canonicalize_pi_agent_dir(path: PathBuf) -> PathBuf {
-    if is_dot_pi_dir(&path) {
-        return trim_trailing_separators(&path).join("agent");
-    }
-    path
-}
-
-fn is_dot_pi_dir(path: &Path) -> bool {
     if path
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case(".pi"))
     {
-        return true;
+        return path.join("agent");
     }
-    let normalized = path.to_string_lossy().replace('/', r"\");
-    let trimmed = normalized.trim_end_matches('\\');
-    trimmed.len() >= 3 && trimmed.to_ascii_lowercase().ends_with(r"\.pi")
-}
-
-fn trim_trailing_separators(path: &Path) -> PathBuf {
     let raw = path.to_string_lossy();
-    let trimmed = raw.trim_end_matches(['/', '\\']);
-    if trimmed.is_empty() || trimmed.len() == raw.len() {
-        path.to_path_buf()
+    let normalized = raw.replace('/', r"\");
+    if normalized.len() >= 3 && normalized.to_ascii_lowercase().ends_with(r"\.pi") {
+        path.join("agent")
     } else {
-        PathBuf::from(trimmed)
+        path
     }
 }
 
@@ -812,9 +798,6 @@ pub(crate) mod test_support {
 }
 
 #[cfg(test)]
-mod wsl_unc_regress;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -875,32 +858,6 @@ mod tests {
             !normalized.ends_with("/.pi/models.json"),
             "must not write the Pi-root models.json: {normalized}"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn linux_standin_agent_dir_is_posix_and_never_windows_c_mirror() {
-        let standin = PathBuf::from(
-            "/tmp/cc-switch-test-home/profiles/wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi/agent",
-        );
-        let resolved = resolve_pi_agent_dir(Some(standin.clone()), None, PathBuf::from("/unused"))
-            .expect("linux stand-in must resolve");
-        assert_eq!(resolved, standin);
-        let normalized = resolved.to_string_lossy();
-        assert!(
-            normalized.ends_with("/home/tfdx8045/.pi/agent"),
-            "stand-in must keep the WSL home layout without a C: copy: {normalized}"
-        );
-        assert!(
-            !normalized.contains("C:") && !normalized.to_ascii_lowercase().contains("c:\\"),
-            "must not touch Windows C:: {normalized}"
-        );
-        assert!(!normalized.to_ascii_lowercase().contains("pi-wsl-sessions"));
-
-        let from_dot_pi = canonicalize_pi_agent_dir(PathBuf::from(
-            "/tmp/cc-switch-test-home/profiles/wsl.localhost/Ubuntu-22.04/home/tfdx8045/.pi",
-        ));
-        assert_eq!(from_dot_pi, standin);
     }
 
     #[test]

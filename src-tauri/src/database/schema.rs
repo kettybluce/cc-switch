@@ -171,21 +171,15 @@ impl Database {
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
-            // grokbuild 在 v14 才进入 CHECK。v13 及更早的 3-app CHECK
-            // (`claude/codex/gemini`) 上此处 INSERT 会失败；留给
-            // migrate_v13_to_v14 重建表后再 seed。
-            if let Err(e) = conn.execute(
+            conn.execute(
                 "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests)
                 VALUES ('grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                 [],
-            ) {
-                log::info!(
-                    "跳过 grokbuild proxy_config seed（旧 CHECK 可能尚未包含 grokbuild）: {e}"
-                );
-            }
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
         }
 
         // 9. Provider Health 表

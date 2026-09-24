@@ -13,7 +13,7 @@ use super::{
     },
 };
 use crate::proxy::json_canonical::canonicalize_tool_arguments_str;
-use crate::proxy::sse::{parse_sse_event, take_sse_block, take_sse_block_eof};
+use crate::proxy::sse::{strip_sse_field, take_sse_block};
 use bytes::Bytes;
 use futures::stream::{Stream, StreamExt};
 use serde_json::{json, Value};
@@ -139,7 +139,7 @@ impl ChatToResponsesState {
         let Some(choice) = chunk
             .get("choices")
             .and_then(|v| v.as_array())
-            .and_then(|choices| crate::proxy::sse::openai_primary_choice(choices))
+            .and_then(|choices| choices.first())
         else {
             return events;
         };
@@ -820,58 +820,45 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
 
         tokio::pin!(stream);
 
-        loop {
-            let drain_tail = match stream.next().await {
-                Some(Ok(bytes)) => {
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
                     crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
-                    false
-                }
-                Some(Err(e)) => {
-                    yield Ok(state.failed_event(
-                        format!("Stream error: {e}"),
-                        Some("stream_error".to_string()),
-                    ));
-                    stream_failed = true;
-                    break;
-                }
-                None => {
-                    crate::proxy::sse::flush_utf8_remainder(&mut buffer, &mut utf8_remainder);
-                    if buffer.trim().is_empty() {
-                        break;
-                    }
-                    true
-                }
-            };
 
-            while let Some(block) = if drain_tail {
-                take_sse_block_eof(&mut buffer)
-            } else {
-                take_sse_block(&mut buffer)
-            } {
+                    while let Some(block) = take_sse_block(&mut buffer) {
                         if block.trim().is_empty() {
                             continue;
                         }
 
-                        let parsed = parse_sse_event(&block);
-                        let event_name = parsed.event.as_deref();
-                        let data = parsed.data.as_str();
-                        if data.trim().is_empty() {
+                        let mut event_name: Option<String> = None;
+                        let mut data_parts: Vec<String> = Vec::new();
+                        for line in block.lines() {
+                            if let Some(event) = strip_sse_field(line, "event") {
+                                event_name = Some(event.trim().to_string());
+                            }
+                            if let Some(data) = strip_sse_field(line, "data") {
+                                data_parts.push(data.to_string());
+                            }
+                        }
+
+                        if data_parts.is_empty() {
                             continue;
                         }
 
-                        if parsed.is_done() {
+                        let data = data_parts.join("\n");
+                        if data.trim() == "[DONE]" {
                             for event in state.finalize() {
                                 yield Ok(event);
                             }
                             continue;
                         }
 
-                        let chunk: Value = match serde_json::from_str(data) {
+                        let chunk: Value = match serde_json::from_str(&data) {
                             Ok(value) => value,
                             Err(_) => continue,
                         };
 
-                        if event_name == Some("error") || chunk.get("error").is_some() {
+                        if event_name.as_deref() == Some("error") || chunk.get("error").is_some() {
                             let (message, error_type) = extract_chat_sse_error(&chunk);
                             yield Ok(state.failed_event(message, error_type));
                             stream_failed = true;
@@ -881,10 +868,20 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                         for event in state.handle_chat_chunk(&chunk) {
                             yield Ok(event);
                         }
-            }
+                    }
 
-            if stream_failed || drain_tail {
-                break;
+                    if stream_failed {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    yield Ok(state.failed_event(
+                        format!("Stream error: {e}"),
+                        Some("stream_error".to_string()),
+                    ));
+                    stream_failed = true;
+                    break;
+                }
             }
         }
 
@@ -1492,30 +1489,5 @@ mod tests {
         assert!(output.contains("quota exceeded"));
         assert!(output.contains("rate_limit_exceeded"));
         assert!(!output.contains("event: response.completed"));
-    }
-
-    #[tokio::test]
-    async fn multi_choice_uses_index_0_not_array_first() {
-        let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_n\",\"created\":123,\"model\":\"gpt-5.4\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"NO\"}},{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_n\",\"created\":123,\"model\":\"gpt-5.4\",\"choices\":[{\"index\":1,\"delta\":{\"content\":\"PE\"},\"finish_reason\":\"stop\"},{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6}}\n\n",
-            "data: [DONE]\n\n",
-        ])
-        .await;
-        assert!(output.contains("\"text\":\"Hello\""));
-        assert!(!output.contains("\"text\":\"NOPE\""));
-        assert!(!output.contains("\"text\":\"NOHello\""));
-    }
-
-    #[tokio::test]
-    async fn truncated_last_event_without_blank_line_still_finalizes() {
-        let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_tail\",\"created\":1,\"model\":\"gpt-5.4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_tail\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
-        ])
-        .await;
-        assert!(output.contains("\"text\":\"hi\""));
-        assert!(output.contains("event: response.completed"));
-        assert!(!output.contains("event: response.failed"));
     }
 }

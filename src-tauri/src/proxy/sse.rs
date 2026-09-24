@@ -1,146 +1,25 @@
 #[inline]
 pub(crate) fn strip_sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
-    // BOM / 行首空白：嗅探器与 handlers::sse_block_parts（C4）都接受缩进 `data:`。
-    let line = line.trim_start_matches('\u{feff}').trim_start();
     line.strip_prefix(&format!("{field}: "))
         .or_else(|| line.strip_prefix(&format!("{field}:")))
 }
 
-/// WHATWG HTML SSE：一行结束于 `\n`、`\r\n` 或孤立 `\r`。
-///
-/// `at_eof=false` 时，缓冲末尾的 `\r` 可能是未完成的 `\r\n`，不能当行结束，
-/// 否则随后到达的 `\n` 会被当成第二条行结束，把一次 CRLF 拆成空事件。
-fn sse_line_ending_len(bytes: &[u8], i: usize, at_eof: bool) -> Option<usize> {
-    match bytes.get(i) {
-        Some(b'\n') => Some(1),
-        Some(b'\r') => {
-            if bytes.get(i + 1) == Some(&b'\n') {
-                Some(2)
-            } else if i + 1 < bytes.len() || at_eof {
-                Some(1)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-/// 取出下一个完整 SSE 事件（两条连续行结束符）。`at_eof` 时允许把尾部孤立 `\r` 当行结束。
-fn take_sse_block_inner(buffer: &mut String, at_eof: bool) -> Option<String> {
-    let bytes = buffer.as_bytes();
-    let mut i = 0usize;
-    let mut first_eol_start: Option<usize> = None;
-
-    while i < bytes.len() {
-        match sse_line_ending_len(bytes, i, at_eof) {
-            Some(len) => {
-                if let Some(start) = first_eol_start {
-                    let block = buffer[..start].to_string();
-                    buffer.drain(..i + len);
-                    return Some(block);
-                }
-                first_eol_start = Some(i);
-                i += len;
-            }
-            None => {
-                if bytes[i] == b'\r' && i + 1 == bytes.len() && !at_eof {
-                    // Trailing \r may still grow into \r\n — unless we already
-                    // saw one line ending: a second \r is a complete delimiter
-                    // (`\r\r`, or `\n\r` that later gains `\n` as a harmless leftover LF).
-                    if let Some(start) = first_eol_start {
-                        let block = buffer[..start].to_string();
-                        buffer.drain(..i + 1);
-                        return Some(block);
-                    }
-                    return None;
-                }
-                first_eol_start = None;
-                i += 1;
-            }
-        }
-    }
-    None
-}
-
 #[inline]
 pub(crate) fn take_sse_block(buffer: &mut String) -> Option<String> {
-    take_sse_block_inner(buffer, false)
-}
+    let mut best: Option<(usize, usize)> = None;
 
-/// 流结束：先按完整分隔符取块，再把缺尾部空行的残余当作最后一块。
-pub(crate) fn take_sse_block_eof(buffer: &mut String) -> Option<String> {
-    if let Some(block) = take_sse_block_inner(buffer, true) {
-        return Some(block);
-    }
-    let rest = std::mem::take(buffer);
-    if rest.trim().is_empty() {
-        None
-    } else {
-        Some(rest)
-    }
-}
-
-/// Parsed SSE event fields used for usage collection and Last-Event-ID reconnect.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct SseEvent {
-    pub event: Option<String>,
-    pub data: String,
-    pub id: Option<String>,
-    pub retry_ms: Option<u64>,
-}
-
-impl SseEvent {
-    pub(crate) fn is_done(&self) -> bool {
-        self.data.trim() == "[DONE]"
-    }
-}
-
-/// Parse one SSE block: join multi-line `data:`, keep `id` / `retry` for reconnect, skip comments.
-pub(crate) fn parse_sse_event(block: &str) -> SseEvent {
-    let mut event = SseEvent::default();
-    let mut data_lines: Vec<&str> = Vec::new();
-
-    for line in block.trim_start_matches('\u{feff}').lines() {
-        let line = line.trim_start_matches('\u{feff}');
-        let trimmed_start = line.trim_start();
-        if trimmed_start.is_empty() || trimmed_start.starts_with(':') {
-            continue;
-        }
-        if let Some(value) = strip_sse_field(line, "event") {
-            event.event = Some(value.to_string());
-        } else if let Some(value) = strip_sse_field(line, "data") {
-            data_lines.push(value);
-        } else if let Some(value) = strip_sse_field(line, "id") {
-            event.id = Some(value.to_string());
-        } else if let Some(value) = strip_sse_field(line, "retry") {
-            event.retry_ms = value.trim().parse().ok();
+    for (delimiter, len) in [("\r\n\r\n", 4usize), ("\n\n", 2usize)] {
+        if let Some(pos) = buffer.find(delimiter) {
+            if best.is_none_or(|(best_pos, _)| pos < best_pos) {
+                best = Some((pos, len));
+            }
         }
     }
 
-    event.data = data_lines.join("\n");
-    event
-}
-
-/// Select the n=1 / `index==0` OpenAI chat choice. `.first()` is wrong when a
-/// chunk lists `index:1` before `index:0`, or only contains n>1 completions.
-pub(crate) fn openai_primary_choice(choices: &[serde_json::Value]) -> Option<&serde_json::Value> {
-    choices.iter().find(|choice| {
-        choice
-            .get("index")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            == 0
-    })
-}
-
-/// Flush a trailing incomplete UTF-8 sequence into `buffer` (lossy at true EOF).
-pub(crate) fn flush_utf8_remainder(buffer: &mut String, remainder: &mut Vec<u8>) {
-    if remainder.is_empty() {
-        return;
-    }
-    buffer.push_str(&String::from_utf8_lossy(remainder));
-    remainder.clear();
+    let (pos, len) = best?;
+    let block = buffer[..pos].to_string();
+    buffer.drain(..pos + len);
+    Some(block)
 }
 
 /// Append raw bytes to a UTF-8 `String` buffer, correctly handling multi-byte
@@ -208,10 +87,7 @@ pub(crate) fn append_utf8_safe(buffer: &mut String, remainder: &mut Vec<u8>, new
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        append_utf8_safe, flush_utf8_remainder, openai_primary_choice, parse_sse_event,
-        strip_sse_field, take_sse_block, take_sse_block_eof,
-    };
+    use super::{append_utf8_safe, strip_sse_field, take_sse_block};
 
     #[test]
     fn strip_sse_field_accepts_optional_space() {
@@ -232,14 +108,6 @@ mod tests {
             Some("message_start")
         );
         assert_eq!(strip_sse_field("id:1", "data"), None);
-        assert_eq!(
-            strip_sse_field("\u{feff}data: {\"ok\":true}", "data"),
-            Some("{\"ok\":true}")
-        );
-        assert_eq!(
-            strip_sse_field("  data: {\"ok\":true}", "data"),
-            Some("{\"ok\":true}")
-        );
     }
 
     #[test]
@@ -473,201 +341,5 @@ mod tests {
             replacement_count, 4,
             "each invalid byte should produce one U+FFFD"
         );
-    }
-
-    #[test]
-    fn take_sse_block_leaves_truncated_tail_in_buffer() {
-        let mut buffer = "data: {\"ok\":true}\n\ndata: {\"partial".to_string();
-        assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("data: {\"ok\":true}".to_string())
-        );
-        assert_eq!(buffer, "data: {\"partial");
-        assert_eq!(take_sse_block(&mut buffer), None);
-        assert_eq!(buffer, "data: {\"partial");
-        assert_eq!(
-            take_sse_block_eof(&mut buffer),
-            Some("data: {\"partial".to_string())
-        );
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn take_sse_block_mixed_crlf_lf_does_not_leave_cr_on_block() {
-        let mut buffer = "data: {\"ok\":true}\r\n\nrest".to_string();
-        assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("data: {\"ok\":true}".to_string())
-        );
-        assert_eq!(buffer, "rest");
-    }
-
-    #[test]
-    fn take_sse_block_lf_then_crlf() {
-        let mut buffer = "data: a\n\r\ndata: b\n\n".to_string();
-        assert_eq!(take_sse_block(&mut buffer), Some("data: a".to_string()));
-        assert_eq!(take_sse_block(&mut buffer), Some("data: b".to_string()));
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn take_sse_block_cr_cr_old_mac() {
-        let mut buffer = "data: a\r\rdata: b\r\r".to_string();
-        assert_eq!(take_sse_block(&mut buffer), Some("data: a".to_string()));
-        assert_eq!(take_sse_block(&mut buffer), Some("data: b".to_string()));
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn take_sse_block_does_not_split_pending_crlf() {
-        // Trailing \r may still become \r\n. Must wait rather than treat it as EOL.
-        let mut buffer = "data: {\"ok\":true}\r".to_string();
-        assert_eq!(take_sse_block(&mut buffer), None);
-        buffer.push('\n');
-        buffer.push('\n');
-        assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("data: {\"ok\":true}".to_string())
-        );
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn take_sse_block_eof_treats_trailing_cr_as_line_ending() {
-        let mut buffer = "data: {\"ok\":true}\r".to_string();
-        assert_eq!(
-            take_sse_block_eof(&mut buffer),
-            Some("data: {\"ok\":true}\r".to_string())
-        );
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn take_sse_block_comment_heartbeat_does_not_eat_next_event() {
-        let mut buffer = ": ping\n\nid: 7\ndata: {\"n\":1}\n\n".to_string();
-        assert_eq!(take_sse_block(&mut buffer), Some(": ping".to_string()));
-        assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("id: 7\ndata: {\"n\":1}".to_string())
-        );
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn parse_sse_event_reconnect_fields_and_multiline_data() {
-        let event = parse_sse_event(
-            "retry: 3000\nid: chunk-42\nevent: delta\ndata: {\"a\":1}\ndata: {\"b\":2}",
-        );
-        assert_eq!(event.retry_ms, Some(3000));
-        assert_eq!(event.id.as_deref(), Some("chunk-42"));
-        assert_eq!(event.event.as_deref(), Some("delta"));
-        assert_eq!(event.data, "{\"a\":1}\n{\"b\":2}");
-        assert!(!event.is_done());
-    }
-
-    #[test]
-    fn parse_sse_event_skips_comments_and_invalid_retry() {
-        let event = parse_sse_event(": OPENROUTER PROCESSING\nretry: not-a-number\ndata: [DONE]");
-        assert_eq!(event.retry_ms, None);
-        assert!(event.is_done());
-        assert_eq!(event.data, "[DONE]");
-    }
-
-    #[test]
-    fn parse_sse_event_empty_id_resets_last_event_id() {
-        let event = parse_sse_event("id:\ndata: {\"ok\":true}");
-        assert_eq!(event.id.as_deref(), Some(""));
-        assert_eq!(event.data, "{\"ok\":true}");
-    }
-
-    #[test]
-    fn parse_sse_event_strips_bom_and_indented_fields() {
-        let event = parse_sse_event("\u{feff}  data: {\"ok\":true}");
-        assert_eq!(event.data, "{\"ok\":true}");
-    }
-
-    #[test]
-    fn openai_primary_choice_ignores_n_gt_1_when_index_0_is_not_first() {
-        let choices = vec![
-            serde_json::json!({"index": 1, "delta": {"content": "B"}}),
-            serde_json::json!({"index": 0, "delta": {"content": "A"}}),
-            serde_json::json!({"index": 2, "delta": {"content": "C"}}),
-        ];
-        let primary = openai_primary_choice(&choices).unwrap();
-        assert_eq!(primary["delta"]["content"], "A");
-    }
-
-    #[test]
-    fn openai_primary_choice_skips_chunk_with_only_index_1() {
-        let choices = vec![serde_json::json!({"index": 1, "delta": {"content": "B"}})];
-        assert!(openai_primary_choice(&choices).is_none());
-    }
-
-    #[test]
-    fn openai_primary_choice_defaults_missing_index_to_zero() {
-        let choices = vec![serde_json::json!({"delta": {"content": "hello"}})];
-        let primary = openai_primary_choice(&choices).unwrap();
-        assert_eq!(primary["delta"]["content"], "hello");
-    }
-
-    #[test]
-    fn flush_utf8_remainder_lossy_at_eof() {
-        let mut buf = String::from("hi");
-        let mut rem = "你".as_bytes()[..1].to_vec();
-        flush_utf8_remainder(&mut buf, &mut rem);
-        assert!(rem.is_empty());
-        assert!(buf.starts_with("hi"));
-        assert!(buf.contains('\u{FFFD}'));
-    }
-
-    #[test]
-    fn append_utf8_safe_then_take_sse_block_chinese_split_across_crlf_event() {
-        let json_line = "id: evt-1\ndata: {\"text\":\"你好\"}\r\n\r\n";
-        let bytes = json_line.as_bytes();
-        let ni_start = bytes.windows(3).position(|w| w == "你".as_bytes()).unwrap();
-
-        let mut buf = String::new();
-        let mut rem = Vec::new();
-        append_utf8_safe(&mut buf, &mut rem, &bytes[..ni_start + 1]);
-        assert!(!rem.is_empty());
-        append_utf8_safe(&mut buf, &mut rem, &bytes[ni_start + 1..]);
-        assert!(rem.is_empty());
-
-        let block = take_sse_block(&mut buf).expect("complete CRLF event");
-        let event = parse_sse_event(&block);
-        assert_eq!(event.id.as_deref(), Some("evt-1"));
-        let parsed: serde_json::Value = serde_json::from_str(&event.data).unwrap();
-        assert_eq!(parsed["text"], "你好");
-        assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn bytewise_sse_stream_reassembles_emoji_and_reconnect_id() {
-        let frame = "retry: 1500\nid: 99\ndata: {\"c\":\"😀\"}\n\n";
-        let mut buf = String::new();
-        let mut rem = Vec::new();
-        let mut last_event = None;
-        for byte in frame.as_bytes() {
-            append_utf8_safe(&mut buf, &mut rem, &[*byte]);
-            if let Some(block) = take_sse_block(&mut buf) {
-                last_event = Some(parse_sse_event(&block));
-            }
-        }
-        let event = last_event.expect("event reassembled bytewise");
-        assert_eq!(event.retry_ms, Some(1500));
-        assert_eq!(event.id.as_deref(), Some("99"));
-        let parsed: serde_json::Value = serde_json::from_str(&event.data).unwrap();
-        assert_eq!(parsed["c"], "😀");
-    }
-
-    #[test]
-    fn take_sse_block_empty_keepalive_between_events() {
-        let mut buffer = "\n\ndata: {\"ok\":true}\n\n".to_string();
-        assert_eq!(take_sse_block(&mut buffer), Some(String::new()));
-        assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("data: {\"ok\":true}".to_string())
-        );
-        assert!(buffer.is_empty());
     }
 }
