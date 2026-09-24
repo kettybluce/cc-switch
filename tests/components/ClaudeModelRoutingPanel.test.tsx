@@ -102,7 +102,9 @@ describe("ClaudeModelRoutingPanel", () => {
     fireEvent.click(enabled);
 
     fireEvent.click(screen.getByTestId("claude-model-routing-add"));
-    expect(screen.getByTestId("claude-model-routing-entry")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("claude-model-routing-entry"),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId("claude-model-routing-provider"), {
       target: { value: "prov_deepseek" },
