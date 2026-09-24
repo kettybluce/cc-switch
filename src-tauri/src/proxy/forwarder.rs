@@ -1245,9 +1245,23 @@ impl RequestForwarder {
         // 应用模型映射（独立于格式转换）
         // Claude Desktop proxy 模式必须先把 Desktop 可见的 claude-* route
         // 映射成真实上游模型名，并且未知 route 要直接报错，不能使用默认模型兜底。
+        // Claude Code 跨供应商目录命中时：改写为 upstreamModel，并跳过角色折叠，
+        // 避免 ANTHROPIC_MODEL 默认档把真实上游 id 覆盖掉。
         let mapped_body = if matches!(app_type, AppType::ClaudeDesktop) {
             crate::claude_desktop_config::map_proxy_request_model(body.clone(), provider)
                 .map_err(|e| ProxyError::InvalidRequest(e.to_string()))?
+        } else if matches!(app_type, AppType::Claude) {
+            let request_model = body.get("model").and_then(Value::as_str).unwrap_or("");
+            if let Some(route) = self.router.resolve_claude_model_route(request_model) {
+                crate::claude_model_routing::rewrite_body_model_to_upstream(
+                    body.clone(),
+                    &route.upstream_model,
+                )
+            } else {
+                let (mapped_body, _original_model, _mapped_model) =
+                    super::model_mapper::apply_model_mapping(body.clone(), provider);
+                mapped_body
+            }
         } else {
             let (mapped_body, _original_model, _mapped_model) =
                 super::model_mapper::apply_model_mapping(body.clone(), provider);
