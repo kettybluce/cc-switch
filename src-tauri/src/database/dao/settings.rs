@@ -324,4 +324,29 @@ impl Database {
             .map_err(|e| AppError::Database(format!("序列化日志配置失败: {e}")))?;
         self.set_setting("log_config", &json)
     }
+
+    // --- Claude 跨供应商模型路由（settings KV，无 SCHEMA 变更） ---
+
+    /// 获取 Claude 跨供应商模型路由配置；缺失时返回默认（enabled=false）
+    pub fn get_claude_model_routing(
+        &self,
+    ) -> Result<crate::claude_model_routing::ClaudeModelRoutingConfig, AppError> {
+        match self.get_setting(crate::claude_model_routing::SETTINGS_KEY)? {
+            Some(json) => serde_json::from_str(&json).map_err(|e| {
+                AppError::Database(format!("解析 Claude 跨供应商模型路由配置失败: {e}"))
+            }),
+            None => Ok(crate::claude_model_routing::ClaudeModelRoutingConfig::default()),
+        }
+    }
+
+    /// 更新 Claude 跨供应商模型路由配置
+    pub fn set_claude_model_routing(
+        &self,
+        config: &crate::claude_model_routing::ClaudeModelRoutingConfig,
+    ) -> Result<(), AppError> {
+        let json = serde_json::to_string(config).map_err(|e| {
+            AppError::Database(format!("序列化 Claude 跨供应商模型路由配置失败: {e}"))
+        })?;
+        self.set_setting(crate::claude_model_routing::SETTINGS_KEY, &json)
+    }
 }

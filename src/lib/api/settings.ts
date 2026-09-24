@@ -299,6 +299,16 @@ export const settingsApi = {
   async setLogConfig(config: LogConfig): Promise<boolean> {
     return await invoke("set_log_config", { config });
   },
+
+  async getClaudeModelRouting(): Promise<ClaudeModelRoutingConfig> {
+    return await invoke("get_claude_model_routing");
+  },
+
+  async setClaudeModelRouting(
+    config: ClaudeModelRoutingConfig,
+  ): Promise<boolean> {
+    return await invoke("set_claude_model_routing", { config });
+  },
 };
 
 /** 单处工具安装的诊断信息（多处安装冲突检测）。字段对应后端 ToolInstallation。 */
@@ -367,3 +377,20 @@ export const backupsApi = {
     await invoke("delete_db_backup", { filename });
   },
 };
+
+export interface ClaudeModelRoutingEntry {
+  clientModel: string;
+  providerId: string;
+  upstreamModel: string;
+  label: string;
+  description: string;
+}
+
+export interface ClaudeModelRoutingConfig {
+  enabled: boolean;
+  replaceBuiltInOptions: boolean;
+  writeAvailableModels: boolean;
+  enableGatewayDiscovery: boolean;
+  entries: ClaudeModelRoutingEntry[];
+}
+

@@ -677,6 +677,33 @@ impl ProxyService {
             .to_string()
     }
 
+    /// Project or clear Claude cross-provider `modelPicker` into live settings.json.
+    fn project_claude_model_routing_into_live(&self, config: &mut Value) {
+        let routing = self.db.get_claude_model_routing().unwrap_or_default();
+        crate::claude_model_routing::project_or_clear_model_picker(config, &routing);
+    }
+
+    /// Update only the Claude catalog projection on live settings while takeover is active.
+    ///
+    /// Does not rebuild live from provider SSOT — that would wipe unrelated user keys
+    /// (MCP, permissions, etc.) that takeover normally preserves on the live file.
+    pub async fn refresh_claude_live_model_routing_while_proxy_active(&self) -> Result<(), String> {
+        let enabled = self
+            .db
+            .is_app_takeover_enabled(AppType::Claude.as_str())
+            .await
+            .unwrap_or(false);
+        if !enabled {
+            return Ok(());
+        }
+        let mut live_config = match self.read_claude_live() {
+            Ok(config) => config,
+            Err(_) => return Ok(()),
+        };
+        self.project_claude_model_routing_into_live(&mut live_config);
+        self.write_claude_live(&live_config)
+    }
+
     fn claude_provider_with_effective_settings(
         &self,
         provider: &Provider,
@@ -704,6 +731,7 @@ impl ProxyService {
             &proxy_url,
             &effective_provider,
         );
+        self.project_claude_model_routing_into_live(&mut effective_settings);
         self.write_claude_live(&effective_settings)?;
         Ok(())
     }
@@ -1995,6 +2023,7 @@ impl ProxyService {
                 &proxy_url,
                 &claude_provider,
             );
+            self.project_claude_model_routing_into_live(&mut live_config);
             self.write_claude_live(&live_config)?;
             log::info!("Claude Live 配置已接管，代理地址: {proxy_url}");
         }
@@ -2053,6 +2082,7 @@ impl ProxyService {
                     &proxy_url,
                     &claude_provider,
                 );
+                self.project_claude_model_routing_into_live(&mut live_config);
                 self.write_claude_live(&live_config)?;
                 log::info!("Claude Live 配置已接管，代理地址: {proxy_url}");
             }
@@ -2130,6 +2160,7 @@ impl ProxyService {
                             ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken,
                         );
                     }
+                    self.project_claude_model_routing_into_live(&mut live_config);
                     let _ = self.write_claude_live(&live_config);
                 }
             }
@@ -4460,6 +4491,110 @@ mod tests {
             .expect("serialize models_cache"),
         )
         .expect("write models_cache.json");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn claude_takeover_projects_and_clears_model_picker_from_catalog() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().expect("init db"));
+
+        let provider = Provider::with_id(
+            "prov_deepseek".to_string(),
+            "DeepSeek".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.deepseek.com",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-test",
+                    "ANTHROPIC_MODEL": "deepseek-chat"
+                }
+            }),
+            None,
+        );
+        db.save_provider("claude", &provider).unwrap();
+        db.set_current_provider("claude", "prov_deepseek").unwrap();
+
+        // Seed a live settings.json with a user key that must survive projection.
+        let settings_path = crate::config::get_claude_settings_path();
+        if let Some(parent) = settings_path.parent() {
+            std::fs::create_dir_all(parent).expect("claude dir");
+        }
+        let original = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.deepseek.com",
+                "ANTHROPIC_AUTH_TOKEN": "sk-test",
+                "ANTHROPIC_MODEL": "deepseek-chat"
+            },
+            "userKeepsThis": true
+        });
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&original).unwrap(),
+        )
+        .expect("write live");
+
+        let routing = crate::claude_model_routing::ClaudeModelRoutingConfig {
+            enabled: true,
+            replace_built_in_options: false,
+            write_available_models: false,
+            enable_gateway_discovery: false,
+            entries: vec![crate::claude_model_routing::ClaudeModelRoutingEntry {
+                client_model: "prov_deepseek/deepseek-chat".to_string(),
+                provider_id: "prov_deepseek".to_string(),
+                upstream_model: "deepseek-chat".to_string(),
+                label: "DeepSeek Chat".to_string(),
+                description: "via DeepSeek".to_string(),
+            }],
+        };
+        db.set_claude_model_routing(&routing).unwrap();
+
+        let service = ProxyService::new(db.clone());
+        use_ephemeral_proxy_port(&db).await;
+
+        service
+            .set_takeover_for_app("claude", true)
+            .await
+            .expect("enable Claude takeover");
+
+        let live: Value = serde_json::from_str(
+            &std::fs::read_to_string(&settings_path).expect("read live after takeover"),
+        )
+        .expect("parse live");
+        assert_eq!(live["userKeepsThis"], json!(true));
+        let picker = live.get("modelPicker").expect("modelPicker projected");
+        assert_eq!(picker["replaceBuiltInOptions"], json!(false));
+        assert_eq!(
+            picker["options"][0]["value"],
+            json!("prov_deepseek/deepseek-chat")
+        );
+        assert!(live.get("availableModels").is_none());
+
+        // Disable feature → re-sync clears modelPicker while takeover stays on.
+        let mut disabled = routing.clone();
+        disabled.enabled = false;
+        db.set_claude_model_routing(&disabled).unwrap();
+        service
+            .refresh_claude_live_model_routing_while_proxy_active()
+            .await
+            .expect("refresh");
+        let live_cleared: Value = serde_json::from_str(
+            &std::fs::read_to_string(&settings_path).expect("read live cleared"),
+        )
+        .expect("parse");
+        assert!(live_cleared.get("modelPicker").is_none());
+        assert_eq!(live_cleared["userKeepsThis"], json!(true));
+
+        // Stop takeover → backup restore (original had no modelPicker)
+        service
+            .set_takeover_for_app("claude", false)
+            .await
+            .expect("disable takeover");
+        let restored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).expect("read restored"))
+                .expect("parse restored");
+        assert!(restored.get("modelPicker").is_none());
+        assert_eq!(restored["userKeepsThis"], json!(true));
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
     }
 
     #[test]
