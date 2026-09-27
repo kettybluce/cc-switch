@@ -757,9 +757,11 @@ pub(crate) fn get_sync_state(db: &Database, file_path: &str) -> Result<(i64, i64
 /// ——**不要**回退到 `now()`：那会把几个月前的历史消息盖成"同步时刻"，
 /// 用户看到的就是错的时间。
 pub(crate) fn parse_event_timestamp_secs(value: &serde_json::Value) -> Option<i64> {
-    let raw = value
-        .get("timestamp")
-        .or_else(|| value.get("message").and_then(|message| message.get("timestamp")))?;
+    let raw = value.get("timestamp").or_else(|| {
+        value
+            .get("message")
+            .and_then(|message| message.get("timestamp"))
+    })?;
     epoch_value_to_secs(raw)
 }
 
@@ -1008,10 +1010,9 @@ mod tests {
     #[test]
     fn parse_event_timestamp_accepts_every_provider_shape() {
         // Claude / Codex：顶层 RFC3339 字符串
-        let claude: serde_json::Value = serde_json::from_str(
-            r#"{"type":"assistant","timestamp":"2026-04-05T12:00:00.123Z"}"#,
-        )
-        .unwrap();
+        let claude: serde_json::Value =
+            serde_json::from_str(r#"{"type":"assistant","timestamp":"2026-04-05T12:00:00.123Z"}"#)
+                .unwrap();
         assert_eq!(parse_event_timestamp_secs(&claude), Some(1_775_390_400));
 
         // Pi：message.timestamp 是 epoch 毫秒

@@ -2437,7 +2437,10 @@ mod tests {
             Some("mimo-v2-flash")
         );
         // 串尾无分隔符同样接受
-        assert_eq!(strip_minor_version("deepseek-v3.2").as_deref(), Some("deepseek-v3"));
+        assert_eq!(
+            strip_minor_version("deepseek-v3.2").as_deref(),
+            Some("deepseek-v3")
+        );
     }
 
     #[test]
@@ -2478,27 +2481,28 @@ mod tests {
     fn minor_version_fallback_resolves_against_pricing_table() -> Result<(), AppError> {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
-        // OR REPLACE：内存库会 seed 一份价目表，直接用 INSERT 会撞 model_id 唯一键。
+        // 用合成模型名，避免和 seed 出来的内置价目表撞车（OR REPLACE 也不够：
+        // 内置行会让"应走兜底"的那次查询直接精确命中）。
         conn.execute(
             "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million,
                 output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million)
-             VALUES ('deepseek-v4-flash', 'DeepSeek V4 Flash', '0.14', '0.28', '0.014', '0.14')",
+             VALUES ('zzq-v9-flash', 'ZZQ V9 Flash', '0.14', '0.28', '0.014', '0.14')",
             [],
         )?;
 
         // 价目表只有主版本价，带小版本的请求名应能落到它上面
-        let found = find_model_pricing_row(&conn, "deepseek-v4.1-flash")?
-            .expect("deepseek-v4.1-flash 应回退命中 deepseek-v4-flash");
+        let found = find_model_pricing_row(&conn, "zzq-v9.3-flash")?
+            .expect("zzq-v9.3-flash 应回退命中 zzq-v9-flash");
         assert_eq!(found.0, "0.14");
 
         // 精确命中仍然优先于兜底
         conn.execute(
             "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million,
                 output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million)
-             VALUES ('deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', '0.99', '0.99', '0.99', '0.99')",
+             VALUES ('zzq-v9.3-flash', 'ZZQ V9.3 Flash', '0.99', '0.99', '0.99', '0.99')",
             [],
         )?;
-        let exact = find_model_pricing_row(&conn, "deepseek-v4.1-flash")?.expect("精确命中");
+        let exact = find_model_pricing_row(&conn, "zzq-v9.3-flash")?.expect("精确命中");
         assert_eq!(exact.0, "0.99", "精确条目必须战胜小版本兜底");
         Ok(())
     }
