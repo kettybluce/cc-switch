@@ -174,7 +174,9 @@ struct ParsedAssistantUsage {
     cache_read_tokens: u32,
     cache_creation_tokens: u32,
     stop_reason: Option<String>,
-    timestamp: Option<String>,
+    /// 事件时间戳（epoch 秒）。解析见 [`parse_event_timestamp_secs`]；为 `None`
+    /// 时由调用方回退到会话文件 mtime。
+    timestamp_secs: Option<i64>,
     session_id: Option<String>,
 }
 
@@ -586,10 +588,7 @@ fn sync_single_file(
                 .get("stop_reason")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
-            timestamp: value
-                .get("timestamp")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            timestamp_secs: parse_event_timestamp_secs(&value),
             session_id: current_session_id.clone(),
         };
 
@@ -625,6 +624,10 @@ fn sync_single_file(
         .unchecked_transaction()
         .map_err(|e| AppError::Database(format!("启动会话用量导入事务失败: {e}")))?;
 
+    // 无戳消息的兜底时间：会话文件 mtime。同一文件里的消息本就属于相近时刻，
+    // 用 mtime 比逐条取 now() 更接近真实发生时间。
+    let fallback_created_at = file_mtime_secs(file_modified);
+
     for msg in messages.values() {
         // 只要产生了真实计费 token 就导入，不再强制要求 stop_reason 或 output>0。
         //
@@ -652,7 +655,7 @@ fn sync_single_file(
             msg.message_id
         );
 
-        match insert_session_log_entry_on_conn(&tx, &request_id, msg) {
+        match insert_session_log_entry_on_conn(&tx, &request_id, msg, fallback_created_at) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => {
@@ -740,6 +743,62 @@ pub(crate) fn get_sync_state(db: &Database, file_path: &str) -> Result<(i64, i64
     Ok(result.unwrap_or((0, 0)))
 }
 
+/// 会话 JSONL 里某条事件的时间戳 → epoch 秒。
+///
+/// 各 provider 写时间戳的形态并不统一：Claude / Codex 用顶层 RFC3339 字符串
+/// （`"...T15:34:45.843Z"`），Pi 的 `message.timestamp` 是 epoch 毫秒数字，
+/// 个别导出还会把 epoch 秒直接写成数字。这里统一收口，避免某个 importer
+/// 只认一种形态、其余全部落进调用方的兜底分支。
+///
+/// 大小写/量级规则与 Pi importer 的 `parse_timestamp_millis` 保持一致：
+/// 数字绝对值 < 1e11 视为秒，否则视为毫秒。
+///
+/// 返回 `None` 表示该行确实没有可用时间戳，调用方应回退到会话文件 mtime
+/// ——**不要**回退到 `now()`：那会把几个月前的历史消息盖成"同步时刻"，
+/// 用户看到的就是错的时间。
+pub(crate) fn parse_event_timestamp_secs(value: &serde_json::Value) -> Option<i64> {
+    let raw = value
+        .get("timestamp")
+        .or_else(|| value.get("message").and_then(|message| message.get("timestamp")))?;
+    epoch_value_to_secs(raw)
+}
+
+/// epoch 数字 / RFC3339 字符串 / 十进制数字串 → epoch 秒。
+fn epoch_value_to_secs(raw: &serde_json::Value) -> Option<i64> {
+    if let Some(number) = raw.as_i64() {
+        return Some(epoch_number_to_secs(number));
+    }
+    raw.as_str().and_then(parse_timestamp_str_secs)
+}
+
+/// 只有字符串的时间戳 → epoch 秒。供已经取出字符串形态的调用方（Codex
+/// 的 rollout 事件）复用同一套解析，避免各处自行 `parse_from_rfc3339`
+/// 而漏掉数字形态。
+pub(crate) fn parse_timestamp_str_secs(text: &str) -> Option<i64> {
+    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(text) {
+        return Some(datetime.timestamp());
+    }
+    // 少数导出把 epoch 写成字符串（"1790264092901"）。
+    text.trim().parse::<i64>().ok().map(epoch_number_to_secs)
+}
+
+/// epoch 数字 → 秒：绝对值小于 [`SECONDS_MAGNITUDE_LIMIT`] 视为秒，否则毫秒。
+fn epoch_number_to_secs(number: i64) -> i64 {
+    if number.abs() < SECONDS_MAGNITUDE_LIMIT {
+        number
+    } else {
+        number / 1000
+    }
+}
+
+/// epoch 秒与毫秒的分界：绝对值小于该值按秒解释，否则按毫秒。
+const SECONDS_MAGNITUDE_LIMIT: i64 = 100_000_000_000;
+
+/// 文件 mtime（纳秒）→ epoch 秒，供会话事件缺少时间戳时兜底。
+pub(crate) fn file_mtime_secs(modified_nanos: i64) -> i64 {
+    modified_nanos.div_euclid(1_000_000_000)
+}
+
 /// 返回文件 mtime 的纳秒时间戳。
 ///
 /// `session_log_sync.last_modified` 旧数据是秒级时间戳；新写入纳秒值不需要
@@ -791,25 +850,17 @@ pub(crate) fn update_sync_state_on_conn(
 /// 插入单条会话日志到 proxy_request_logs，返回是否成功插入 (true=新插入, false=已存在)。
 ///
 /// 调用方持有连接锁（通常在事务内）。
+///
+/// `fallback_created_at`：本行没有任何可用时间戳时使用的 epoch 秒，调用方传
+/// 会话文件的 mtime。绝不能传 `now()`——全量导入历史会话时那会把每条无戳
+/// 消息都钉在"导入时刻"，统计里就会看到一批和真实发生时间无关的记录。
 fn insert_session_log_entry_on_conn(
     conn: &rusqlite::Connection,
     request_id: &str,
     msg: &ParsedAssistantUsage,
+    fallback_created_at: i64,
 ) -> Result<bool, AppError> {
-    let created_at = msg
-        .timestamp
-        .as_ref()
-        .and_then(|ts| {
-            chrono::DateTime::parse_from_rfc3339(ts)
-                .ok()
-                .map(|dt| dt.timestamp())
-        })
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
-        });
+    let created_at = msg.timestamp_secs.unwrap_or(fallback_created_at);
 
     let dedup_key = DedupKey {
         app_type: "claude",
@@ -954,6 +1005,55 @@ mod tests {
         assert_eq!(crate::usage_events::take_test_notify_count(), 1);
     }
 
+    #[test]
+    fn parse_event_timestamp_accepts_every_provider_shape() {
+        // Claude / Codex：顶层 RFC3339 字符串
+        let claude: serde_json::Value = serde_json::from_str(
+            r#"{"type":"assistant","timestamp":"2026-04-05T12:00:00.123Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_event_timestamp_secs(&claude), Some(1_775_390_400));
+
+        // Pi：message.timestamp 是 epoch 毫秒
+        let pi: serde_json::Value =
+            serde_json::from_str(r#"{"message":{"timestamp":1790264092901}}"#).unwrap();
+        assert_eq!(parse_event_timestamp_secs(&pi), Some(1_790_264_092));
+
+        // epoch 秒直接写成数字
+        let seconds: serde_json::Value =
+            serde_json::from_str(r#"{"timestamp":1790264092}"#).unwrap();
+        assert_eq!(parse_event_timestamp_secs(&seconds), Some(1_790_264_092));
+
+        // epoch 写成字符串
+        let numeric_string: serde_json::Value =
+            serde_json::from_str(r#"{"timestamp":"1790264092901"}"#).unwrap();
+        assert_eq!(
+            parse_event_timestamp_secs(&numeric_string),
+            Some(1_790_264_092)
+        );
+    }
+
+    #[test]
+    fn parse_event_timestamp_rejects_unparseable_values() {
+        for raw in [
+            r#"{"type":"assistant"}"#,
+            r#"{"timestamp":null}"#,
+            r#"{"timestamp":""}"#,
+            r#"{"timestamp":"2026-04-05T12:00:00"}"#, // 无时区偏移，不能瞎猜
+            r#"{"timestamp":"not-a-time"}"#,
+        ] {
+            let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            assert_eq!(parse_event_timestamp_secs(&value), None, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn file_mtime_secs_truncates_nanos_toward_zero() {
+        assert_eq!(file_mtime_secs(1_790_264_092_901_000_000), 1_790_264_092);
+        // 1970 年之前的 mtime 不能靠截断变成正数
+        assert_eq!(file_mtime_secs(-1_500_000_000), -2);
+    }
+
     #[tokio::test]
     async fn session_sync_mutex_serializes_callers() {
         let first = session_sync_mutex().lock().await;
@@ -1013,7 +1113,7 @@ mod tests {
             cache_read_tokens: 5000,
             cache_creation_tokens: 10000,
             stop_reason: None,
-            timestamp: Some("2026-04-05T12:00:00Z".to_string()),
+            timestamp_secs: Some(1_775_390_400), // 2026-04-05T12:00:00Z
             session_id: None,
         };
         messages.insert("msg_1".to_string(), intermediate);
@@ -1027,7 +1127,7 @@ mod tests {
             cache_read_tokens: 5000,
             cache_creation_tokens: 10000,
             stop_reason: Some("end_turn".to_string()),
-            timestamp: Some("2026-04-05T12:00:00Z".to_string()),
+            timestamp_secs: Some(1_775_390_400), // 2026-04-05T12:00:00Z
             session_id: None,
         };
 
@@ -1078,13 +1178,13 @@ mod tests {
             cache_read_tokens: 10,
             cache_creation_tokens: 5,
             stop_reason: Some("end_turn".to_string()),
-            timestamp: Some("1970-01-01T00:16:45Z".to_string()),
+            timestamp_secs: Some(1005), // 1970-01-01T00:16:45Z
             session_id: Some("session-1".to_string()),
         };
 
         let inserted = {
             let conn = lock_conn!(db.conn);
-            insert_session_log_entry_on_conn(&conn, "session:msg_1", &msg)?
+            insert_session_log_entry_on_conn(&conn, "session:msg_1", &msg, 0)?
         };
         assert!(!inserted);
 

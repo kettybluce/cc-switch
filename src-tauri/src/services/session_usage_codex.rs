@@ -19,7 +19,8 @@ use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
-    metadata_modified_nanos, update_sync_state, update_sync_state_on_conn, SessionSyncResult,
+    file_mtime_secs, metadata_modified_nanos, update_sync_state, update_sync_state_on_conn,
+    SessionSyncResult,
 };
 use crate::services::usage_stats::{
     find_model_pricing, has_suspected_codex_session_duplicate, should_skip_session_insert, DedupKey,
@@ -35,7 +36,6 @@ use std::os::unix::fs::MetadataExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::SystemTime;
 #[cfg(windows)]
 use windows_sys::Win32::Storage::FileSystem::{
     FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
@@ -1418,6 +1418,7 @@ fn sync_single_codex_file(
                 &event.model,
                 Some(session_thread_id),
                 event.timestamp.as_deref(),
+                file_mtime_secs(file_modified),
                 &mut batch_suspected,
                 &mut pass.pricing,
             ) {
@@ -1468,6 +1469,7 @@ fn insert_codex_session_entry(
         model,
         session_id,
         timestamp,
+        0,
         suspected_duplicates,
         &mut HashMap::new(),
     )
@@ -1486,21 +1488,15 @@ fn insert_codex_session_entry_on_conn(
     model: &str,
     session_id: Option<&str>,
     timestamp: Option<&str>,
+    fallback_created_at: i64,
     suspected_duplicates: &mut u32,
     pricing_cache: &mut HashMap<String, Option<ModelPricing>>,
 ) -> Result<bool, AppError> {
+    // 无戳事件回退到 rollout 文件 mtime，而不是 now()：全量重导历史会话时
+    // now() 会把每条无戳记录钉在"导入时刻"，统计里就是一批假时间。
     let created_at = timestamp
-        .and_then(|ts| {
-            chrono::DateTime::parse_from_rfc3339(ts)
-                .ok()
-                .map(|dt| dt.timestamp())
-        })
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
-        });
+        .and_then(crate::services::session_usage::parse_timestamp_str_secs)
+        .unwrap_or(fallback_created_at);
 
     let dedup_key = DedupKey {
         app_type: "codex",

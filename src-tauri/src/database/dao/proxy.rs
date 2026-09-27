@@ -13,6 +13,18 @@ use super::super::{lock_conn, Database};
 pub(crate) const PRICING_SOURCE_RESPONSE: &str = "response";
 pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
 
+/// SQLite `SQLITE_CONSTRAINT_FOREIGNKEY` 的扩展错误码。
+const SQLITE_CONSTRAINT_FOREIGNKEY: i32 = 787;
+
+/// 判断错误是否为外键约束失败（而非其他约束或 IO 错误）。
+fn is_foreign_key_violation(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if inner.extended_code == SQLITE_CONSTRAINT_FOREIGNKEY
+    )
+}
+
 pub(crate) fn validate_cost_multiplier(value: &str) -> Result<Decimal, AppError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -672,7 +684,14 @@ impl Database {
         };
 
         // UPSERT
-        conn.execute(
+        //
+        // 复合外键 (provider_id, app_type) → providers(id, app_type) 在**路由接管**
+        // 场景下必然失败：流量会被路由到注册在另一个 app_type 下的 provider
+        // （实测 codex 请求打到 pi 的 fengwind），而 provider_health 只存观测到
+        // 的运行时状态、并不属于 providers 的强引用。它同时被
+        // `database::backup` 列为可重建的临时表，所以这里降级为 debug 日志，
+        // 不让一条健康度写失败冒泡成每次请求都刷屏的 WARN。
+        match conn.execute(
             "INSERT OR REPLACE INTO provider_health
              (provider_id, app_type, is_healthy, consecutive_failures,
               last_success_at, last_failure_at, last_error, updated_at)
@@ -692,10 +711,16 @@ impl Database {
                 error_msg,
                 &now,
             ],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        Ok(())
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) if is_foreign_key_violation(&error) => {
+                log::debug!(
+                    "provider_health 跳过未在 providers 注册的 (provider_id={provider_id}, app_type={app_type})"
+                );
+                Ok(())
+            }
+            Err(error) => Err(AppError::Database(error.to_string())),
+        }
     }
 
     /// 重置Provider健康状态

@@ -2180,7 +2180,66 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
         }
     }
 
+    // 小版本号兜底放在**候选末尾**：`deepseek-v4.1-flash` → `deepseek-v4-flash`。
+    // 中转站常把上游模型带小版本转卖（deepseek-v4.1-flash / mimo-v2.6-flash），
+    // 而价目表只有主版本价，于是整条记 0 成本。追加而非插队，保证任何既有的
+    // 精确/前缀匹配都优先于"把 v4.1 按 v4 计价"这个近似。
+    let mut minor_fallbacks: Vec<String> = Vec::new();
+    for candidate in &candidates {
+        if let Some(stripped) = strip_minor_version(candidate) {
+            if !candidates.contains(&stripped) && !minor_fallbacks.contains(&stripped) {
+                minor_fallbacks.push(stripped);
+            }
+        }
+    }
+    candidates.extend(minor_fallbacks);
+
     candidates
+}
+
+/// 去掉 `v<主>.<次>` 中的小版本号：`deepseek-v4.1-flash` → `deepseek-v4-flash`。
+///
+/// 只认**段首**的 `v` 前缀版本（前一位是 `-` 或串首），因此不会碰
+/// `grok-4.20-0309-non-reasoning`、`gpt-5.5` 这类没有 `v` 且语义不同的名字。
+fn strip_minor_version(model_id: &str) -> Option<String> {
+    if !model_id.is_ascii() {
+        return None;
+    }
+    let bytes = model_id.as_bytes();
+    for index in 0..bytes.len() {
+        if bytes[index] != b'v' {
+            continue;
+        }
+        if index > 0 && bytes[index - 1] != b'-' {
+            continue;
+        }
+        let digits_start = index + 1;
+        let mut dot = digits_start;
+        while dot < bytes.len() && bytes[dot].is_ascii_digit() {
+            dot += 1;
+        }
+        if dot == digits_start || dot >= bytes.len() || bytes[dot] != b'.' {
+            continue;
+        }
+        let mut minor_end = dot + 1;
+        while minor_end < bytes.len() && bytes[minor_end].is_ascii_digit() {
+            minor_end += 1;
+        }
+        // 必须真的吃掉了小数位，且其后是串尾或分隔符（不能是 alnum，否则
+        // `v4.1x` 这种会被截断成另一个名字）。
+        if minor_end == dot + 1
+            || (minor_end < bytes.len() && bytes[minor_end].is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        let mut stripped = String::with_capacity(model_id.len());
+        stripped.push_str(&model_id[..dot]);
+        stripped.push_str(&model_id[minor_end..]);
+        if stripped != model_id {
+            return Some(stripped);
+        }
+    }
+    None
 }
 
 fn clean_model_id_for_pricing(model_id: &str) -> String {
@@ -2366,6 +2425,83 @@ fn should_try_pricing_prefix_match(model_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_minor_version_drops_dotted_minor_after_v_prefix() {
+        assert_eq!(
+            strip_minor_version("deepseek-v4.1-flash").as_deref(),
+            Some("deepseek-v4-flash")
+        );
+        assert_eq!(
+            strip_minor_version("mimo-v2.6-flash").as_deref(),
+            Some("mimo-v2-flash")
+        );
+        // 串尾无分隔符同样接受
+        assert_eq!(strip_minor_version("deepseek-v3.2").as_deref(), Some("deepseek-v3"));
+    }
+
+    #[test]
+    fn strip_minor_version_leaves_unrelated_versions_alone() {
+        // 没有 `v` 段首前缀的版本号不能被当成小版本剥掉：grok-4.20 与
+        // gpt-5.5 在价目表里各自独立成条，剥掉会串价。
+        assert_eq!(strip_minor_version("grok-4.20-0309-non-reasoning"), None);
+        assert_eq!(strip_minor_version("gpt-5.5"), None);
+        assert_eq!(strip_minor_version("claude-opus-4.6"), None);
+        // v 前面不是分隔符（nov4.1）不认
+        assert_eq!(strip_minor_version("nov4.1"), None);
+        // 小数位后面紧跟 alnum 说明那不是小版本号
+        assert_eq!(strip_minor_version("deepseek-v4.1x-flash"), None);
+        // 没有小数位
+        assert_eq!(strip_minor_version("deepseek-v4-flash"), None);
+    }
+
+    #[test]
+    fn minor_version_fallback_is_appended_last() {
+        // 近似候选必须排在所有既有候选之后，精确/前缀匹配优先于"按主版本计价"
+        let candidates = model_pricing_candidates("deepseek-v4.1-flash");
+        let fallback = candidates
+            .iter()
+            .position(|candidate| candidate == "deepseek-v4-flash")
+            .expect("小版本兜底候选应存在");
+        assert_eq!(
+            candidates.first().map(String::as_str),
+            Some("deepseek-v4.1-flash"),
+            "原始模型名必须仍排在第一位"
+        );
+        assert!(
+            fallback > 0,
+            "兜底候选不能抢在原始模型名前面: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn minor_version_fallback_resolves_against_pricing_table() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let conn = lock_conn!(db.conn);
+        // OR REPLACE：内存库会 seed 一份价目表，直接用 INSERT 会撞 model_id 唯一键。
+        conn.execute(
+            "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million,
+                output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million)
+             VALUES ('deepseek-v4-flash', 'DeepSeek V4 Flash', '0.14', '0.28', '0.014', '0.14')",
+            [],
+        )?;
+
+        // 价目表只有主版本价，带小版本的请求名应能落到它上面
+        let found = find_model_pricing_row(&conn, "deepseek-v4.1-flash")?
+            .expect("deepseek-v4.1-flash 应回退命中 deepseek-v4-flash");
+        assert_eq!(found.0, "0.14");
+
+        // 精确命中仍然优先于兜底
+        conn.execute(
+            "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million,
+                output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million)
+             VALUES ('deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', '0.99', '0.99', '0.99', '0.99')",
+            [],
+        )?;
+        let exact = find_model_pricing_row(&conn, "deepseek-v4.1-flash")?.expect("精确命中");
+        assert_eq!(exact.0, "0.99", "精确条目必须战胜小版本兜底");
+        Ok(())
+    }
 
     fn local_ts(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
         match Local.with_ymd_and_hms(year, month, day, hour, minute, second) {
