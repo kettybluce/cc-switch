@@ -5,6 +5,23 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.20.15] - 2026-09-27
+
+Usage-accuracy pass on top of 3.20.10. Windows x64 MSI + Portable only.
+
+### Fixed
+
+- **Session import timestamps no longer collapse to "import time"** — Claude and Codex importers fell back to `now()` when an event carried no timestamp, so a full backfill stamped every undated message with the moment of import. They now fall back to the session file's mtime (the behaviour the Pi importer already had), and all providers share one `parse_event_timestamp_secs` that accepts RFC3339 strings, epoch seconds, epoch milliseconds and numeric strings, with the same magnitude rule as Pi's `parse_timestamp_millis`.
+- **`deepseek-v4.1-flash` is now priced** — the seed table carried only the four legacy ids it supersedes, so the id upstream actually returns matched nothing (`LIKE 'deepseek-v4.1-flash-%'` only hits longer rows). Every such request was billed at 0 — 500+ `USG-002` warnings in a single log. Seeded at the V4.1 Flash tier (0.3 / 1.2 / 0.006), same as the aliases it fronts.
+- **Minor-version pricing fallback** — relay resellers expose dotted minors (`mimo-v2.6-flash`) that have no row of their own. A `v<major>.<minor>` → `v<major>` candidate is appended *after* every existing candidate, so any exact or prefix match still wins over the approximation. Only segment-leading `v` versions are stripped, so `grok-4.20-0309-*` and `gpt-5.5` are untouched.
+- **`provider_health` foreign-key failures are no longer per-request warnings** — route takeover legitimately sends, say, a Codex request to a provider registered under `pi`, and the composite FK `(provider_id, app_type) → providers(id, app_type)` then rejects the health row on every single request. `provider_health` is rebuildable runtime state (already listed as ephemeral by `database::backup`), so the write now degrades to a debug log instead of bubbling up as a `WARN`.
+
+### Known issues
+
+- Pre-existing test failures remain in `services::model_pricing`, `services::provider` and `services::skill`. Verified by A/B against the unmodified 3.20.10 tree: the failing sets are byte-identical with and without this release's changes. The `model_pricing` ones are `#[serial]` tests sharing a temp home, so which of them trips varies between a full-suite run and a module-filtered run. Unrelated to this release.
+- Codex 0.156 reports ignored configuration keys (`disable_response_storage`, `mcp_servers.*.type`). These are emitted by this app's own presets; removing them would regress older Codex builds that still honour `disable_response_storage` for third-party upstreams, so they are left in place.
+- All provider traffic still depends on the machine-wide TUN client (fake-IP DNS). With the tunnel down, every host resolves to `198.18.0.x` and no provider is reachable from either Windows or WSL.
+
 ## [3.20.10] - 2026-09-15
 
 Fork cherry-pick of official 3.20.3 Wave 1 + Wave 2 + optional UI/presets onto SCHEMA 18. Does **not** claim official 3.20.3. Fork Pi/WSL/proxy work is preserved. Windows x64 MSI + Portable only.
