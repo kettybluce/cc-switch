@@ -1356,11 +1356,24 @@ fn serialize_tool_definition_for_description(tool: &Value) -> String {
     canonical_json_string(tool)
 }
 
+/// JSON Schema keywords that hold nested schemas. Data keywords such as
+/// `default` / `const` / `enum` / `examples` are intentionally omitted so a
+/// literal that happens to look like a schema is not rewritten.
+const SCHEMA_OBJECT_MAP_KEYWORDS: &[&str] =
+    &["properties", "patternProperties", "$defs", "definitions"];
+const SCHEMA_ARRAY_KEYWORDS: &[&str] = &["anyOf", "oneOf", "allOf", "prefixItems"];
+
 /// Normalize a function's `parameters` JSON Schema so `type` is always `"object"`.
 ///
 /// Some Responses tools carry `parameters: null` or `parameters: {"type": null}`,
 /// but OpenAI Chat Completions strictly requires `{"type": "object", "properties": {...}}`.
-fn normalize_function_parameters(params: Option<&Value>) -> Value {
+///
+/// Strict gateways (DeepSeek, AgentRouter, …) also reject object schemas whose
+/// `required` is JSON `null` or omitted — they surface that as HTTP 400
+/// `Invalid schema for function 'list_mcp_resources': null is not of type "array"`.
+/// Non-strict tools get `required: []`; `strict: true` tools are left alone
+/// because an empty required list would violate OpenAI's strict-mode contract.
+fn normalize_function_parameters(params: Option<&Value>, strict: bool) -> Value {
     let mut params = match params {
         Some(Value::Object(obj)) => Value::Object(obj.clone()),
         _ => json!({"type": "object", "properties": {}}),
@@ -1373,13 +1386,145 @@ fn normalize_function_parameters(params: Option<&Value>) -> Value {
             }
         }
     }
+    if !strict {
+        ensure_object_schema_required(&mut params);
+    }
     params
+}
+
+fn function_tool_is_strict(tool: &Value) -> bool {
+    tool.get("strict").and_then(Value::as_bool) == Some(true)
+        || tool
+            .get("function")
+            .and_then(|function| function.get("strict"))
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
+/// Rewrite `required: null` (and omitted `required` on `type: object` nodes)
+/// to `[]` across every function / tool_search schema in a Responses body.
+///
+/// Used on the native Responses passthrough so DeepSeek-class gateways that
+/// never hit [`normalize_function_parameters`] still accept Codex MCP tools
+/// such as `list_mcp_resources` (#7548).
+pub(crate) fn sanitize_codex_tool_schema_required_arrays(body: &mut Value) -> bool {
+    let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for tool in tools {
+        changed |= sanitize_tool_schema_required_arrays(tool);
+    }
+    changed
+}
+
+fn sanitize_tool_schema_required_arrays(tool: &mut Value) -> bool {
+    let tool_type = tool
+        .get("type")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    match tool_type.as_deref() {
+        Some("namespace") => {
+            let mut changed = false;
+            for key in ["tools", "children"] {
+                if let Some(children) = tool.get_mut(key).and_then(Value::as_array_mut) {
+                    for child in children {
+                        changed |= sanitize_tool_schema_required_arrays(child);
+                    }
+                }
+            }
+            changed
+        }
+        Some("function") | Some("tool_search") => {
+            if function_tool_is_strict(tool) {
+                return false;
+            }
+            if let Some(params) = tool.get_mut("parameters") {
+                return ensure_object_schema_required(params);
+            }
+            if let Some(params) = tool
+                .get_mut("function")
+                .and_then(|function| function.get_mut("parameters"))
+            {
+                return ensure_object_schema_required(params);
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn ensure_object_schema_required(schema: &mut Value) -> bool {
+    ensure_object_schema_required_at(schema, 0)
+}
+
+fn ensure_object_schema_required_at(node: &mut Value, depth: usize) -> bool {
+    if depth > 64 {
+        return false;
+    }
+    let Some(obj) = node.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+
+    let is_object_schema = match obj.get("type") {
+        Some(Value::String(kind)) => kind == "object",
+        Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some("object")),
+        _ => false,
+    };
+    if is_object_schema {
+        match obj.get("required") {
+            None | Some(Value::Null) => {
+                obj.insert("required".to_string(), json!([]));
+                changed = true;
+            }
+            _ => {}
+        }
+    } else if matches!(obj.get("required"), Some(Value::Null)) {
+        obj.insert("required".to_string(), json!([]));
+        changed = true;
+    }
+
+    for key in SCHEMA_OBJECT_MAP_KEYWORDS {
+        if let Some(Value::Object(entries)) = obj.get_mut(*key) {
+            for child in entries.values_mut() {
+                changed |= ensure_object_schema_required_at(child, depth + 1);
+            }
+        }
+    }
+    if let Some(items) = obj.get_mut("items") {
+        match items {
+            Value::Array(entries) => {
+                for child in entries {
+                    changed |= ensure_object_schema_required_at(child, depth + 1);
+                }
+            }
+            other => {
+                changed |= ensure_object_schema_required_at(other, depth + 1);
+            }
+        }
+    }
+    for key in SCHEMA_ARRAY_KEYWORDS {
+        if let Some(Value::Array(entries)) = obj.get_mut(*key) {
+            for child in entries {
+                changed |= ensure_object_schema_required_at(child, depth + 1);
+            }
+        }
+    }
+    if let Some(additional) = obj.get_mut("additionalProperties") {
+        if additional.is_object() {
+            changed |= ensure_object_schema_required_at(additional, depth + 1);
+        }
+    }
+    changed
 }
 
 fn responses_function_tool_to_chat_tool(tool: &Value, chat_name: &str) -> Option<Value> {
     if tool.get("type").and_then(|v| v.as_str()) != Some("function") {
         return None;
     }
+
+    let strict = function_tool_is_strict(tool);
 
     if let Some(function) = tool.get("function") {
         let mut chat_tool = json!({
@@ -1391,7 +1536,7 @@ fn responses_function_tool_to_chat_tool(tool: &Value, chat_name: &str) -> Option
             .and_then(|value| value.as_object_mut())
         {
             // Ensure parameters.type is "object" for strict OpenAI-compatible providers
-            let parameters = normalize_function_parameters(obj.get("parameters"));
+            let parameters = normalize_function_parameters(obj.get("parameters"), strict);
             obj.insert("parameters".to_string(), parameters);
 
             obj.insert("name".to_string(), json!(chat_name));
@@ -1405,7 +1550,7 @@ fn responses_function_tool_to_chat_tool(tool: &Value, chat_name: &str) -> Option
     let mut function = json!({
         "name": chat_name,
         "description": tool.get("description").cloned().unwrap_or(Value::Null),
-        "parameters": normalize_function_parameters(tool.get("parameters"))
+        "parameters": normalize_function_parameters(tool.get("parameters"), strict)
     });
     if let Some(strict) = tool.get("strict") {
         function["strict"] = strict.clone();
@@ -2418,7 +2563,7 @@ mod tests {
 
         assert_eq!(
             result["tools"][0]["function"]["parameters"],
-            json!({"type": "object", "properties": {}})
+            json!({"type": "object", "properties": {}, "required": []})
         );
     }
 
@@ -2441,7 +2586,7 @@ mod tests {
 
         assert_eq!(
             result["tools"][0]["function"]["parameters"],
-            json!({"type": "object", "properties": {}})
+            json!({"type": "object", "properties": {}, "required": []})
         );
     }
 
@@ -2463,8 +2608,204 @@ mod tests {
 
         assert_eq!(
             result["tools"][0]["function"]["parameters"],
-            json!({"type": "object", "properties": {}})
+            json!({"type": "object", "properties": {}, "required": []})
         );
+    }
+
+    #[test]
+    fn responses_request_to_chat_fills_missing_required_array_for_list_mcp_resources() {
+        // Codex serializes all-optional MCP tools without `required`. Strict
+        // OpenAI-compatible gateways treat the missing field as null and 400.
+        let input = json!({
+            "model": "deepseek-v4-flash",
+            "tools": [{
+                "type": "function",
+                "name": "list_mcp_resources",
+                "description": "Lists resources provided by MCP servers.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "server": {"type": "string"},
+                        "cursor": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }
+            }],
+            "input": "hi"
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        let parameters = &result["tools"][0]["function"]["parameters"];
+
+        assert_eq!(parameters["required"], json!([]));
+        assert_eq!(parameters["additionalProperties"], json!(false));
+        assert!(parameters["properties"]["server"].is_object());
+        assert!(parameters["properties"]["cursor"].is_object());
+    }
+
+    #[test]
+    fn responses_request_to_chat_coerces_null_required_array_to_empty() {
+        let input = json!({
+            "model": "deepseek-v4-flash",
+            "tools": [{
+                "type": "function",
+                "name": "list_mcp_resources",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"server": {"type": "string"}},
+                    "required": null,
+                    "additionalProperties": false
+                }
+            }],
+            "input": "hi"
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        assert_eq!(
+            result["tools"][0]["function"]["parameters"]["required"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn responses_request_to_chat_preserves_existing_required_array() {
+        let input = json!({
+            "model": "gpt-5.4",
+            "tools": [{
+                "type": "function",
+                "name": "read_mcp_resource",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "server": {"type": "string"},
+                        "uri": {"type": "string"}
+                    },
+                    "required": ["server", "uri"]
+                }
+            }],
+            "input": "hi"
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        assert_eq!(
+            result["tools"][0]["function"]["parameters"]["required"],
+            json!(["server", "uri"])
+        );
+    }
+
+    #[test]
+    fn responses_request_to_chat_does_not_fill_required_on_strict_tools() {
+        let input = json!({
+            "model": "gpt-5.4",
+            "tools": [{
+                "type": "function",
+                "name": "strict_tool",
+                "strict": true,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}}
+                }
+            }],
+            "input": "hi"
+        });
+
+        let result = responses_to_chat_completions(input).unwrap();
+        assert!(
+            result["tools"][0]["function"]["parameters"]
+                .get("required")
+                .is_none(),
+            "strict:true tools must not receive an empty required array"
+        );
+    }
+
+    #[test]
+    fn native_responses_sanitizer_fills_list_mcp_resources_required_array() {
+        let mut body = json!({
+            "model": "deepseek-v4-flash",
+            "tools": [{
+                "type": "function",
+                "name": "list_mcp_resources",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "server": {"type": "string"},
+                        "cursor": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }
+            }]
+        });
+
+        assert!(sanitize_codex_tool_schema_required_arrays(&mut body));
+        assert_eq!(body["tools"][0]["parameters"]["required"], json!([]));
+        assert!(!sanitize_codex_tool_schema_required_arrays(&mut body));
+    }
+
+    #[test]
+    fn native_responses_sanitizer_coerces_null_required_and_nested_objects() {
+        let mut body = json!({
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "list_mcp_resources",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filter": {
+                                "type": "object",
+                                "properties": {"q": {"type": "string"}}
+                            }
+                        },
+                        "required": null
+                    }
+                },
+                {
+                    "type": "namespace",
+                    "name": "mcp__docs",
+                    "tools": [{
+                        "type": "function",
+                        "name": "search",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                        }
+                    }]
+                }
+            ]
+        });
+
+        assert!(sanitize_codex_tool_schema_required_arrays(&mut body));
+        assert_eq!(body["tools"][0]["parameters"]["required"], json!([]));
+        assert_eq!(
+            body["tools"][0]["parameters"]["properties"]["filter"]["required"],
+            json!([])
+        );
+        assert_eq!(
+            body["tools"][1]["tools"][0]["parameters"]["required"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn native_responses_sanitizer_skips_strict_tools() {
+        let mut body = json!({
+            "tools": [{
+                "type": "function",
+                "name": "strict_tool",
+                "strict": true,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}},
+                    "required": null
+                }
+            }]
+        });
+
+        assert!(!sanitize_codex_tool_schema_required_arrays(&mut body));
+        assert!(body["tools"][0]["parameters"]["required"].is_null());
     }
 
     #[test]
@@ -2520,16 +2861,19 @@ mod tests {
         let parameters = &result["tools"][0]["function"]["parameters"];
 
         assert_eq!(parameters["type"], "object");
+        assert_eq!(parameters["required"], json!([]));
         assert_eq!(
             parameters["oneOf"],
             json!([
                 {
                     "type": "object",
-                    "properties": {"id": {"type": "string"}}
+                    "properties": {"id": {"type": "string"}},
+                    "required": []
                 },
                 {
                     "type": "object",
-                    "properties": {"slug": {"type": "string"}}
+                    "properties": {"slug": {"type": "string"}},
+                    "required": []
                 }
             ])
         );
