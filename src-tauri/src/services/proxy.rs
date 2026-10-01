@@ -3,9 +3,7 @@
 //! 提供代理服务器的启动、停止和配置管理
 
 use crate::app_config::AppType;
-use crate::config::{
-    get_claude_settings_path, read_json_file, write_json_file, write_json_file_private,
-};
+use crate::config::{get_claude_settings_path, read_json_file, write_json_file_private};
 use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
@@ -4260,6 +4258,8 @@ impl ProxyService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 生产代码已全部改用 `write_json_file_private`；仅测试里的夹具还在用普通写入。
+    use crate::config::write_json_file;
     use crate::provider::{AuthBinding, AuthBindingSource, ProviderMeta};
     use serial_test::serial;
     use std::env;
