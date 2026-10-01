@@ -3,7 +3,9 @@
 //! 提供代理服务器的启动、停止和配置管理
 
 use crate::app_config::AppType;
-use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
+use crate::config::{
+    get_claude_settings_path, read_json_file, write_json_file, write_json_file_private,
+};
 use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
@@ -2752,7 +2754,7 @@ impl ProxyService {
         // Clearing the token prevents a stale local route from looking usable.
         let updated = crate::grok_config::update_api_key(config_toml, "")
             .map_err(|e| format!("清理 Grok Build 接管占位符失败: {e}"))?;
-        crate::config::write_text_file(&crate::grok_config::get_grok_config_path(), &updated)
+        crate::config::write_text_file_private(&crate::grok_config::get_grok_config_path(), &updated)
             .map_err(|e| format!("写入 Grok Build 配置失败: {e}"))
     }
 
@@ -3707,7 +3709,7 @@ impl ProxyService {
     fn write_claude_live(&self, config: &Value) -> Result<(), String> {
         let path = get_claude_settings_path();
         let settings = crate::services::provider::sanitize_claude_settings_for_live(config);
-        write_json_file(&path, &settings).map_err(|e| format!("写入 Claude 配置失败: {e}"))
+        write_json_file_private(&path, &settings).map_err(|e| format!("写入 Claude 配置失败: {e}"))
     }
 
     fn read_codex_live(&self) -> Result<Value, String> {
@@ -4010,7 +4012,7 @@ impl ProxyService {
                 }
 
                 let config_result = prepared_cfg.as_deref().map_or(Ok(()), |cfg| {
-                    crate::config::write_text_file(&get_codex_config_path(), cfg)
+                    crate::config::write_text_file_private(&get_codex_config_path(), cfg)
                         .map_err(|error| format!("写入 Codex config 失败: {error}"))
                 });
                 match config_result {
@@ -4030,7 +4032,7 @@ impl ProxyService {
                         // Unguarded provider writes preserve an existing login;
                         // only restore transactions interpret empty auth as an
                         // exact-generation deletion.
-                        crate::config::write_text_file(&get_codex_config_path(), cfg)
+                        crate::config::write_text_file_private(&get_codex_config_path(), cfg)
                             .map_err(|e| format!("写入 Codex config 失败: {e}"))
                     } else {
                         crate::codex_config::write_codex_live_atomic(auth, Some(cfg))
@@ -4041,11 +4043,11 @@ impl ProxyService {
                     if auth.as_object().is_some_and(Map::is_empty) {
                         Ok(())
                     } else {
-                        write_json_file(&get_codex_auth_path(), auth)
+                        write_json_file_private(&get_codex_auth_path(), auth)
                             .map_err(|e| format!("写入 Codex auth 失败: {e}"))
                     }
                 }
-                (None, Some(cfg)) => crate::config::write_text_file(&get_codex_config_path(), cfg)
+                (None, Some(cfg)) => crate::config::write_text_file_private(&get_codex_config_path(), cfg)
                     .map_err(|e| format!("写入 Codex config 失败: {e}")),
                 (None, None) => Ok(()),
             }

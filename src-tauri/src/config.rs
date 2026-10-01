@@ -356,19 +356,30 @@ pub fn write_json_file_with_contents<T: Serialize>(
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
 
+    let contents = sorted_json_bytes(data)?;
+    atomic_write(path, &contents)?;
+    Ok(contents)
+}
+
+/// 排序并序列化 JSON（键按字母排序，确保确定性输出）。
+fn sorted_json_bytes<T: Serialize>(data: &T) -> Result<Vec<u8>, AppError> {
     let value = serde_json::to_value(data).map_err(|e| AppError::JsonSerialize { source: e })?;
     let sorted_value = sort_json_keys(&value);
     let json = serde_json::to_string_pretty(&sorted_value)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
-
-    let contents = json.into_bytes();
-    atomic_write(path, &contents)?;
-    Ok(contents)
+    Ok(json.into_bytes())
 }
 
 /// 写入 JSON 配置文件（键按字母排序，确保确定性输出）
 pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
     write_json_file_with_contents(path, data).map(|_| ())
+}
+
+/// 同 [`write_json_file`]，用于含凭据的 live 文件（Codex `auth.json`、Claude Code
+/// `settings.json`）：Unix 下新文件和替换文件都是 0600。普通写入新建文件时按 umask
+/// 落成 0644，Key 就对同机其他用户可读。
+pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    atomic_write_private(path, &sorted_json_bytes(data)?)
 }
 
 /// 原子写入文本文件（用于 TOML/纯文本）
@@ -377,6 +388,12 @@ pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
     atomic_write(path, data.as_bytes())
+}
+
+/// 同 [`write_text_file`]，用于含凭据的 live 文件（Codex / Grok Build 的
+/// `config.toml`，第三方 Key 就写在里面）：Unix 下 0600。
+pub fn write_text_file_private(path: &Path, data: &str) -> Result<(), AppError> {
+    atomic_write_private(path, data.as_bytes())
 }
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
@@ -583,6 +600,63 @@ mod tests {
     fn atomic_write_replaces_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_atomic_write_replaces_existing_file(dir.path());
+    }
+
+    /// 含凭据的 live 文件必须与普通写入产出完全相同的字节；差别只在权限位。
+    /// 这里在 Windows 上也能跑，权限断言另由 `#[cfg(unix)]` 覆盖。
+    #[test]
+    fn private_writers_match_plain_writers_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = serde_json::json!({ "z": 1, "env": { "ANTHROPIC_AUTH_TOKEN": "secret" } });
+
+        let plain_json = dir.path().join("plain.json");
+        let private_json = dir.path().join("private.json");
+        write_json_file(&plain_json, &data).unwrap();
+        write_json_file_private(&private_json, &data).unwrap();
+        assert_eq!(
+            std::fs::read(&plain_json).unwrap(),
+            std::fs::read(&private_json).unwrap()
+        );
+
+        let plain_toml = dir.path().join("plain.toml");
+        let private_toml = dir.path().join("private.toml");
+        write_text_file(&plain_toml, "api_key = \"secret\"\n").unwrap();
+        write_text_file_private(&private_toml, "api_key = \"secret\"\n").unwrap();
+        assert_eq!(
+            std::fs::read(&plain_toml).unwrap(),
+            std::fs::read(&private_toml).unwrap()
+        );
+
+        // 覆盖已有文件时同样走替换路径，不能因为私有写入而改变内容。
+        write_text_file_private(&private_toml, "api_key = \"rotated\"\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&private_toml).unwrap(),
+            "api_key = \"rotated\"\n"
+        );
+    }
+
+    /// 持有凭据的 live 文件不得按 umask 落成 0644。
+    #[cfg(unix)]
+    #[test]
+    fn private_writers_create_owner_only_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("settings.json");
+        let text_path = dir.path().join("config.toml");
+
+        write_json_file_private(&json_path, &serde_json::json!({ "k": "v" })).unwrap();
+        write_text_file_private(&text_path, "api_key = \"v\"\n").unwrap();
+
+        for path in [&json_path, &text_path] {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} must be owner-only, got {mode:o}", path.display());
+        }
+
+        // 替换已有文件后权限位必须保持。
+        write_json_file_private(&json_path, &serde_json::json!({ "k": "v2" })).unwrap();
+        let mode = std::fs::metadata(&json_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "replaced file must stay owner-only");
     }
 
     #[cfg(windows)]
