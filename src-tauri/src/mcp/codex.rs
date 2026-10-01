@@ -610,6 +610,21 @@ fn json_value_to_toml_item(value: &Value, field_name: &str) -> Option<toml_edit:
 pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table, AppError> {
     use toml_edit::{Array, Item, Table};
 
+    // WSL 目标：`config.toml` 位于 `\\wsl.localhost\…`，但读它的是发行版内的
+    // Codex，那里没有 `cmd`。数据库只存一份 spec，而它可能是当年给 Windows
+    // 目标写出的 `cmd /c npx …` 包装形态（导入时按原样落库），所以投影到 WSL
+    // 必须在这里主动解包。这是 Codex 侧唯一的目标形态转换点，所有写入口
+    //（`sync_single_server_to_codex` / `sync_enabled_to_codex`）都会经过。
+    let mut projected = spec.clone();
+    if let Some(obj) = projected.as_object_mut() {
+        if crate::mcp::windows_cmd::is_wsl_path(&crate::codex_config::get_codex_config_path())
+            && crate::mcp::windows_cmd::strip_windows_cmd_wrapper(obj)
+        {
+            log::info!("Codex MCP 目标位于 WSL，已解包 Windows cmd /c 包装");
+        }
+    }
+    let spec = &projected;
+
     let mut t = Table::new();
     let typ = spec.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
     t["type"] = toml_edit::value(typ);

@@ -6,89 +6,14 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{atomic_write, get_claude_mcp_path};
 use crate::error::AppError;
+use crate::mcp::windows_cmd::{is_wsl_path, strip_windows_cmd_wrapper, wrap_command_for_windows};
 
-/// 需要在 Windows 上用 cmd /c 包装的命令
-/// 这些命令在 Windows 上实际是 .cmd 批处理文件，需要通过 cmd /c 来执行
-#[cfg(windows)]
-const WINDOWS_WRAP_COMMANDS: &[&str] = &["npx", "npm", "yarn", "pnpm", "node", "bun", "deno"];
-
-/// Windows 平台：将 `npx args...` 转换为 `cmd /c npx args...`
-/// 解决 Claude Code /doctor 报告的 "Windows requires 'cmd /c' wrapper to execute npx" 警告
-#[cfg(windows)]
-fn wrap_command_for_windows(obj: &mut Map<String, Value>) {
-    // 只处理 stdio 类型（默认或显式）
-    let server_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
-    if server_type != "stdio" {
-        return;
-    }
-
-    let Some(cmd) = obj.get("command").and_then(|v| v.as_str()) else {
-        return;
-    };
-
-    // 已经是 cmd 的不重复包装
-    if cmd.eq_ignore_ascii_case("cmd") || cmd.eq_ignore_ascii_case("cmd.exe") {
-        return;
-    }
-
-    // 提取命令名（去掉 .cmd 后缀和路径）
-    let cmd_name = Path::new(cmd)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(cmd);
-
-    let needs_wrap = WINDOWS_WRAP_COMMANDS
-        .iter()
-        .any(|&c| cmd_name.eq_ignore_ascii_case(c));
-
-    if !needs_wrap {
-        return;
-    }
-
-    // 构建新的 args: ["/c", "原命令", ...原args]
-    let original_args = obj
-        .get("args")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut new_args = vec![Value::String("/c".into()), Value::String(cmd.into())];
-    new_args.extend(original_args);
-
-    obj.insert("command".into(), Value::String("cmd".into()));
-    obj.insert("args".into(), Value::Array(new_args));
-}
-
-/// 非 Windows 平台无需处理
-#[cfg(not(windows))]
-fn wrap_command_for_windows(_obj: &mut Map<String, Value>) {
-    // 非 Windows 平台不做任何处理
-}
-
-/// 检测路径是否为 WSL 网络路径（如 \\wsl$\Ubuntu\... 或 \\wsl.localhost\Ubuntu\...）
-/// WSL 环境运行的是 Linux，不需要 cmd /c 包装
-/// 注意：仅检测直接 UNC 路径，映射磁盘符（如 Z: -> \\wsl$\...）无法检测
-#[cfg(windows)]
-fn is_wsl_path(path: &Path) -> bool {
-    use std::path::{Component, Prefix};
-    if let Some(Component::Prefix(prefix)) = path.components().next() {
-        match prefix.kind() {
-            Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => {
-                let s = server.to_string_lossy();
-                s.eq_ignore_ascii_case("wsl$") || s.eq_ignore_ascii_case("wsl.localhost")
-            }
-            _ => false,
-        }
-    } else {
-        false
-    }
-}
-
-#[cfg(not(windows))]
-fn is_wsl_path(_path: &Path) -> bool {
-    false
-}
-
+/// 需要在 Windows 上用 cmd /c 包装的命令 —— 迁移到 `mcp::windows_cmd`。
+///
+/// 包装/解包是一对互逆操作，必须放在一起维护：数据库统一存一份 spec，而
+/// 投影时才决定目标形态。历史遗留的已包装条目在投影到 WSL 时必须被**解包**
+/// （`strip_windows_cmd_wrapper`），只"跳过包装"是不够的 —— 那正是
+/// `cmd /c npx …` 曾经被写进 WSL `~/.claude.json` 的原因。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpStatus {
@@ -353,10 +278,13 @@ pub fn set_mcp_servers_map(
     };
 
     // 构建 mcpServers 对象：移除 UI 辅助字段（enabled/source），仅保留实际 MCP 规范
-    // 检测目标路径是否为 WSL，若是则跳过 cmd /c 包装
+    // 检测目标路径是否为 WSL，若是则必须把历史遗留的 cmd /c 包装解开
     let is_wsl_target = is_wsl_path(&path);
     if is_wsl_target {
-        log::info!("检测到 WSL 路径，跳过 cmd /c 包装: {}", path.display());
+        log::info!(
+            "检测到 WSL 路径，解包 cmd /c 包装（WSL 内不存在 cmd）: {}",
+            path.display()
+        );
     }
     let mut out: Map<String, Value> = Map::new();
     for (id, spec) in servers.iter() {
@@ -384,8 +312,12 @@ pub fn set_mcp_servers_map(
         obj.remove("homepage");
         obj.remove("docs");
 
-        // Windows 平台自动包装 npx/npm 等命令为 cmd /c 格式（WSL 路径除外）
-        if !is_wsl_target {
+        // Windows 平台自动包装 npx/npm 等命令为 cmd /c 格式；WSL 目标相反 ——
+        // 必须把数据库里可能已存在的包装解开，否则写过去的服务器在发行版内
+        // 根本无法启动（`cmd` 不存在）。
+        if is_wsl_target {
+            strip_windows_cmd_wrapper(&mut obj);
+        } else {
             wrap_command_for_windows(&mut obj);
         }
 
@@ -408,194 +340,76 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// 测试 Windows 命令包装功能
-    /// 由于使用条件编译，在非 Windows 平台上测试的是空函数
+    // 包装/解包与 WSL 路径判定的纯函数单测已随实现迁移到
+    // `crate::mcp::windows_cmd::tests`（两者必须成对维护）。这里只保留真实
+    // 文件系统上的投影契约测试。
+
+    /// 真机契约测试：WSL 目标必须拿到**解包后**的命令。
+    ///
+    /// `mcp::windows_cmd` 的单测覆盖了包装/解包这一对纯函数；本测试验证的是
+    /// 真实投影链路（读取实时文件 → 合并 → 落盘）在真实 `\\wsl.localhost\…`
+    /// 文件系统上确实解开了历史遗留的 `cmd /c` 包装 —— 这正是
+    /// `/home/<user>/.claude.json` 里出现 `command = "cmd"` 的路径。
+    ///
+    /// 需要 `CC_SWITCH_WSL_TEST_DIR` 指向真实 WSL2 UNC 目录，并被 `#[ignore]`
+    /// 门控（与 `config::tests::atomic_write_replaces_existing_wsl_unc_file`
+    /// 同一约定），用法：`cargo test -- --ignored`。
+    #[cfg(windows)]
     #[test]
-    fn test_wrap_command_for_windows_npx() {
-        let mut obj = json!({"command": "npx", "args": ["-y", "@upstash/context7-mcp"]})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
+    #[ignore = "requires CC_SWITCH_WSL_TEST_DIR to point to a WSL2 UNC directory"]
+    fn set_mcp_servers_map_unwraps_cmd_for_a_real_wsl_target() {
+        let root = PathBuf::from(
+            std::env::var_os("CC_SWITCH_WSL_TEST_DIR").expect("CC_SWITCH_WSL_TEST_DIR must be set"),
+        );
+        let unc = root.to_string_lossy();
+        assert!(
+            unc.starts_with(r"\\wsl.localhost\") || unc.starts_with(r"\\wsl$\"),
+            "expected a WSL UNC path, got {unc}"
+        );
 
-        #[cfg(windows)]
-        {
-            assert_eq!(obj["command"], "cmd");
-            assert_eq!(
-                obj["args"],
-                json!(["/c", "npx", "-y", "@upstash/context7-mcp"])
-            );
-        }
+        let previous = crate::settings::get_settings();
+        crate::settings::update_settings(crate::settings::AppSettings {
+            claude_config_dir: Some(root.join(".claude").to_string_lossy().to_string()),
+            ..previous.clone()
+        })
+        .expect("set claude override dir");
+        crate::settings::reload_settings().expect("reload settings");
 
-        #[cfg(not(windows))]
-        {
-            // 非 Windows 平台不做任何处理
-            assert_eq!(obj["command"], "npx");
-        }
+        let path = get_claude_mcp_path();
+        assert!(
+            is_wsl_path(&path),
+            "test target must be recognised as WSL, got {}",
+            path.display()
+        );
+        std::fs::create_dir_all(path.parent().expect("mcp parent")).expect("create mcp parent");
+
+        // SSOT 里存的是给 Windows 目标写出的"已包装"形态。
+        let mut servers = std::collections::HashMap::new();
+        servers.insert(
+            "context7".to_string(),
+            json!({
+                "type": "stdio",
+                "command": "cmd",
+                "args": ["/c", "npx", "-y", "@upstash/context7-mcp"]
+            }),
+        );
+        set_mcp_servers_map(&servers).expect("project mcp servers to WSL target");
+
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read mcp file"))
+                .expect("parse mcp file");
+        assert_eq!(
+            written["mcpServers"]["context7"]["command"], "npx",
+            "WSL 目标不应收到 cmd 包装: {written}"
+        );
+        assert_eq!(
+            written["mcpServers"]["context7"]["args"],
+            json!(["-y", "@upstash/context7-mcp"])
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = crate::settings::update_settings(previous);
+        let _ = crate::settings::reload_settings();
     }
 
-    #[test]
-    fn test_wrap_command_for_windows_npm() {
-        let mut obj = json!({"command": "npm", "args": ["run", "start"]})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
-
-        #[cfg(windows)]
-        {
-            assert_eq!(obj["command"], "cmd");
-            assert_eq!(obj["args"], json!(["/c", "npm", "run", "start"]));
-        }
-    }
-
-    #[test]
-    fn test_wrap_command_for_windows_already_cmd() {
-        // 已经是 cmd 的不应该重复包装
-        let mut obj = json!({"command": "cmd", "args": ["/c", "npx", "-y", "foo"]})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
-
-        assert_eq!(obj["command"], "cmd");
-        // args 应该保持不变，不会变成 ["/c", "cmd", "/c", "npx", ...]
-        assert_eq!(obj["args"], json!(["/c", "npx", "-y", "foo"]));
-    }
-
-    #[test]
-    fn test_wrap_command_for_windows_http_type_skipped() {
-        // http 类型不应该被处理
-        let mut obj = json!({"type": "http", "url": "https://example.com/mcp"})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
-
-        assert!(!obj.contains_key("command"));
-        assert_eq!(obj["url"], "https://example.com/mcp");
-    }
-
-    #[test]
-    fn test_wrap_command_for_windows_other_command_skipped() {
-        // 非目标命令（如 python）不应该被包装
-        let mut obj = json!({"command": "python", "args": ["server.py"]})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
-
-        // python 不在 WINDOWS_WRAP_COMMANDS 列表中，不应该被包装
-        assert_eq!(obj["command"], "python");
-        assert_eq!(obj["args"], json!(["server.py"]));
-    }
-
-    #[test]
-    fn test_wrap_command_for_windows_no_args() {
-        // 没有 args 的情况
-        let mut obj = json!({"command": "npx"}).as_object().unwrap().clone();
-        wrap_command_for_windows(&mut obj);
-
-        #[cfg(windows)]
-        {
-            assert_eq!(obj["command"], "cmd");
-            assert_eq!(obj["args"], json!(["/c", "npx"]));
-        }
-    }
-
-    #[test]
-    fn test_wrap_command_for_windows_with_cmd_suffix() {
-        // 处理 npx.cmd 格式
-        let mut obj = json!({"command": "npx.cmd", "args": ["-y", "foo"]})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
-
-        #[cfg(windows)]
-        {
-            assert_eq!(obj["command"], "cmd");
-            assert_eq!(obj["args"], json!(["/c", "npx.cmd", "-y", "foo"]));
-        }
-    }
-
-    #[test]
-    fn test_wrap_command_for_windows_case_insensitive() {
-        // 大小写不敏感
-        let mut obj = json!({"command": "NPX", "args": ["-y", "foo"]})
-            .as_object()
-            .unwrap()
-            .clone();
-        wrap_command_for_windows(&mut obj);
-
-        #[cfg(windows)]
-        {
-            assert_eq!(obj["command"], "cmd");
-            assert_eq!(obj["args"], json!(["/c", "NPX", "-y", "foo"]));
-        }
-    }
-
-    /// 测试 WSL 路径检测功能
-    #[test]
-    fn test_is_wsl_path_wsl_dollar() {
-        // wsl$ 格式 - 各种发行版
-        #[cfg(windows)]
-        {
-            assert!(is_wsl_path(Path::new(r"\\wsl$\Ubuntu\home\user\.claude")));
-            assert!(is_wsl_path(Path::new(r"\\wsl$\Debian\home\user\.claude")));
-            assert!(is_wsl_path(Path::new(
-                r"\\wsl$\openSUSE-Leap-15.2\home\user"
-            )));
-            assert!(is_wsl_path(Path::new(r"\\wsl$\kali-linux\home\user")));
-            assert!(is_wsl_path(Path::new(r"\\wsl$\Arch\home\user")));
-            assert!(is_wsl_path(Path::new(r"\\wsl$\Alpine\home\user")));
-            assert!(is_wsl_path(Path::new(r"\\wsl$\Fedora\home\user")));
-        }
-
-        #[cfg(not(windows))]
-        {
-            // 非 Windows 平台始终返回 false
-            assert!(!is_wsl_path(Path::new(r"\\wsl$\Ubuntu\home\user\.claude")));
-        }
-    }
-
-    #[test]
-    fn test_is_wsl_path_wsl_localhost() {
-        // wsl.localhost 格式
-        #[cfg(windows)]
-        {
-            assert!(is_wsl_path(Path::new(
-                r"\\wsl.localhost\Ubuntu\home\user\.claude"
-            )));
-            assert!(is_wsl_path(Path::new(r"\\wsl.localhost\Debian\home\user")));
-            assert!(is_wsl_path(Path::new(
-                r"\\wsl.localhost\openSUSE-Leap-15.2\home\user"
-            )));
-        }
-    }
-
-    #[test]
-    fn test_is_wsl_path_case_insensitive() {
-        // 大小写不敏感
-        #[cfg(windows)]
-        {
-            assert!(is_wsl_path(Path::new(r"\\WSL$\Ubuntu\home\user")));
-            assert!(is_wsl_path(Path::new(r"\\Wsl$\Ubuntu\home\user")));
-            assert!(is_wsl_path(Path::new(r"\\WSL.LOCALHOST\Ubuntu\home\user")));
-            assert!(is_wsl_path(Path::new(r"\\Wsl.Localhost\Ubuntu\home\user")));
-        }
-    }
-
-    #[test]
-    fn test_is_wsl_path_non_wsl() {
-        // 非 WSL 路径
-        assert!(!is_wsl_path(Path::new(r"C:\Users\user\.claude")));
-        assert!(!is_wsl_path(Path::new(r"D:\Workspace\project")));
-        #[cfg(windows)]
-        {
-            assert!(!is_wsl_path(Path::new(r"\\server\share\path")));
-            assert!(!is_wsl_path(Path::new(r"\\localhost\c$\Users")));
-            assert!(!is_wsl_path(Path::new(r"\\192.168.1.1\share")));
-        }
-    }
 }

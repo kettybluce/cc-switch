@@ -223,6 +223,26 @@ impl CodexAuthFileTransaction {
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     Err(Self::changed_error())
                 }
+                // Hard links are unavailable on the WSL 9P redirector
+                // (`\\wsl.localhost\…`), on exFAT, and on some network shares.
+                // `begin` only probes that capability on the branch that has to
+                // quarantine an existing auth.json, so a Codex directory with no
+                // auth.json yet — the normal state inside WSL, where the user
+                // may never have run `codex login` — reached this point
+                // unprobed and failed with ERROR_NOT_SUPPORTED (os error 50).
+                // That aborted the whole Codex takeover activation, left
+                // `config.toml` pointing at the provider's direct URL, and a
+                // direct URL is unreachable from inside WSL. When no generation
+                // was quarantined there is nothing to restore, so the vacant
+                // destination can be claimed with an exclusive create instead —
+                // the same no-clobber guarantee without the hard link.
+                Err(error) if Self::hard_link_unsupported(&error) && self.quarantined.is_none() => {
+                    log::info!(
+                        "Codex auth 所在文件系统不支持硬链接 ({}), 改用排他创建安装",
+                        self.path.display()
+                    );
+                    Self::install_by_exclusive_create(&self.path, &contents)
+                }
                 Err(error) => Err(format!(
                     "安装 Codex auth 失败 ({}): {error}",
                     self.path.display()
@@ -351,6 +371,73 @@ impl CodexAuthFileTransaction {
                 );
             }
         }
+    }
+
+    /// Whether a failed hard link means the *filesystem* cannot create hard
+    /// links at all (as opposed to a per-call problem such as a missing source).
+    ///
+    /// The WSL 9P redirector rejects `CreateHardLinkW` with
+    /// `ERROR_NOT_SUPPORTED` (os error 50); exFAT and several network shares do
+    /// the same. `ErrorKind::Unsupported` is checked too so the same code works
+    /// if the OS mapping changes.
+    fn hard_link_unsupported(error: &std::io::Error) -> bool {
+        if error.kind() == std::io::ErrorKind::Unsupported {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::ERROR_NOT_SUPPORTED;
+            if error.raw_os_error() == Some(ERROR_NOT_SUPPORTED as i32) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Claim a *vacant* destination with `O_EXCL`-style semantics, write
+    /// `contents`, and never replace a file that appeared meanwhile.
+    ///
+    /// Callers must only use this where the hard-link CAS would have been used
+    /// on a vacant path: either the previous generation was quarantined, or
+    /// `begin` already proved the path absent. `create_new` then yields exactly
+    /// the same no-clobber guarantee that the hard link provided.
+    fn install_by_exclusive_create(
+        path: &std::path::Path,
+        contents: &[u8],
+    ) -> Result<(), String> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let mut file = match options.open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(Self::changed_error());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "创建 Codex auth 失败 ({}): {error}",
+                    path.display()
+                ));
+            }
+        };
+
+        use std::io::Write;
+        if let Err(error) = file.write_all(contents).and_then(|_| file.flush()) {
+            drop(file);
+            // A half-written auth.json is worse than none: Codex would read a
+            // truncated credential. Remove it so the retry starts clean.
+            let _ = std::fs::remove_file(path);
+            return Err(format!(
+                "写入 Codex auth 失败 ({}): {error}",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     fn unique_sibling_path(
@@ -10945,5 +11032,210 @@ experimental_bearer_token = "PROXY_MANAGED"
             .expect("read backup")
             .expect("backup exists");
         assert_eq!(backup.original_config, original_backup);
+    }
+
+    /// 真机契约测试：Codex auth 事务必须能在 WSL 文件系统上安装凭据。
+    ///
+    /// `\\wsl.localhost\…` 的 9P 重定向器以 `ERROR_NOT_SUPPORTED` (os error 50)
+    /// 拒绝 `CreateHardLinkW`（exFAT、部分网络共享同理）。而 `begin` 的能力
+    /// 探针只在"存在待隔离的 auth.json"那条分支上运行：一个还没有 auth.json
+    /// 的 Codex 目录 —— 也就是 WSL 里的常态，用户可能从未跑过 `codex login`
+    /// —— 会直接跳过探针，于是 `install` 在硬链接上失败，整个 Codex 接管激活
+    /// 被回滚，live `config.toml` 停留在供应商**直连 URL**；而直连地址在 WSL
+    /// 内不可达，codex 因此完全无法工作。没有待恢复的旧凭据时用排他创建即可。
+    ///
+    /// 需要 `CC_SWITCH_WSL_TEST_DIR` 指向真实 WSL2 UNC 目录，`#[ignore]` 门控
+    /// （与 `config::tests::atomic_write_replaces_existing_wsl_unc_file` 同约定）。
+    #[cfg(windows)]
+    #[test]
+    #[serial]
+    #[ignore = "requires CC_SWITCH_WSL_TEST_DIR to point to a WSL2 UNC directory"]
+    fn codex_auth_transaction_installs_on_a_wsl_filesystem_without_hard_links() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("CC_SWITCH_WSL_TEST_DIR").expect("CC_SWITCH_WSL_TEST_DIR must be set"),
+        );
+        let unc = root.to_string_lossy().to_string();
+        assert!(
+            unc.starts_with(r"\\wsl.localhost\") || unc.starts_with(r"\\wsl$\"),
+            "expected a WSL UNC path, got {unc}"
+        );
+
+        let original_test_home = env::var("CC_SWITCH_TEST_HOME").ok();
+        env::set_var("CC_SWITCH_TEST_HOME", &root);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let auth_path = crate::codex_config::get_codex_auth_path();
+        assert!(
+            auth_path.to_string_lossy().starts_with(&unc),
+            "auth path must live on the WSL target, got {}",
+            auth_path.display()
+        );
+        std::fs::create_dir_all(auth_path.parent().expect("auth parent")).expect("create .codex");
+        let _ = std::fs::remove_file(&auth_path);
+
+        // 回归前提：没有 auth.json，所以 `begin` 里的硬链接能力探针被整个跳过。
+        let absent = CodexAuthFileSnapshot::capture().expect("capture missing auth");
+        assert!(
+            absent.contents.is_none(),
+            "auth.json must be absent for this regression"
+        );
+
+        let payload = br#"{"OPENAI_API_KEY":"PROXY_MANAGED"}"#.to_vec();
+        let mut transaction = CodexAuthFileTransaction::begin(&absent).expect("begin transaction");
+        transaction
+            .install(Some(payload.clone()))
+            .expect("WSL 上必须回退到排他创建来安装 auth");
+        transaction.commit().expect("commit");
+
+        assert_eq!(
+            std::fs::read(&auth_path).expect("read installed auth"),
+            payload,
+            "installed auth must match byte for byte"
+        );
+
+        let _ = std::fs::remove_file(&auth_path);
+        match original_test_home {
+            Some(value) => env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
+    }
+
+    /// 真机端到端：在 WSL 上的 Codex 配置目录开启代理接管必须成功，并把 live
+    /// `config.toml` 真正改写成指向本地代理。
+    ///
+    /// 这正是本机日志里失败的那次操作：
+    /// `✗ 恢复 codex 的代理接管状态失败: 安装 Codex auth 失败
+    ///  (\\wsl.localhost\…\.codex\auth.json): 不支持该请求。(os error 50)`
+    /// 接管失败后 cc-switch 还会回滚并清除状态（同样因 error 50 失败），于是
+    /// live 配置永远停在供应商直连 URL —— 而 WSL 内直连不可达，codex 完全不能
+    /// 工作。这里断言修复后：auth 装得上、`base_url` 指向代理、令牌变成占位符。
+    ///
+    /// 需要 `CC_SWITCH_WSL_TEST_DIR` 指向真实 WSL2 UNC 目录，`#[ignore]` 门控。
+    #[cfg(windows)]
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires CC_SWITCH_WSL_TEST_DIR to point to a WSL2 UNC directory"]
+    async fn codex_takeover_activation_succeeds_on_a_wsl_config_dir() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("CC_SWITCH_WSL_TEST_DIR").expect("CC_SWITCH_WSL_TEST_DIR must be set"),
+        );
+        let unc = root.to_string_lossy().to_string();
+        assert!(
+            unc.starts_with(r"\\wsl.localhost\") || unc.starts_with(r"\\wsl$\"),
+            "expected a WSL UNC path, got {unc}"
+        );
+
+        let original_test_home = env::var("CC_SWITCH_TEST_HOME").ok();
+        env::set_var("CC_SWITCH_TEST_HOME", &root);
+        crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings::default())
+            .expect("reset settings");
+
+        let codex_dir = crate::codex_config::get_codex_config_dir();
+        assert!(
+            codex_dir.to_string_lossy().starts_with(&unc),
+            "Codex 配置目录必须落在 WSL 上, got {}",
+            codex_dir.display()
+        );
+        // 起点：有 live `config.toml`，也有一个真实凭据的 `auth.json`，这样
+        // 接管备份里会带上 auth（恢复时才需要把它装回去）。
+        let _ = std::fs::remove_dir_all(&codex_dir);
+        std::fs::create_dir_all(&codex_dir).expect("create .codex on WSL");
+        let direct_config = "model_provider = \"custom\"\nmodel = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"WSL Direct\"\nbase_url = \"https://direct.example/v1\"\nwire_api = \"responses\"\n";
+        std::fs::write(crate::codex_config::get_codex_config_path(), direct_config)
+            .expect("seed WSL live config.toml");
+        std::fs::write(
+            crate::codex_config::get_codex_auth_path(),
+            br#"{"OPENAI_API_KEY":"real-upstream-key"}"#,
+        )
+        .expect("seed WSL auth.json");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let service = ProxyService::new(db.clone());
+
+        let provider = Provider::with_id(
+            "wsl-direct".to_string(),
+            "WSL Direct".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "real-upstream-key" },
+                "config": r#"model_provider = "custom"
+model = "gpt-5.5"
+
+[model_providers.custom]
+name = "WSL Direct"
+base_url = "https://direct.example/v1"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider)
+            .expect("save codex provider");
+        db.set_current_provider("codex", "wsl-direct")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("wsl-direct"))
+            .expect("set local current provider");
+
+        service
+            .set_takeover_for_app("codex", true)
+            .await
+            .expect("WSL 上开启 Codex 代理接管必须成功");
+
+        // ---- 复现用户当时的真实状态 ----
+        // 一个"半接管"的 WSL Codex 目录：enabled 仍是 1、备份还在、但 live 文件
+        // 已经回到直连 URL，且 auth.json 不存在（用户从未在 WSL 里 codex login）。
+        // 这正是本机日志记录的状态，也是 cc-switch 每次启动都会去修的状态。
+        std::fs::write(crate::codex_config::get_codex_config_path(), direct_config)
+            .expect("rewrite live config to the direct URL");
+        std::fs::remove_file(crate::codex_config::get_codex_auth_path())
+            .expect("remove auth.json");
+        assert!(
+            !crate::codex_config::get_codex_auth_path().exists(),
+            "回归前提：auth.json 必须不存在，`begin` 才会跳过硬链接能力探针"
+        );
+
+        // 这一次调用会走"已标记接管但不匹配 → 先恢复备份再重新接管"的分支，也就是
+        // 日志里的 `安装 Codex auth 失败 (\\wsl.localhost\…\.codex\auth.json):
+        // 不支持该请求。(os error 50)`。修复前它返回 Err 并把状态一并清掉。
+        service
+            .set_takeover_for_app("codex", true)
+            .await
+            .expect("WSL 上修复半接管的 Codex 目录必须成功（曾因硬链接 os error 50 失败）");
+
+        // 1) 备份里的凭据被装回 WSL 文件系统 —— 这一步以前就是硬链接的失败点。
+        let auth_path = crate::codex_config::get_codex_auth_path();
+        let auth: Value =
+            crate::config::read_json_file(&auth_path).expect("read restored WSL auth");
+        assert_eq!(
+            auth.get("OPENAI_API_KEY").and_then(Value::as_str),
+            Some("real-upstream-key"),
+            "恢复必须把原凭据装回, got {auth}"
+        );
+        // 2) live config.toml 必须指向本地代理，而不是直连。
+        let live = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+            .expect("read WSL live config");
+        assert!(
+            !live.contains("https://direct.example/v1"),
+            "WSL live 配置不得残留直连 URL（WSL 内不可达）: {live}"
+        );
+        assert!(
+            live.contains("127.0.0.1") && live.contains("/v1"),
+            "WSL live 配置必须指向本地代理: {live}"
+        );
+        assert!(
+            live.contains(PROXY_TOKEN_PLACEHOLDER),
+            "WSL live 配置必须带代理占位令牌: {live}"
+        );
+
+        let _ = service.set_takeover_for_app("codex", false).await;
+        let _ = std::fs::remove_dir_all(&codex_dir);
+        let _ = std::fs::remove_dir_all(root.join(".cc-switch"));
+        match original_test_home {
+            Some(value) => env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        let _ = crate::settings::reload_settings();
     }
 }

@@ -18,6 +18,7 @@ mod grokbuild;
 mod hermes;
 mod opencode;
 mod validation;
+pub(crate) mod windows_cmd;
 
 // 重新导出公共 API
 pub use claude::{
