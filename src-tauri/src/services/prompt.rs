@@ -94,26 +94,24 @@ impl PromptService {
             return upsert_pi_prompt(state, id, prompt);
         }
 
-        // 检查是否为已启用的提示词
-        let is_enabled = prompt.enabled;
-
+        let prompts = state.db.get_prompts(app.as_str())?;
+        // 只有停用「原本处于启用状态」的最后一条提示词时才清空文件；新建、导入或
+        // 重存一条停用条目时，文件可能是用户自己手写的（AGENTS.md / SOUL.md），
+        // 必须原样保留。注意读取必须发生在 save 之前，否则刚写入的这行会污染判断。
+        let clear_live = !prompt.enabled
+            && prompts.get(id).is_some_and(|previous| previous.enabled)
+            && !prompts
+                .iter()
+                .any(|(key, prompt)| key != id && prompt.enabled);
         state.db.save_prompt(app.as_str(), &prompt)?;
 
-        if is_enabled {
-            // 启用提示词：写入内容到文件
+        if prompt.enabled {
             let target_path = prompt_file_path(&app)?;
             write_text_file(&target_path, &prompt.content)?;
-        } else {
-            // 禁用提示词：检查是否还有其他已启用的提示词
-            let prompts = state.db.get_prompts(app.as_str())?;
-            let any_enabled = prompts.values().any(|p| p.enabled);
-
-            if !any_enabled {
-                // 所有提示词都已禁用，清空文件
-                let target_path = prompt_file_path(&app)?;
-                if target_path.exists() {
-                    write_text_file(&target_path, "")?;
-                }
+        } else if clear_live {
+            let target_path = prompt_file_path(&app)?;
+            if target_path.exists() {
+                write_text_file(&target_path, "")?;
             }
         }
 
