@@ -116,9 +116,20 @@ impl RequestContext {
             .to_string();
 
         let request_is_pi = crate::pi_config::request_is_pi_client(headers);
+        // Claude catalog hit: pin to one provider, never failover / hot-switch current.
+        let claude_catalog_hit = !request_is_pi
+            && app_type_str == AppType::Claude.as_str()
+            && state
+                .provider_router
+                .resolve_claude_model_route(&request_model)
+                .is_some();
         if request_is_pi {
             // Pi has no failover queue. Do not inherit Claude/Codex failover
             // or hot-switch their current card after a successful Pi request.
+            app_config.auto_failover_enabled = false;
+        } else if claude_catalog_hit {
+            // Align with Pi / farion1231/cc-switch#6601: catalog routing must not
+            // mutate the UI "current provider" via FailoverSwitchManager.
             app_config.auto_failover_enabled = false;
         }
         let tag = if request_is_pi { "Pi" } else { tag };
@@ -150,7 +161,9 @@ impl RequestContext {
                 _ => ProxyError::DatabaseError(e.to_string()),
             })?;
 
-        let current_provider_id = if request_is_pi {
+        // Catalog / Pi: set current_provider_id_at_start to the selected provider so
+        // forwarder's should_switch is false and try_switch never hot-switches settings.
+        let current_provider_id = if request_is_pi || claude_catalog_hit {
             providers
                 .first()
                 .map(|provider| provider.id.clone())

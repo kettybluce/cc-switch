@@ -2971,7 +2971,22 @@
       "stopFailed": "ルーティングサービスの停止に失敗しました: {{detail}}"
     },
     "stoppedWithRestore": "ルーティングサービスが停止し、すべてのルーティング設定が復元されました",
-    "stopWithRestoreFailed": "停止に失敗しました: {{detail}}"
+    "stopWithRestoreFailed": "停止に失敗しました: {{detail}}",
+    "claudeModelRouting": {
+      "title": "Claude クロスプロバイダーモデル一覧",
+      "accordionDescription": "Claude Code の /model で、設定済みの任意プロバイダーのモデルに切り替え（プロキシ接管が必要）",
+      "description": "接管が有効で本機能がオンのとき、カタログを Claude Code settings.json の modelPicker に投影し、clientModel でルーティングします。Claude Code ≥ 2.1.242 が必要です。",
+      "hint": "clientModel の既定形式は「プロバイダーID/上流モデル」（衝突しにくい）です。カタログ一致時はホームの現在プロバイダーをホット切替せず、グローバルフェイルオーバーも使いません。保存後は Claude Code セッションを再起動して modelPicker を再読込してください。",
+      "replaceBuiltIn": "組み込みの sonnet/opus/… を置き換える（既定オフ）",
+      "provider": "プロバイダー",
+      "selectProvider": "プロバイダーを選択…",
+      "upstreamModel": "上流モデル",
+      "clientModel": "clientModel（/model に表示）",
+      "label": "表示名",
+      "descriptionField": "説明",
+      "add": "モデルを追加",
+      "saved": "クロスプロバイダーモデル一覧を保存しました"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}} は接続可能 ({{responseTimeMs}}ms)",

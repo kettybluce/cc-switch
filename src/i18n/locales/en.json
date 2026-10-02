@@ -2971,7 +2971,22 @@
       "stopFailed": "Failed to stop routing service: {{detail}}"
     },
     "stoppedWithRestore": "Routing service stopped, all routing configs restored",
-    "stopWithRestoreFailed": "Stop failed: {{detail}}"
+    "stopWithRestoreFailed": "Stop failed: {{detail}}",
+    "claudeModelRouting": {
+      "title": "Claude cross-provider model catalog",
+      "accordionDescription": "Let Claude Code /model switch to models from any configured provider (requires proxy takeover)",
+      "description": "When takeover is on and this feature is enabled, the catalog is projected into Claude Code settings.json modelPicker and requests are routed by clientModel. Requires Claude Code ≥ 2.1.242.",
+      "hint": "Default clientModel format is {providerId}/{upstreamModel} (collision-safe). Catalog hits never hot-switch the home current provider and skip global failover. Restart the Claude Code session after saving to reload modelPicker.",
+      "replaceBuiltIn": "Replace built-in sonnet/opus/… (off by default)",
+      "provider": "Provider",
+      "selectProvider": "Select provider…",
+      "upstreamModel": "Upstream model",
+      "clientModel": "clientModel (visible in /model)",
+      "label": "Label",
+      "descriptionField": "Description",
+      "add": "Add model",
+      "saved": "Cross-provider model catalog saved"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}} is reachable ({{responseTimeMs}}ms)",

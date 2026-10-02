@@ -2971,7 +2971,22 @@
       "stopFailed": "停止路由服务失败：{{detail}}"
     },
     "stoppedWithRestore": "路由服务已关闭，已恢复所有路由配置",
-    "stopWithRestoreFailed": "停止失败: {{detail}}"
+    "stopWithRestoreFailed": "停止失败: {{detail}}",
+    "claudeModelRouting": {
+      "title": "Claude 跨供应商模型目录",
+      "accordionDescription": "让 Claude Code /model 切换到任意已配置供应商的模型（需代理接管）",
+      "description": "接管开启且本功能启用时，将目录投影到 Claude Code settings.json 的 modelPicker，并按 clientModel 路由到对应供应商。需要 Claude Code ≥ 2.1.242。",
+      "hint": "clientModel 默认格式为「供应商ID/上游模型」（碰撞安全）。目录命中时不会热切换首页当前供应商，也不会走全局故障转移。保存后请重启 Claude Code 会话以重载 modelPicker。",
+      "replaceBuiltIn": "替换内置 sonnet/opus/…（默认关闭，保留内置）",
+      "provider": "供应商",
+      "selectProvider": "选择供应商…",
+      "upstreamModel": "上游模型",
+      "clientModel": "clientModel（/model 可见）",
+      "label": "显示名",
+      "descriptionField": "描述",
+      "add": "添加模型",
+      "saved": "跨供应商模型目录已保存"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}} 连通正常 ({{responseTimeMs}}ms)",

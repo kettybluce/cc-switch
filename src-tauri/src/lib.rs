@@ -3,6 +3,7 @@ mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
 mod claude_mcp;
+mod claude_model_routing;
 mod claude_plugin;
 mod codex_config;
 mod codex_history_migration;
@@ -1406,6 +1407,8 @@ pub fn run() {
             commands::save_settings,
             commands::has_codex_unify_history_backup,
             commands::restore_codex_unified_history,
+            commands::get_claude_model_routing,
+            commands::set_claude_model_routing,
             commands::get_rectifier_config,
             commands::set_rectifier_config,
             commands::get_optimizer_config,
