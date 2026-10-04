@@ -23,7 +23,7 @@ export interface GeminiProviderPreset {
   description?: string;
   category?: ProviderCategory;
   isPartner?: boolean;
-  primePartner?: boolean; // 置顶合作伙伴（顶级）：徽章显示为心形
+  primePartner?: boolean; // 旧版的置顶合作伙伴标记；v7 起界面不再读取，新预设不写
   partnerPromotionKey?: string;
   endpointCandidates?: string[];
   theme?: GeminiPresetTheme;
@@ -51,7 +51,7 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     icon: "gemini",
     iconColor: "#4285F4",
   },
-  // ===== 赞助商预设：文件顺序 = 应用内展示顺序，与 README 赞助商表对齐 =====
+  // ===== 赞助商预设：文件顺序与 README 赞助商表对齐（仅维护约定；应用内一律按显示名排序，不置顶）=====
   {
     name: "PackyCode",
     websiteUrl: "https://www.packyapi.ai",
