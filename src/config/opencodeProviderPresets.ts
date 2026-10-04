@@ -1434,6 +1434,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         editorValue: "",
       },
     },
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -2450,6 +2451,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         editorValue: "",
       },
     },
+    icon: "bailing",
   },
   {
     name: "Xiaomi MiMo",
@@ -2669,6 +2671,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         editorValue: "",
       },
     },
+    icon: "therouter",
   },
   {
     name: "Novita AI",

@@ -856,6 +856,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     endpointCandidates: ["https://www.dmxapi.cn", "https://api.dmxapi.cn"],
     isPartner: true,
     partnerPromotionKey: "dmxapi",
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -1394,6 +1395,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
     mode: "proxy",
     apiFormat: "anthropic",
     modelRoutes: brandedRoutes("Ling-2.6-1T", "Ling-2.6-1T", "Ling-2.6-1T"),
+    icon: "bailing",
   },
   {
     name: "AiHubMix",
@@ -1481,6 +1483,7 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
       true,
     ),
     endpointCandidates: ["https://api.therouter.ai"],
+    icon: "therouter",
   },
   {
     name: "Novita AI",

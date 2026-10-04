@@ -474,6 +474,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     category: "aggregator",
     isPartner: true,
     partnerPromotionKey: "dmxapi",
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -610,5 +611,6 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     ),
     endpointCandidates: ["https://api.therouter.ai/v1"],
     category: "aggregator",
+    icon: "therouter",
   },
 ];

@@ -1152,6 +1152,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     suggestedDefaults: {
       model: { default: "gpt-5.6-sol", provider: "dmxapi" },
     },
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -1919,6 +1920,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     suggestedDefaults: {
       model: { default: "Ling-2.6-1T", provider: "bailing" },
     },
+    icon: "bailing",
   },
   {
     name: "AiHubMix",
@@ -2002,6 +2004,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
         provider: "therouter",
       },
     },
+    icon: "therouter",
   },
   {
     name: "Novita AI",

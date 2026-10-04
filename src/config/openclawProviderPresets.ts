@@ -1847,6 +1847,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
         "dmxapi/claude-sonnet-5": { alias: "Sonnet" },
       },
     },
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -3381,6 +3382,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
       model: { primary: "bailing/Ling-2.6-1T" },
       modelCatalog: { "bailing/Ling-2.6-1T": { alias: "BaiLing" } },
     },
+    icon: "bailing",
   },
   {
     name: "Xiaomi MiMo",
@@ -3661,6 +3663,7 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
         "therouter/qwen/qwen3-coder-480b": { alias: "Qwen Coder" },
       },
     },
+    icon: "therouter",
   },
   {
     name: "ModelScope",

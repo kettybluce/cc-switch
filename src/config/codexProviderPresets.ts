@@ -1246,6 +1246,7 @@ requires_openai_auth = true`,
     endpointCandidates: ["https://www.dmxapi.cn/v1"],
     isPartner: true, // 合作伙伴
     partnerPromotionKey: "dmxapi", // 促销信息 i18n key
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -2634,6 +2635,34 @@ requires_openai_auth = true`,
     iconColor: "#FF6B6B",
   },
   {
+    name: "Astron Coding Plan",
+    websiteUrl: "https://maas.xfyun.cn/packageSubscription",
+    apiKeyUrl: "https://maas.xfyun.cn/packageSubscription",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "astron_coding_plan",
+      "https://maas-coding-api.cn-huabei-1.xf-yun.com/v1",
+      "astron-code-latest",
+    ),
+    // 讯飞官方 Codex 配置：www.xfyun.cn/doc/spark/CodingPlan.html。
+    // Responses 用 /v1；Chat 的 /v2 以及常规 maas-api 服务均不能混用。
+    endpointCandidates: ["https://maas-coding-api.cn-huabei-1.xf-yun.com/v1"],
+    apiFormat: "openai_responses",
+    modelCatalog: modelCatalog([
+      {
+        // 别名在控制台切换底层模型；窗口/模态沿用官方保守接入示例。
+        model: "astron-code-latest",
+        displayName: "Astron Code Latest",
+        contextWindow: 92160,
+        inputModalities: ["text"],
+        reasoningLevels: ["high"],
+        defaultReasoningLevel: "high",
+      },
+    ]),
+    category: "cn_official",
+    icon: "astron",
+  },
+  {
     name: "BaiLing",
     websiteUrl: "https://alipaytbox.yuque.com/sxs0ba/ling/get_started",
     apiKeyUrl: "https://ling.tbox.cn/open",
@@ -2653,6 +2682,7 @@ requires_openai_auth = true`,
       },
     ]),
     category: "cn_official",
+    icon: "bailing",
   },
   {
     name: "Xiaomi MiMo",
@@ -3064,6 +3094,7 @@ base_url = "https://cc-api.pipellm.ai/v1"`,
     ),
     endpointCandidates: ["https://api.therouter.ai/v1"],
     category: "aggregator",
+    icon: "therouter",
   },
   {
     name: "JieKou AI",

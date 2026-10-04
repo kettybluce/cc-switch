@@ -898,6 +898,7 @@ export const providerPresets: ProviderPreset[] = [
     category: "aggregator",
     isPartner: true, // 合作伙伴
     partnerPromotionKey: "dmxapi", // 促销信息 i18n key
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -1570,6 +1571,7 @@ export const providerPresets: ProviderPreset[] = [
       },
     },
     category: "cn_official",
+    icon: "bailing",
   },
   {
     name: "AiHubMix",
@@ -1677,6 +1679,7 @@ export const providerPresets: ProviderPreset[] = [
     },
     category: "aggregator",
     endpointCandidates: ["https://api.therouter.ai"],
+    icon: "therouter",
   },
   {
     name: "Novita AI",

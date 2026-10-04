@@ -992,6 +992,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
     category: "aggregator",
     isPartner: true,
     partnerPromotionKey: "dmxapi",
+    icon: "dmxapi",
   },
   {
     name: "SudoCode.chat",
@@ -1454,6 +1455,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       ],
     },
     category: "cn_official",
+    icon: "bailing",
   },
   {
     name: "Xiaomi MiMo",
@@ -1656,6 +1658,7 @@ const piProviderPresetDefinitions: PiProviderPreset[] = [
       ],
     },
     category: "aggregator",
+    icon: "therouter",
   },
   {
     name: "Novita AI",

@@ -535,6 +535,7 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     description: "TheRouter",
     category: "aggregator",
     endpointCandidates: ["https://api.therouter.ai"],
+    icon: "therouter",
   },
   {
     name: "AICodeWith",
