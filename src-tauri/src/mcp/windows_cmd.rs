@@ -145,26 +145,10 @@ pub(crate) fn strip_windows_cmd_wrapper(_obj: &mut Map<String, Value>) -> bool {
 /// WSL runs Linux, so config written there must not carry `cmd /c` wrappers.
 /// Only direct UNC paths are detected; a mapped drive letter pointing at
 /// `\\wsl$\…` cannot be recognised here.
-#[cfg(windows)]
-pub(crate) fn is_wsl_path(path: &Path) -> bool {
-    use std::path::{Component, Prefix};
-    if let Some(Component::Prefix(prefix)) = path.components().next() {
-        match prefix.kind() {
-            Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => {
-                let server = server.to_string_lossy();
-                server.eq_ignore_ascii_case("wsl$") || server.eq_ignore_ascii_case("wsl.localhost")
-            }
-            _ => false,
-        }
-    } else {
-        false
-    }
-}
-
-#[cfg(not(windows))]
-pub(crate) fn is_wsl_path(_path: &Path) -> bool {
-    false
-}
+///
+/// 实现在 `config`（上游把这条通用路径判定放在那里，Codex state DB 也要用），
+/// 这里只做再导出，让既有调用点与测试的路径保持不变，且全仓库只有一份实现。
+pub(crate) use crate::config::is_wsl_path;
 
 #[cfg(test)]
 mod tests {

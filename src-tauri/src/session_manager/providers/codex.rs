@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::codex_config::{get_codex_config_dir, read_codex_config_text};
-use crate::codex_state_db::codex_state_db_paths;
+use crate::codex_state_db::{codex_state_db_is_lockable, codex_state_db_paths};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
@@ -75,7 +75,10 @@ fn scan_sessions_in_roots_with_titles(
 fn load_thread_titles() -> HashMap<String, String> {
     let config_dir = get_codex_config_dir();
     let config_text = read_codex_config_text().unwrap_or_default();
-    let db_paths = codex_state_db_paths(&config_dir, &config_text);
+    let db_paths: Vec<PathBuf> = codex_state_db_paths(&config_dir, &config_text)
+        .into_iter()
+        .filter(|path| codex_state_db_is_lockable(path))
+        .collect();
     load_thread_titles_from_paths(&config_dir.join(CODEX_SESSION_INDEX_FILENAME), &db_paths)
 }
 
