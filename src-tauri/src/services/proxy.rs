@@ -401,10 +401,7 @@ impl CodexAuthFileTransaction {
     /// on a vacant path: either the previous generation was quarantined, or
     /// `begin` already proved the path absent. `create_new` then yields exactly
     /// the same no-clobber guarantee that the hard link provided.
-    fn install_by_exclusive_create(
-        path: &std::path::Path,
-        contents: &[u8],
-    ) -> Result<(), String> {
+    fn install_by_exclusive_create(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -2752,8 +2749,11 @@ impl ProxyService {
         // Clearing the token prevents a stale local route from looking usable.
         let updated = crate::grok_config::update_api_key(config_toml, "")
             .map_err(|e| format!("清理 Grok Build 接管占位符失败: {e}"))?;
-        crate::config::write_text_file_private(&crate::grok_config::get_grok_config_path(), &updated)
-            .map_err(|e| format!("写入 Grok Build 配置失败: {e}"))
+        crate::config::write_text_file_private(
+            &crate::grok_config::get_grok_config_path(),
+            &updated,
+        )
+        .map_err(|e| format!("写入 Grok Build 配置失败: {e}"))
     }
 
     fn restore_pi_live_from_ssot(&self) -> Result<bool, String> {
@@ -4045,8 +4045,10 @@ impl ProxyService {
                             .map_err(|e| format!("写入 Codex auth 失败: {e}"))
                     }
                 }
-                (None, Some(cfg)) => crate::config::write_text_file_private(&get_codex_config_path(), cfg)
-                    .map_err(|e| format!("写入 Codex config 失败: {e}")),
+                (None, Some(cfg)) => {
+                    crate::config::write_text_file_private(&get_codex_config_path(), cfg)
+                        .map_err(|e| format!("写入 Codex config 失败: {e}"))
+                }
                 (None, None) => Ok(()),
             }
         };
@@ -11191,8 +11193,7 @@ wire_api = "responses"
         // 这正是本机日志记录的状态，也是 cc-switch 每次启动都会去修的状态。
         std::fs::write(crate::codex_config::get_codex_config_path(), direct_config)
             .expect("rewrite live config to the direct URL");
-        std::fs::remove_file(crate::codex_config::get_codex_auth_path())
-            .expect("remove auth.json");
+        std::fs::remove_file(crate::codex_config::get_codex_auth_path()).expect("remove auth.json");
         assert!(
             !crate::codex_config::get_codex_auth_path().exists(),
             "回归前提：auth.json 必须不存在，`begin` 才会跳过硬链接能力探针"

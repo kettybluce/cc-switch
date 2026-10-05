@@ -411,5 +411,4 @@ mod tests {
         let _ = crate::settings::update_settings(previous);
         let _ = crate::settings::reload_settings();
     }
-
 }

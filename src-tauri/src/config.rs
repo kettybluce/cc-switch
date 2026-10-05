@@ -763,7 +763,12 @@ mod tests {
 
         for path in [&json_path, &text_path] {
             let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "{} must be owner-only, got {mode:o}", path.display());
+            assert_eq!(
+                mode,
+                0o600,
+                "{} must be owner-only, got {mode:o}",
+                path.display()
+            );
         }
 
         // 替换已有文件后权限位必须保持。
