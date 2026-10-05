@@ -237,16 +237,27 @@ jobs:
         run: |
           $env:TEMP = $env:CC_SWITCH_WSL_TEST_TEMP
           $env:TMP = $env:CC_SWITCH_WSL_TEST_TEMP
-          $testName = "config::tests::atomic_write_replaces_existing_wsl_unc_file"
+          # 每条都是「必须真的跑在 WSL2 UNC 路径上」的契约。权限位那条尤其关键：
+          # Windows 构建里 set_permissions 整段被 #[cfg(unix)] 排除，ReplaceFileW
+          # 也不搬 POSIX 位，所以从 Windows 写进 distro 的凭据文件只能靠跨 wsl.exe
+          # 的 chmod 兜住——漏跑这条就等于让 0600 修复无声失效。
+          $testNames = @(
+            "config::tests::atomic_write_replaces_existing_wsl_unc_file",
+            "config::tests::private_write_into_wsl_yields_owner_only_file"
+          )
           $testList = & $env:CC_SWITCH_TEST_EXE --list --ignored
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
-          $expected = "${testName}: test"
-          if ($testList -notcontains $expected) {
-            throw "Expected ignored test was not discovered: $testName"
+          foreach ($testName in $testNames) {
+            $expected = "${testName}: test"
+            if ($testList -notcontains $expected) {
+              throw "Expected ignored test was not discovered: $testName"
+            }
           }
-          & $env:CC_SWITCH_TEST_EXE $testName --ignored --exact --nocapture
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          foreach ($testName in $testNames) {
+            & $env:CC_SWITCH_TEST_EXE $testName --ignored --exact --nocapture
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }
