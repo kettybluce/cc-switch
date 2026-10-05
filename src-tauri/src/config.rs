@@ -406,6 +406,112 @@ pub fn atomic_write_private(path: &Path, data: &[u8]) -> Result<(), AppError> {
     atomic_write_with_unix_mode(path, data, Some(0o600))
 }
 
+/// 校验 WSL 发行版名是否可安全地作为 `wsl.exe -d` 实参。
+///
+/// 与 `commands::misc::is_valid_wsl_distro_name` 同口径；这里单独留一份是为了
+/// 让底层写入器不依赖 commands 层。
+#[cfg(windows)]
+fn wsl_distro_name_is_safe(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// 从 WSL UNC 路径取出「发行版名 + Linux 绝对路径」。
+///
+/// `\\wsl.localhost\Ubuntu-22.04\home\ketty\.codex\auth.json`
+/// 得到 `("Ubuntu-22.04", "/home/ketty/.codex/auth.json")`。
+///
+/// UNC 的 share 段就是发行版名（`wsl_unc_path_to_linux` 只取后半段，所以那里
+/// 用不了）。非 WSL 路径、发行版名非法、或含 `.` / `..` 的路径一律返回 `None`——
+/// 宁可漏补权限，也不对解析不清的路径执行 `chmod`。
+#[cfg(windows)]
+fn wsl_unc_target(path: &Path) -> Option<(String, String)> {
+    use std::path::Prefix;
+
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    let distro = match prefix.kind() {
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+            let server_name = server.to_string_lossy();
+            if !(server_name.eq_ignore_ascii_case("wsl$")
+                || server_name.eq_ignore_ascii_case("wsl.localhost"))
+            {
+                return None;
+            }
+            share.to_string_lossy().to_string()
+        }
+        _ => return None,
+    };
+    if !wsl_distro_name_is_safe(&distro) {
+        return None;
+    }
+
+    let mut linux = String::new();
+    for component in components {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(part) => {
+                linux.push('/');
+                linux.push_str(&part.to_string_lossy());
+            }
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!linux.is_empty()).then_some((distro, linux))
+}
+
+/// Windows 主机写 WSL 文件后，跨 `wsl.exe` 在 Linux 侧补一次权限位。
+///
+/// 为什么必须补：本函数的 `set_permissions` 在 `#[cfg(unix)]` 分支里，Windows
+/// 构建根本没有这段代码；而 `ReplaceFileW` 也不搬运 POSIX 权限位。于是
+/// `~/.codex/auth.json`（明文 Key 就在里面）、`~/.claude/settings.json` 这类
+/// 从 Windows 写进 distro 的 live 文件会按 distro 的 umask 落成 0644，同机其他
+/// 用户可读。Windows 侧没有 API 能设置 WSL 文件的 POSIX 位，只能借 Linux 侧
+/// 的 `chmod`。
+///
+/// 失败只记警告、不返回错误：文件已经写好了，为补权限把一次成功的配置写入判成
+/// 失败会让调用方回滚或报错，代价更大；而且个别 distro 可能没有可用的 chmod。
+#[cfg(windows)]
+fn apply_mode_through_wsl(path: &Path, mode: u32) {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    /// CREATE_NO_WINDOW：避免每次写入凭据都闪一个控制台窗口。
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let Some((distro, linux_path)) = wsl_unc_target(path) else {
+        return;
+    };
+
+    let octal = format!("{mode:o}");
+    let result = Command::new("wsl.exe")
+        .arg("-d")
+        .arg(&distro)
+        .arg("--")
+        .arg("chmod")
+        .arg(&octal)
+        .arg(&linux_path)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => log::warn!(
+            "[WSL:{distro}] chmod {octal} {linux_path} 失败，凭据文件权限未收紧：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(err) => log::warn!("[WSL:{distro}] 无法执行 chmod 收紧 {linux_path} 权限：{err}"),
+    }
+}
+
 fn atomic_write_with_unix_mode(
     path: &Path,
     data: &[u8],
@@ -568,6 +674,13 @@ fn atomic_write_with_unix_mode(
             });
         }
     }
+
+    // WSL 目标：Windows 侧设不了 POSIX 位，跨 wsl.exe 补一次（见函数文档）。
+    #[cfg(windows)]
+    if let Some(mode) = unix_mode {
+        apply_mode_through_wsl(path, mode);
+    }
+
     Ok(())
 }
 
@@ -713,6 +826,83 @@ mod tests {
             .tempdir_in(&root)
             .unwrap();
         assert_atomic_write_replaces_existing_file(dir.path());
+    }
+
+    /// UNC → (发行版, Linux 路径) 的解析。chmod 的目标就靠它，
+    /// 所以非 WSL、发行版名可疑、含 `.`/`..` 的路径必须一律拒绝。
+    #[cfg(windows)]
+    #[test]
+    fn wsl_unc_target_extracts_distro_and_linux_path() {
+        let cases = [
+            (
+                r"\\wsl.localhost\Ubuntu-22.04\home\ketty\.codex\auth.json",
+                Some(("Ubuntu-22.04", "/home/ketty/.codex/auth.json")),
+            ),
+            (
+                r"\\wsl$\Ubuntu\root\.codex\config.toml",
+                Some(("Ubuntu", "/root/.codex/config.toml")),
+            ),
+            (
+                r"\\?\UNC\wsl.localhost\Ubuntu\home\u\f.json",
+                Some(("Ubuntu", "/home/u/f.json")),
+            ),
+            // 非 WSL 主机：普通 UNC 共享不能当 distro 处理
+            (r"\\fileserver\share\auth.json", None),
+            // 普通盘符路径
+            (r"C:\Users\me\.codex\auth.json", None),
+            // 只有发行版、没有文件
+            (r"\\wsl.localhost\Ubuntu", None),
+            // 路径穿越必须拒绝：不能让 chmod 落到解析不清的目标上
+            (r"\\wsl.localhost\Ubuntu\home\u\..\..\etc\shadow", None),
+            // `.` 不是穿越：`Path::components` 已经把它折叠掉，剩下的就是同一目录
+            (
+                r"\\wsl.localhost\Ubuntu\home\u\.\f.json",
+                Some(("Ubuntu", "/home/u/f.json")),
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let actual = wsl_unc_target(Path::new(input));
+            let actual = actual.as_ref().map(|(d, p)| (d.as_str(), p.as_str()));
+            assert_eq!(actual, expected, "input: {input}");
+        }
+    }
+
+    /// 真机契约：从 Windows 往 WSL 写凭据文件后，Linux 侧的权限位必须是 0600。
+    ///
+    /// 这条测试针对的正是 Windows 构建的盲区——`set_permissions` 在
+    /// `#[cfg(unix)]` 里，`ReplaceFileW` 也不搬 POSIX 位，所以只能靠跨
+    /// `wsl.exe` 的 chmod。断言读的是 Linux 侧真实 `stat`，不是 Windows 的视图。
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires CC_SWITCH_WSL_TEST_DIR to point to a WSL2 UNC directory"]
+    fn private_write_into_wsl_yields_owner_only_file() {
+        use std::process::Command;
+
+        let root = PathBuf::from(
+            std::env::var_os("CC_SWITCH_WSL_TEST_DIR").expect("CC_SWITCH_WSL_TEST_DIR must be set"),
+        );
+        let dir = tempfile::Builder::new()
+            .prefix("wsl-private-mode-")
+            .tempdir_in(&root)
+            .unwrap();
+        let path = dir.path().join("auth.json");
+        write_json_file_private(&path, &serde_json::json!({ "OPENAI_API_KEY": "sk-test" }))
+            .unwrap();
+
+        let (distro, linux_path) =
+            wsl_unc_target(&path).expect("temp file under a WSL UNC dir must parse");
+        let output = Command::new("wsl.exe")
+            .args(["-d", &distro, "--", "stat", "-c", "%a", &linux_path])
+            .output()
+            .expect("wsl.exe must be runnable");
+        assert!(
+            output.status.success(),
+            "stat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mode = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(mode, "600", "WSL 侧凭据文件必须是 owner-only: {linux_path}");
     }
 
     #[test]
