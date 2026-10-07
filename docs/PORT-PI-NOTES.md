@@ -6,49 +6,97 @@
 
 ---
 
-## 当前状态（已验证）
+### ✅ 已确认可用：Pi 路由本身在 4.0.4 上是通的
+
+加临时日志（`resolve_shared_listen_app`）实测证明：
 
 ```
-cargo check                                 -> OK
-cargo test --lib                            -> 3370 passed, 2 failed（均 pre-existing）
-pnpm run build:renderer                      -> OK（需先 pnpm install，官方 4.0.4 的
-                                                tailwindcss-animate 在 fork 的 node_modules 里没有）
-cargo build --release                        -> OK
-pnpm tauri build --bundles nsis              -> CC Switch_4.0.4_x64-setup.exe (11.9 MB)
+[PI-DIAG] x-cc-switch-app=Some("pi") is_pi=true default_app=codex
+[Codex] >>> 请求目标: https://api.saviour.cc.cd/v1/responses (model=gpt-6-astra)
+[pi] [FWD-003] Provider ZeroAPI 请求失败
 ```
 
-两个测试失败与本次移植无关，已用 worktree 在纯净 `a7f66764` 上复现：
-- `services::provider::...proxy_takeover_is_active`：需要能用的 15721 端口（CC Switch 在跑时占用）
-- `commands::misc::...concurrent_lifecycle_runs_use_independent_scripts`：纯净基线同样失败
+关键点：
+- 头**到达了** handler（`Some("pi")`）
+- `is_pi=true`，我的补丁**生效**
+- 转发日志同时带 `[Codex] >>>`（适配器名）和 `[pi]`（tag）—— 符合预期
+  （Pi 复用 Codex 适配器，tag 归因到 pi）
+- 选中的是 **Pi 卡片** `saviour`（名字叫 "ZeroAPI"，baseUrl
+  `https://api.saviour.cc.cd/v1`），不是 Codex 路由
 
-### ⚠️ 未解决：4.0.4 上 Pi 请求仍按 Codex 路由
+### ⛔ 真正的阻塞：启动时把投影后的 models.json 同步回 DB，覆盖真实凭据
 
-现象：`models.json` 已正确投影（7 个 provider、`baseUrl=http://127.0.0.1:15721/v1`、
-`apiKey=PROXY_MANAGED`、每个都带 `headers={'x-cc-switch-app': 'pi'}`），但
-带 `x-cc-switch-app: pi` 的请求返回：
+现象：应用每次启动后，**所有 7 张 Pi 卡片**都被写成
 
 ```
-502 {"provider":"ZeroAPI","model":"gpt-6-astra","endpoint":"/responses",
-     "cause":"转发失败: 上游连接失败"}
+baseUrl = http://127.0.0.1:15721/v1
+apiKey  = PROXY_MANAGED
 ```
 
-即走了 **Codex** 的 `ZeroAPI`，不是 Pi 目录。
+于是 `pi_config::pi_provider_is_forwardable` 判定**全部不可转发** →
+`select_pi_providers` 零候选 → 日志 `[pi] [FO-005] 未配置可转发的 Pi 供应商 (listen=codex)` → 503。
 
-已排除：`server.rs:340` 的 `/v1/responses` 确实指向 `handlers::handle_responses`
-→ `handle_responses_for_app`（我打过补丁的那个），所以不是路由表问题。
+`sync_native_locked`（`services/provider/pi.rs:282`）本来有
+`if is_projected_provider_node(config) { continue; }` 守卫，而且
+`is_projected_provider_node` 对 `apiKey == PROXY_MANAGED` 会返回 true ——
+所以是**别的路径**在写。下一步应定位：谁在启动时把投影写进了 Pi 卡片，
+（候选：`mode/controller.rs` 的 attach 流程、`services/provider/pi.rs:245`
+的 `save_provider(PI_APP, ...)`、或 `pi_state.rs`）。
 
-**结论：`crate::pi_config::request_is_pi_client(&headers)` 返回了 false**，
-于是 `effective_app` 仍是 `AppType::Codex`。
+**修复方向（二选一）**：
+1. 在写回 DB 前加同样的 `is_projected_provider_node` 守卫，宁可跳过也不要
+   用占位符覆盖真实凭据；
+2. 让 `select_pi_providers` 不依赖 DB 卡片里的 baseUrl/apiKey，而是从
+   **未投影的来源**取（但这需要真实值有个存放处，否则同样被覆盖）。
 
-下一步排查：
-1. 在 `handle_responses_for_app` 里加临时 `log::warn!` 打印
-   `headers.get("x-cc-switch-app")`，确认头是否真的到达 handler
-2. 检查 `decode_codex_request_body(&mut headers, ...)` 是否动过/删掉了该头
-   （它在 `RequestContext::new` 之前被调用）
-3. 确认 `pi_config::request_is_pi_client` 的实现是精确匹配
-   `x-cc-switch-app == "pi"`（大小写不敏感），而不是读别的头名
-4. 若头确实到达但没生效，检查 `mode/controller.rs:708` / `:1044` 的
-   `official_provider_supports_proxy_takeover` 是否在进入前就把 Pi 挡掉了
+**临时规避**（已验证可行）：停掉应用 →
+`node scripts/restore-pi-cards.mjs <db>` 写回真实配置 →
+`node scripts/build-pi-models.mjs <db> <models.json> real` →
+**不要启动应用**，此时 Pi 卡片与 models.json 都是真实配置。
+
+---
+
+## 交付物
+
+| 包 | 说明 |
+|---|---|
+| `CC Switch_4.0.4_x64-setup.exe` (11.9 MB) | 官方 4.0.4 + Pi 后端移植。**编译/打包/测试都过**，但 Pi 代理路由被上面那个同步 bug 挡住 |
+| `CC Switch_3.20.15_x64-setup.exe` (11.1 MB) | 原 fork + Pi 路由修复，**Pi 实测 200 OK** |
+
+⚠️ 4.0.4 二进制已在 `C:\Users\<user>\AppData\Local\CC Switch\cc-switch.exe` 上跑过（触发 DB 迁移）。
+迁移前的数据库备份：`~/.cc-switch/cc-switch.db.bak-before-404-20261007_224210`。
+
+---
+
+## 已完成的移植（编译 + 测试通过）
+
+### 新增文件
+`pi_config/proxy.rs`、`pi_config/fixtures/*`、`lib/api/config.ts`、
+`lib/api/connectivity-check.ts`
+
+### `pi_config/mod.rs`（576 → 986 行）
+### `container_router` → `provider_router.rs`
+新增 `select_providers_for_request` + `select_pi_providers`（+ `HashSet` import）
+### `handler_context.rs`
+Pi 分支（关故障转移、从 Pi 目录选家）+ 用量归因
+### `handlers.rs`
+`resolve_shared_listen_app()` + 两个入口改用 `AppType::Pi`（适配 7 参 `stack`）
+### `providers/mod.rs`
+`AppType::Pi` → `CodexAdapter`（`Mcode` 保持 `return None`）
+### `mode/controller.rs`
+`write_proxy` / `write_direct` 加 `AppType::Pi` 分支 + `restore_pi_models_from_ssot()`
+
+---
+
+## 踩过的坑
+1. **`Out-File` 加 UTF-8 BOM** → Rust 编译失败，必须清
+2. **`git switch` 被未提交改动静默中止** → 先存 `scripts/pi-routing-patch.diff`
+3. `pi_blocks.rs` / `useVisibleAppIds.ts` / `pi.messages.json` 是**官方文件**，不需移植
+4. 官方 `AppType` 多一个 `Mcode`，改 `get_adapter` 时别顺手改它
+5. 官方 4.0.4 缺 `tailwindcss-animate`（fork 的 node_modules 里没有）→ 先 `pnpm install`
+6. **`cp` 覆盖正在运行的 exe 会静默失败** → 必须先 `Stop-Process`，
+   然后用 `Get-FileHash` 确认一致；我曾因此拿错误二进制测了一轮
+
 
 
 提交：
