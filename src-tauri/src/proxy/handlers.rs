@@ -888,6 +888,34 @@ fn decode_codex_request_body(
 // Codex API 处理器
 // ============================================================================
 
+/// 判断共享监听（Codex / GrokBuild）上的请求到底属于哪个应用。
+///
+/// Pi 把自己的 `models.json` 投影到共享监听上，并在每个请求里带
+/// `x-cc-switch-app: pi`。如果只按入口的 `AppType::Codex` 转发，Pi 请求会被
+/// 当作 Codex 记账（熔断器 key、故障转移链、用量归因全错位）；当两个 Pi 卡片
+/// 暴露同名模型（例如 ZeroAPI 与 CPA 卡都有 `gpt-6-astra`）时，这种错位就表现
+/// 为「切换同名模型路由异常」。
+///
+/// 只返回转发用的 `(app_type, tag)`。**服务串必须保持监听应用不变**
+/// （`"codex"` / `"grokbuild"`）：`select_pi_providers` 要用它去匹配 Pi 目录里的
+/// openai-* 卡片，而 `pi_api_matches_listen_app` 只认 claude / codex / gemini，
+/// 传 `"pi"` 会让全部候选落选并返回 503 未配置供应商。
+/// 用量归因到 `pi` 已在 `RequestContext::new` 内由
+/// `usage_app_type_from_headers` 处理。
+///
+/// 头缺失或取值未知时保持原应用，既有 Claude / Codex / GrokBuild 客户端不受影响。
+fn resolve_shared_listen_app(
+    headers: &axum::http::HeaderMap,
+    default_app: AppType,
+    default_tag: &'static str,
+) -> (AppType, &'static str) {
+    if crate::pi_config::request_is_pi_client(headers) {
+        (AppType::Pi, "Pi")
+    } else {
+        (default_app, default_tag)
+    }
+}
+
 /// 处理 /v1/chat/completions 请求（OpenAI Chat Completions API - Codex CLI）
 pub async fn handle_chat_completions(
     State(state): State<ProxyState>,
@@ -911,12 +939,18 @@ pub async fn handle_chat_completions(
         Err(rejected) => return Ok(*rejected),
     };
 
+    // ★ Pi 客户端共用这条 Codex 监听；用 `x-cc-switch-app: pi` 认出来，
+    // 让它以 AppType::Pi 走适配器与记账（熔断器 key、故障转移链、用量归因）。
+    // 服务串仍是 "codex"：select_pi_providers 要用它去匹配 Pi 目录里的
+    // openai-* 卡片（pi_api_matches_listen_app 只认 claude/codex/gemini）。
+    let (app_type, tag) = resolve_shared_listen_app(&headers, AppType::Codex, "Codex");
+
     let mut ctx = RequestContext::new(
         &state,
         &body,
         &headers,
-        AppType::Codex,
-        "Codex",
+        app_type.clone(),
+        tag,
         "codex",
         stack,
     )
@@ -931,7 +965,7 @@ pub async fn handle_chat_completions(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
@@ -1030,12 +1064,19 @@ async fn handle_responses_for_app(
         Err(rejected) => return Ok(*rejected),
     };
 
+    // ★ Pi 客户端共用这条监听（Codex / GrokBuild 两个入口都挂到这里）。
+    // 用 `x-cc-switch-app: pi` 认出来，让它以 AppType::Pi 走适配器与记账。
+    // 服务串保持监听应用（app_type_str）不变 —— select_pi_providers 需要它
+    // 去匹配 Pi 目录里的 openai-* 卡片。
+    let (effective_app, effective_tag) =
+        resolve_shared_listen_app(&headers, app_type.clone(), tag);
+
     let mut ctx = RequestContext::new(
         &state,
         &body,
         &headers,
-        app_type.clone(),
-        tag,
+        effective_app.clone(),
+        effective_tag,
         app_type_str,
         stack,
     )
@@ -1056,7 +1097,7 @@ async fn handle_responses_for_app(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &app_type,
+            &effective_app,
             method,
             &endpoint,
             body,
@@ -1109,7 +1150,7 @@ async fn handle_responses_for_app(
     // compaction 条目（请求侧已在 forwarder 改成摘要回合，见 `codex_compaction`）。
     // 压缩回合不带工具，没有要还原的函数名，所以排在 xAI 改写之前。
     if compaction_request
-        && matches!(app_type, AppType::Codex)
+        && matches!(effective_app, AppType::Codex)
         && !super::providers::is_codex_official_provider(&ctx.provider)
     {
         return handle_codex_native_compaction_response(response, &ctx, &state, connection_guard)

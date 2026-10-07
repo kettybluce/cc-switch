@@ -269,7 +269,16 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
         AppType::Gemini => Box::new(GeminiAdapter::new()),
         AppType::GrokBuild => Box::new(CodexAdapter::new()),
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Box::new(CodexAdapter::new()),
-        AppType::Pi | AppType::Mcode => return None,
+        // Pi 与 Codex 共用监听，带 `x-cc-switch-app: pi` 的请求以 AppType::Pi 转发。
+        // Pi 目录里的卡片是 openai-completions / openai-responses（anthropic-messages
+        // 走 Claude 监听），所以和 GrokBuild 一样复用 Codex 适配器：具体 wire protocol
+        // 由每个 provider 经 `codex_provider_uses_chat_completions` /
+        // `..._uses_anthropic` 决定，不在这里选。
+        //
+        // 之前是 `AppType::Pi | AppType::Mcode => return None`，于是所有被接管的
+        // Pi 请求都会失败并报 "pi does not support proxy routing"。
+        AppType::Pi => Box::new(CodexAdapter::new()),
+        AppType::Mcode => return None,
     })
 }
 

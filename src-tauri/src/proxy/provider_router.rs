@@ -7,7 +7,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::circuit_breaker::{AllowResult, CircuitBreaker, CircuitBreakerConfig};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -133,6 +133,91 @@ impl ProviderRouter {
         }
 
         Ok(result)
+    }
+
+    /// 共享监听上的 Pi 请求走 Pi 目录
+    ///
+    /// Pi 把自己的 `models.json` 投影到 Claude/Codex 共享监听上，并在每个请求里
+    /// 带 `x-cc-switch-app: pi`。带该头的请求必须从 **Pi 目录**里选 provider，
+    /// 而不是沿用监听应用当前的供应商/故障转移链，否则 Pi 的 `PROXY_MANAGED`
+    /// 占位配置会被当作真实上游转发出去。
+    pub async fn select_providers_for_request(
+        &self,
+        listen_app: &str,
+        headers: &http::HeaderMap,
+        request_model: &str,
+    ) -> Result<Vec<Provider>, AppError> {
+        if crate::pi_config::request_is_pi_client(headers) {
+            self.select_pi_providers(listen_app, request_model)
+        } else {
+            self.select_providers(listen_app).await
+        }
+    }
+
+    /// Select forwardable Pi providers for a request arriving on the shared
+    /// Claude / Codex / Gemini listen. Does not read `proxy_config` for `pi`
+    /// (SCHEMA has no `proxy_config` row for `pi`; it reuses Claude's listen).
+    pub fn select_pi_providers(
+        &self,
+        listen_app: &str,
+        request_model: &str,
+    ) -> Result<Vec<Provider>, AppError> {
+        let all = self.db.get_all_providers(AppType::Pi.as_str())?;
+        let enabled_ids = crate::pi_config::read_pi_native_providers()
+            .ok()
+            .map(|native| native.into_keys().collect::<HashSet<String>>());
+
+        let mut candidates: Vec<Provider> = all
+            .into_values()
+            .filter(|provider| {
+                crate::pi_config::pi_provider_is_forwardable(&provider.settings_config)
+            })
+            .filter(|provider| {
+                crate::pi_config::pi_api_matches_listen_app(
+                    crate::pi_config::pi_provider_api(&provider.settings_config),
+                    listen_app,
+                )
+            })
+            .collect();
+
+        // 以 live `models.json` 里实际存在的卡片为准（它才是 Pi 看到的目录）
+        if let Some(enabled) = enabled_ids.as_ref() {
+            let live: Vec<Provider> = candidates
+                .iter()
+                .filter(|provider| enabled.contains(&provider.id))
+                .cloned()
+                .collect();
+            if !live.is_empty() {
+                candidates = live;
+            }
+        }
+
+        // 模型名收窄：同名模型只保留真正声明了它的卡片
+        let model = request_model.trim();
+        if !model.is_empty() && model != "unknown" {
+            let matched: Vec<Provider> = candidates
+                .iter()
+                .filter(|provider| {
+                    crate::pi_config::pi_provider_has_model(&provider.settings_config, model)
+                })
+                .cloned()
+                .collect();
+            if !matched.is_empty() {
+                candidates = matched;
+            }
+        }
+
+        if candidates.is_empty() {
+            log::warn!("[pi] [FO-005] 未配置可转发的 Pi 供应商 (listen={listen_app})");
+            return Err(AppError::NoProvidersConfigured);
+        }
+
+        // Pi 原生 schema 用 `baseUrl`，共享适配器读 `base_url`；这里补齐。
+        for provider in &mut candidates {
+            crate::pi_config::copy_pi_base_url_for_adapters(&mut provider.settings_config);
+        }
+
+        Ok(candidates)
     }
 
     /// 请求执行前获取熔断器“放行许可”

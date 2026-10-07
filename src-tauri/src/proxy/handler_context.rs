@@ -146,6 +146,51 @@ impl RequestContext {
                     target.original_model,
                 )
             }
+            None if crate::pi_config::request_is_pi_client(headers) => {
+                // ★ Pi 客户端共用这条 Claude/Codex 监听，靠 `x-cc-switch-app: pi`
+                // 识别。Pi 没有故障转移队列，一律从 **Pi 目录**里按模型选家，
+                // 绝不继承监听应用当前的供应商或故障转移链（否则 Pi 的
+                // `PROXY_MANAGED` 占位配置会被当成真实上游转发出去）。
+                app_config.auto_failover_enabled = false;
+
+                // 从请求体提取模型名称
+                let request_model = body
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                // listen_app 必须是监听应用（codex/claude/gemini），不能传 "pi"：
+                // pi_api_matches_listen_app 只认这三种。
+                let providers = state
+                    .provider_router
+                    .select_pi_providers(app_type_str, &request_model)
+                    .map_err(|e| match e {
+                        crate::error::AppError::AllProvidersCircuitOpen => {
+                            ProxyError::AllProvidersCircuitOpen
+                        }
+                        crate::error::AppError::NoProvidersConfigured => {
+                            ProxyError::NoProvidersConfigured
+                        }
+                        _ => ProxyError::DatabaseError(e.to_string()),
+                    })?;
+
+                let provider = providers
+                    .first()
+                    .cloned()
+                    .ok_or(ProxyError::NoAvailableProvider)?;
+                let current_provider_id = provider.id.clone();
+
+                log::debug!(
+                    "[{}] Pi provider: {}, model: {}, candidates: {}, session: {}",
+                    tag,
+                    provider.name,
+                    request_model,
+                    providers.len(),
+                    session_id
+                );
+                (provider, providers, current_provider_id, request_model)
+            }
             None => {
                 let current_provider = crate::mode::current::provider_in_use(&state.db, &app_type)
                     .ok()
@@ -213,7 +258,8 @@ impl RequestContext {
             request_model,
             outbound_model: None,
             tag,
-            app_type_str,
+            // Pi 请求共用监听应用的配置/选家路径，但用量与统计要归到 `pi`。
+            app_type_str: crate::pi_config::usage_app_type_from_headers(headers, app_type_str),
             app_type,
             session_id,
             session_client_provided: session_result.client_provided,
