@@ -18,7 +18,7 @@
 //! 调用方持有这个应用的代理切换锁（`ProxyService::lock_switch_for_app`）；写引擎的应用
 //! 写锁在更里面拿，两把锁不反向嵌套。
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tokio::sync::OwnedMutexGuard;
 
 use crate::app_config::AppType;
@@ -391,6 +391,22 @@ async fn write_proxy(
             .map_err(err)?;
             unchanged
         }
+        AppType::Pi => {
+            // Pi 的 `models.json` 不是 env/行式契约：每张卡片各自带 baseUrl /
+            // apiKey，接管时把整份文档的 baseUrl 投影到本地代理地址、key 换成
+            // 占位符。所以这里不走 `contract::*`，`contract` 保持 None。
+            let origin = proxy_url.trim_end_matches('/').to_string();
+            crate::pi_config::project_live_models_to_proxy(&origin)?;
+
+            // 已经投影过时摘要不变，避免每次 attach 都重写客户端文件。
+            let projectable = crate::pi_config::read_pi_models_document()
+                .map(|doc| crate::pi_config::document_has_proxy_projection(&doc))
+                .unwrap_or(false);
+            let unchanged = !force && projectable;
+
+            commit_state(state, app, &pending(target))?;
+            unchanged
+        }
         _ => return Err(format!("{} 不支持本地路由", app.as_str())),
     };
     Ok(!unchanged)
@@ -480,9 +496,70 @@ fn write_direct(
             )
             .map_err(err)?;
         }
+        AppType::Pi => {
+            // 退出代理：把 `models.json` 还原成接管前的样子（真实 baseUrl + 真实 key）。
+            //
+            // 4.0.4 的 SSOT 是数据库里的供应商卡片 —— 投影只是把 baseUrl 指向本地
+            // 代理、key 换成占位符，契约内容（模型表等）仍在卡片上。所以直接用卡片
+            // 重写 `models.json` 即为还原，不依赖 `proxy_live_backup`（那是 API
+            // client 文件用的，Pi 的 models.json 结构完全不同、用不上）。
+            match restore_pi_models_from_ssot(state) {
+                Ok(count) => {
+                    log::info!("Pi models.json 已按 SSOT 还原，{count} 个供应商");
+                }
+                Err(error) => {
+                    log::warn!("按 SSOT 还原 Pi models.json 失败: {error}");
+                }
+            }
+            commit_state(state, app, &pending_target)?;
+        }
         _ => return Err(format!("{} 不支持本地路由", app.as_str())),
     }
     Ok(())
+}
+
+/// 用数据库里的 Pi 供应商卡片重写 `models.json`（退出代理时的还原路径）。
+///
+/// 只写卡片里真实存在的字段，未知字段原样保留（走 `write_models_document` 的
+/// 原子 + 修订号检查）；返回写回的供应商数量。
+fn restore_pi_models_from_ssot(state: &AppState) -> Result<usize, String> {
+    let cards = state
+        .db
+        .get_all_providers(AppType::Pi.as_str())
+        .map_err(|e| e.to_string())?;
+    let native = crate::pi_config::read_pi_native_providers().map_err(|e| e.to_string())?;
+
+    let mut document = Map::new();
+    for (key, _) in native.iter() {
+        // 只用卡片里的真实配置；卡片没有的 key（用户在 Pi 里手写的）跳过。
+        let Some(card) = cards.get(key) else {
+            continue;
+        };
+        document.insert(key.clone(), card.settings_config.clone());
+    }
+
+    let mut root = Value::Object(Map::new());
+    root["providers"] = Value::Object(document);
+
+    // 保留 `models.json` 里我们没管的顶层字段
+    let path = crate::pi_config::get_pi_models_path().map_err(|e| e.to_string())?;
+    let (existing, expected_revision) =
+        crate::pi_config::read_models_document_with_revision(&path).map_err(|e| e.to_string())?;
+    if let Some(object) = existing.as_object() {
+        for (k, v) in object {
+            if k != "providers" {
+                root[k] = v.clone();
+            }
+        }
+    }
+
+    let count = root["providers"]
+        .as_object()
+        .map(|o| o.len())
+        .unwrap_or_default();
+    crate::pi_config::write_models_document(&path, &root, &expected_revision)
+        .map_err(|e| e.to_string())?;
+    Ok(count)
 }
 
 /// 直连供应商的投影。写不出来（没有、行里带着占位符、缺 Key）也不能让客户端一直指着
