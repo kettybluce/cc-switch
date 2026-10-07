@@ -10,8 +10,46 @@
 
 ```
 cargo check                                 -> OK
-cargo test --lib -- proxy:: providers::     -> 1682 passed, 0 failed
+cargo test --lib                            -> 3370 passed, 2 failed（均 pre-existing）
+pnpm run build:renderer                      -> OK（需先 pnpm install，官方 4.0.4 的
+                                                tailwindcss-animate 在 fork 的 node_modules 里没有）
+cargo build --release                        -> OK
+pnpm tauri build --bundles nsis              -> CC Switch_4.0.4_x64-setup.exe (11.9 MB)
 ```
+
+两个测试失败与本次移植无关，已用 worktree 在纯净 `a7f66764` 上复现：
+- `services::provider::...proxy_takeover_is_active`：需要能用的 15721 端口（CC Switch 在跑时占用）
+- `commands::misc::...concurrent_lifecycle_runs_use_independent_scripts`：纯净基线同样失败
+
+### ⚠️ 未解决：4.0.4 上 Pi 请求仍按 Codex 路由
+
+现象：`models.json` 已正确投影（7 个 provider、`baseUrl=http://127.0.0.1:15721/v1`、
+`apiKey=PROXY_MANAGED`、每个都带 `headers={'x-cc-switch-app': 'pi'}`），但
+带 `x-cc-switch-app: pi` 的请求返回：
+
+```
+502 {"provider":"ZeroAPI","model":"gpt-6-astra","endpoint":"/responses",
+     "cause":"转发失败: 上游连接失败"}
+```
+
+即走了 **Codex** 的 `ZeroAPI`，不是 Pi 目录。
+
+已排除：`server.rs:340` 的 `/v1/responses` 确实指向 `handlers::handle_responses`
+→ `handle_responses_for_app`（我打过补丁的那个），所以不是路由表问题。
+
+**结论：`crate::pi_config::request_is_pi_client(&headers)` 返回了 false**，
+于是 `effective_app` 仍是 `AppType::Codex`。
+
+下一步排查：
+1. 在 `handle_responses_for_app` 里加临时 `log::warn!` 打印
+   `headers.get("x-cc-switch-app")`，确认头是否真的到达 handler
+2. 检查 `decode_codex_request_body(&mut headers, ...)` 是否动过/删掉了该头
+   （它在 `RequestContext::new` 之前被调用）
+3. 确认 `pi_config::request_is_pi_client` 的实现是精确匹配
+   `x-cc-switch-app == "pi"`（大小写不敏感），而不是读别的头名
+4. 若头确实到达但没生效，检查 `mode/controller.rs:708` / `:1044` 的
+   `official_provider_supports_proxy_takeover` 是否在进入前就把 Pi 挡掉了
+
 
 提交：
 - `f5153c33` wip(pi): port Pi config module + proxy core
