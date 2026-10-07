@@ -226,6 +226,15 @@ fn sync_native_locked(
     let mut changed = 0;
 
     for (id, config) in native {
+        // ★ 接管期间 `models.json` 里的节点是"投影"（baseUrl 指向本地代理、
+        // apiKey 变成 PROXY_MANAGED）。那不是真实配置，绝不能写回卡片 ——
+        // 一旦写回，`pi_provider_is_forwardable` 会判定所有卡片都不可转发，
+        // `select_pi_providers` 于是零候选，Pi 请求报 503「未配置可转发的
+        // Pi 供应商」。官方 4.0.4 缺这道守卫（fork 版有）。
+        if crate::pi_config::is_projected_provider_node(config) {
+            continue;
+        }
+
         let mut provider = saved.get(id).cloned().unwrap_or_else(|| {
             let name = native_provider_name(config).unwrap_or(id).to_string();
             let mut imported = Provider::with_id(id.clone(), name, config.clone(), None);

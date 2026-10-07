@@ -1,4 +1,113 @@
-# Pi 移植到官方 4.0.4 —— 进度与剩余工作
+# Pi 移植到官方 4.0.4 —— 已完成
+
+分支：`port/pi-on-4.0.4`（基线 = 官方 `a7f66764` / upstream/main / v4.0.4）
+对照源：`main`（3.20.15，你的定制线）
+目标：除 Pi 外全部跟官方走，保留 Pi 的代理接管与 WSL 能力 —— **已达成**
+
+---
+
+## ✅ 结论：4.0.4 上 Pi 跑通
+
+```
+cargo test --lib              -> 3370 passed, 2 failed（均 pre-existing）
+pnpm run build:renderer        -> OK
+cargo build --release          -> OK
+pnpm tauri build --bundles nsis -> CC Switch_4.0.4_x64-setup.exe (11.9 MB)
+```
+
+WSL Pi 1.0.4 实测（经 CC Switch 4.0.4 本地代理，无代理环境变量）：
+
+| 测试 | 结果 |
+|---|---|
+| `gpt-6-astra`（**不带 `--provider`**） | **PASS** ← 同名歧义已消除 |
+| `--provider cpa --model gpt-6-astra` | PASS |
+| `--provider amd --model MiMo-V2.6-Flash` | PASS |
+| fengwind / grok / elysiver / 42 | FAIL —— 上游侧问题（公益站 503、流中断），非路由 |
+| 本地代理 `POST /v1/responses` + pi 头 | **200**，命中 CPA，响应带 `x-cpa-trace-id` |
+
+---
+
+## 决定性修复：`sync_native_locked` 缺投影守卫
+
+**这是最后一个阻塞点。** 官方 4.0.4 的
+`services/provider/pi.rs::sync_native_locked` **缺少** fork 版有的守卫：
+
+```rust
+for (id, config) in native {
+    let mut provider = ...;          // ← 直接开始合并
+    merge_native_config(&mut provider, config.clone());   // ← 覆盖真实配置
+    state.db.save_provider(PI_APP, &provider)?;
+}
+```
+
+接管期间 `models.json` 里的节点是投影（`baseUrl=http://127.0.0.1:15721/v1`、
+`apiKey=PROXY_MANAGED`）。没有守卫就把它写回卡片 → 全部卡片变成"不可转发" →
+`select_pi_providers` 零候选 → `[pi] [FO-005] 未配置可转发的 Pi 供应商 (listen=codex)`
+→ **503**。
+
+修复（已加）：
+
+```rust
+for (id, config) in native {
+    if crate::pi_config::is_projected_provider_node(config) {
+        continue;      // ★ 投影不是真实配置，绝不写回卡片
+    }
+    ...
+}
+```
+
+验证：启动前卡片是真实值 → 启动后**仍是真实值**（`projected=false`），
+且 `POST /v1/responses`（带 pi 头）返回 **200**。
+
+---
+
+## 完整改动清单（分支 `port/pi-on-4.0.4`）
+
+| 文件 | 改动 |
+|---|---|
+| `pi_config/proxy.rs` | **新增**（767 行，Pi 接管核心） |
+| `pi_config/mod.rs` | 576 → 986 行（WSL 路径解析、models 文档修订锁、native defaults、test_support） |
+| `pi_config/fixtures/*` | 新增测试夹具 |
+| `provider_router.rs` | `select_providers_for_request` + `select_pi_providers`（+`HashSet`） |
+| `handler_context.rs` | Pi 分支（关故障转移、从 Pi 目录选家）+ 用量归因 |
+| `handlers.rs` | `resolve_shared_listen_app()`；两个入口改用 `AppType::Pi`（适配 7 参 `stack`） |
+| `providers/mod.rs` | `AppType::Pi` → CodexAdapter（`Mcode` 保持 `return None`） |
+| `mode/controller.rs` | `write_proxy` / `write_direct` 的 Pi 分支 + `restore_pi_models_from_ssot()` |
+| `services/provider/pi.rs` | **★ 投影守卫（决定性修复）** |
+| `lib/api/config.ts`、`connectivity-check.ts`、`config/piThinkingProfiles.ts` | 前端 API |
+
+**关键设计点**：转发用 `AppType::Pi`，但**服务串必须保持监听应用**（`"codex"`）——
+`pi_api_matches_listen_app` 只认 claude/codex/gemini，传 `"pi"` 会让全部候选落选。
+用量归因到 `pi` 由 `usage_app_type_from_headers` 在 `RequestContext::new` 内完成。
+
+---
+
+## 交付物
+
+| 包 | 说明 |
+|---|---|
+| `CC Switch_4.0.4_x64-setup.exe` (11.9 MB) | 官方 4.0.4 + Pi 移植。**Pi 已实测通过** |
+| `CC Switch_3.20.15_x64-setup.exe` (11.1 MB) | 原 fork + Pi 路由修复（备用） |
+
+配套脚本：`restore-pi-cards.mjs`（卡片被投影污染时写回真实配置）、
+`build-pi-models.mjs`（按 DB 生成 models.json，`real` / `proxy` 两种模式）、
+`check-pi-headers.py`、`dump-pi-models.py`、`drop-saviour-model.mjs`。
+
+---
+
+## 踩过的坑（重要）
+
+1. **`Out-File` 加 UTF-8 BOM** → Rust 编译失败，从 git 取文件后必须清 BOM
+2. **`git switch` 被未提交改动静默中止** → 先存 `scripts/pi-routing-patch.diff`
+3. **覆盖正在运行的 exe 会静默失败** → 必须先 `Stop-Process`，覆盖后用
+   `Get-FileHash` 确认一致再启动。我曾因此拿旧二进制测了一轮，得出
+   "补丁没生效"的错误结论
+4. `pi_blocks.rs` / `useVisibleAppIds.ts` / `pi.messages.json` 是**官方文件**，不需移植
+5. 官方 `AppType` 多一个 `Mcode`，改 `get_adapter` 时别顺手改它
+6. 官方 4.0.4 缺 `tailwindcss-animate`（fork 的 node_modules 里没有）→ 先 `pnpm install`
+7. **同名模型会让 Pi CLI 拒绝**：`More than one matching provider is authenticated`。
+   已删掉重复的 `saviour`（ZeroAPI）卡片 —— CPA 已聚合它
+
 
 分支：`port/pi-on-4.0.4`（基线 = 官方 `a7f66764` / upstream/main / v4.0.4）
 对照源：`main`（3.20.15，你的定制线）
