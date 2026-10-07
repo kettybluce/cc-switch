@@ -1,0 +1,33 @@
+{
+  "customTopLevel": "keep-me",
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "api": "anthropic-messages",
+      "apiKey": "sk-ant-live",
+      "headers": { "X-Custom": "hdr" },
+      "sdkOption": { "timeout": 30 },
+      "models": [
+        {
+          "id": "claude-sonnet-4",
+          "name": "Sonnet",
+          "compat": { "supportsDeveloperRole": true }
+        }
+      ]
+    },
+    "openai": {
+      "name": "OpenAI",
+      "baseUrl": "https://api.openai.com/v1",
+      "api": "openai-completions",
+      "apiKey": "sk-openai-live",
+      "models": [{ "id": "gpt-4o", "baseUrl": "https://api.openai.com/v1" }]
+    },
+    "gemini": {
+      "name": "Gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "api": "google-generative-ai",
+      "apiKey": "gemini-key"
+    }
+  }
+}

@@ -1,0 +1,209 @@
+﻿diff --git a/src-tauri/src/proxy/handlers.rs b/src-tauri/src/proxy/handlers.rs
+index 80f38d3b..a259d0d4 100644
+--- a/src-tauri/src/proxy/handlers.rs
++++ b/src-tauri/src/proxy/handlers.rs
+@@ -759,6 +759,41 @@ fn decode_codex_request_body(
+ // ============================================================================
+ 
+ /// 处理 /v1/chat/completions 请求（OpenAI Chat Completions API - Codex CLI）
++/// Resolve the logical app that a request arriving on the shared Claude/Codex
++/// listen actually belongs to.
++///
++/// Pi projects its own `models.json` onto the shared listen and tags every
++/// request with `x-cc-switch-app: pi`. Without this, a Pi request is treated as
++/// Codex when it is forwarded, so the routing bookkeeping — failover chain,
++/// circuit-breaker key, usage attribution and the per-app model mapping — is
++/// keyed on the wrong app. When two Pi providers expose the same model id
++/// (e.g. `gpt-6-astra` on both ZeroAPI and a CPA card) that mismatch is what
++/// surfaces as a routing error.
++///
++/// Returns `(app_type, tag)` for the forwarder.
++///
++/// NOTE: the *service* string (`app_type_str`, i.e. `"codex"` / `"claude"`) must
++/// NOT be replaced with `"pi"`. `ProviderRouter::select_pi_providers` matches the
++/// Pi catalog against the **listen** app via `pi_api_matches_listen_app`, which
++/// only understands "claude" / "codex" / "gemini"; passing "pi" filters out
++/// every candidate and yields `NoProvidersConfigured` (503 未配置供应商).
++/// Usage attribution to `pi` already happens inside `RequestContext::new` via
++/// `usage_app_type_from_headers`.
++///
++/// Missing or unknown header values keep the original app so existing Claude /
++/// Codex / GrokBuild clients are unaffected.
++fn resolve_shared_listen_app(
++    headers: &axum::http::HeaderMap,
++    default_app: AppType,
++    default_tag: &'static str,
++) -> (AppType, &'static str) {
++    if crate::pi_config::request_is_pi_client(headers) {
++        (AppType::Pi, "Pi")
++    } else {
++        (default_app, default_tag)
++    }
++}
++
+ pub async fn handle_chat_completions(
+     State(state): State<ProxyState>,
+     request: axum::extract::Request,
+@@ -777,8 +812,14 @@ pub async fn handle_chat_completions(
+     let body: Value = serde_json::from_slice(&body_bytes)
+         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
+ 
++    // ★ Pi clients share this Codex listen; identify them by header so the
++    // request is *forwarded* as Pi rather than Codex. `app_type_str` stays
++    // "codex" -- provider selection matches the Pi catalog against the listen
++    // app, and usage attribution is handled inside RequestContext::new.
++    let (app_type, tag) = resolve_shared_listen_app(&headers, AppType::Codex, "Codex");
++
+     let mut ctx =
+-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
++        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, "codex").await?;
+     let endpoint = endpoint_with_query(&uri, "/chat/completions");
+ 
+     let is_stream = body
+@@ -789,7 +830,7 @@ pub async fn handle_chat_completions(
+     let forwarder = ctx.create_forwarder(&state);
+     let mut result = match forwarder
+         .forward_with_retry(
+-            &AppType::Codex,
++            &app_type,
+             method,
+             &endpoint,
+             body,
+@@ -867,6 +908,12 @@ async fn handle_responses_for_app(
+     let body: Value = serde_json::from_slice(&body_bytes)
+         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
+ 
++    // ★ Pi clients share this Codex listen; identify them by header so the
++    // request is *forwarded* as Pi rather than Codex. `app_type_str` stays the
++    // listen app (codex or grokbuild) for provider selection; usage attribution
++    // to `pi` already happens inside RequestContext::new.
++    let (app_type, tag) = resolve_shared_listen_app(&headers, app_type, tag);
++
+     let mut ctx =
+         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
+     let endpoint = endpoint_with_query(&uri, "/responses");
+@@ -2858,10 +2905,11 @@ async fn log_usage(
+ mod tests {
+     use super::{
+         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
+-        codex_proxy_error_json, responses_sse_stream_to_anthropic_message,
++        codex_proxy_error_json, resolve_shared_listen_app, responses_sse_stream_to_anthropic_message,
+         responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
+         upstream_body_parse_error,
+     };
++    use crate::app_config::AppType;
+     use crate::proxy::ProxyError;
+     use bytes::Bytes;
+     use std::sync::{
+@@ -2869,6 +2917,69 @@ mod tests {
+         Arc,
+     };
+ 
++    /// 回归测试：Pi 与 Codex 共用同一条监听，「切换同名模型导致路由异常」的根因
++    /// 是 Pi 请求被当作 Codex 转发。这里锁定 app 识别行为。
++    ///
++    /// 注意：服务串（app_type_str）不参与本函数——它必须保持 listen app
++    /// ("codex")，否则 select_pi_providers 的 pi_api_matches_listen_app 会
++    /// 过滤掉全部候选而返回 503 未配置供应商。
++    #[test]
++    fn shared_listen_app_follows_pi_header() {
++        let mut pi = axum::http::HeaderMap::new();
++        pi.insert("x-cc-switch-app", "pi".parse().unwrap());
++
++        // Pi 标记存在 → 转发时按 Pi 处理（大小写不敏感）
++        assert_eq!(
++            resolve_shared_listen_app(&pi, AppType::Codex, "Codex"),
++            (AppType::Pi, "Pi")
++        );
++        let mut pi_upper = axum::http::HeaderMap::new();
++        pi_upper.insert("x-cc-switch-app", "PI".parse().unwrap());
++        assert_eq!(
++            resolve_shared_listen_app(&pi_upper, AppType::Codex, "Codex"),
++            (AppType::Pi, "Pi")
++        );
++
++        // 缺失 / 未知取值 → 保持原 app，老客户端行为不变
++        let empty = axum::http::HeaderMap::new();
++        assert_eq!(
++            resolve_shared_listen_app(&empty, AppType::Codex, "Codex"),
++            (AppType::Codex, "Codex")
++        );
++        let mut other = axum::http::HeaderMap::new();
++        other.insert("x-cc-switch-app", "codex".parse().unwrap());
++        assert_eq!(
++            resolve_shared_listen_app(&other, AppType::Codex, "Codex"),
++            (AppType::Codex, "Codex")
++        );
++
++        // GrokBuild 入口同样支持 Pi 标记，且不带标记时保持 GrokBuild
++        assert_eq!(
++            resolve_shared_listen_app(&pi, AppType::GrokBuild, "Grok Build"),
++            (AppType::Pi, "Pi")
++        );
++        assert_eq!(
++            resolve_shared_listen_app(&empty, AppType::GrokBuild, "Grok Build"),
++            (AppType::GrokBuild, "Grok Build")
++        );
++    }
++
++    /// 锁定服务串必须保持 listen app：pi_api_matches_listen_app 只认
++    /// claude / codex / gemini，传 "pi" 会让 Pi 目录全部落选。
++    #[test]
++    fn pi_listen_app_never_passes_the_pi_service_string() {
++        use crate::pi_config::pi_api_matches_listen_app;
++        // "pi" 不是合法的 listen app → 任何 api 都匹配不上
++        assert!(!pi_api_matches_listen_app(Some("openai-completions"), "pi"));
++        assert!(!pi_api_matches_listen_app(Some("openai-responses"), "pi"));
++        // codex listen 才是 Pi 的 openai-* 卡片该匹配的
++        assert!(pi_api_matches_listen_app(
++            Some("openai-completions"),
++            "codex"
++        ));
++        assert!(pi_api_matches_listen_app(Some("openai-responses"), "codex"));
++    }
++
+     #[test]
+     fn body_looks_like_sse_detects_unlabeled_sse_prefixes() {
+         assert!(body_looks_like_sse("data: {\"id\":\"1\"}\n\n"));
+diff --git a/src-tauri/src/proxy/providers/mod.rs b/src-tauri/src/proxy/providers/mod.rs
+index a53874d2..e1210b72 100644
+--- a/src-tauri/src/proxy/providers/mod.rs
++++ b/src-tauri/src/proxy/providers/mod.rs
+@@ -265,7 +265,16 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
+         AppType::Gemini => Box::new(GeminiAdapter::new()),
+         AppType::GrokBuild => Box::new(CodexAdapter::new()),
+         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Box::new(CodexAdapter::new()),
+-        AppType::Pi => return None,
++        // Pi shares the Claude/Codex listen and is forwarded with AppType::Pi when
++        // the request carries `x-cc-switch-app: pi`. Pi catalog cards are
++        // openai-completions / openai-responses (and anthropic-messages handled by
++        // the Claude listen), so route them through the Codex adapter exactly like
++        // GrokBuild: the concrete wire protocol is chosen per-provider by
++        // `codex_provider_uses_chat_completions` / `..._uses_anthropic`, not here.
++        //
++        // Before this, `AppType::Pi => None` made every takeover-projected Pi
++        // request fail with "pi does not support proxy routing".
++        AppType::Pi => Box::new(CodexAdapter::new()),
+     })
+ }
+ 
+@@ -544,4 +553,19 @@ mod tests {
+         let adapter = get_adapter_for_provider_type(&ProviderType::GeminiCli);
+         assert_eq!(adapter.name(), "Gemini");
+     }
++
++    /// Pi 通过 `x-cc-switch-app: pi` 被转发为 AppType::Pi。它此前没有适配器
++    /// （`AppType::Pi => return None`），导致接管后的 Pi 请求一律报
++    /// "pi does not support proxy routing"。这里锁定 Pi 必须复用 Codex 适配器。
++    #[test]
++    fn test_get_adapter_routes_pi_through_codex_adapter() {
++        let pi = get_adapter(&AppType::Pi).expect("Pi must have a routing adapter");
++        let codex = get_adapter(&AppType::Codex).expect("Codex adapter");
++        assert_eq!(pi.name(), codex.name());
++        assert_eq!(pi.name(), "Codex");
++
++        // 相邻的 GrokBuild 也走 Codex，行为保持一致
++        let grok = get_adapter(&AppType::GrokBuild).expect("GrokBuild adapter");
++        assert_eq!(grok.name(), "Codex");
++    }
+ }
