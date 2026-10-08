@@ -136,6 +136,14 @@ fn merge_sync_step(
 /// 手动同步和 Codex 重建共享，避免 tokio Mutex 重入。
 pub fn sync_all_unlocked(db: &Database) -> SessionSyncResult {
     let mut result = SessionSyncResult::default();
+    // Pi 放最前：它的会话文件在 WSL 的 UNC 路径上，遍历 + 逐文件 stat 是这一轮里
+    // 唯一的 UNC I/O；而 Codex 那边要解析 SQLite、通常最慢。这些步骤顺序执行、
+    // 总时长不变，但让 Pi 先跑能保证它的用量不会排在其后的慢 provider 之后。
+    merge_sync_step(
+        &mut result,
+        "Pi",
+        crate::services::session_usage_pi::sync_pi_usage(db),
+    );
     merge_sync_step(&mut result, "Claude", sync_claude_session_logs(db));
     merge_sync_step(
         &mut result,
@@ -156,11 +164,6 @@ pub fn sync_all_unlocked(db: &Database) -> SessionSyncResult {
         &mut result,
         "Grok Build",
         crate::services::session_usage_grokbuild::sync_grokbuild_usage(db),
-    );
-    merge_sync_step(
-        &mut result,
-        "Pi",
-        crate::services::session_usage_pi::sync_pi_usage(db),
     );
     merge_sync_step(
         &mut result,

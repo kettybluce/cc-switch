@@ -1280,10 +1280,17 @@ pub fn run() {
                     }
                 });
 
-                // Session log usage sync: 启动时同步一次，之后每 60 秒检查
+                // Session log usage sync: 启动时同步一次，之后每 20 秒检查。
+                //
+                // 20s 而不是 60s：这些会话文件在 WSL 的 UNC 路径上（用户把
+                // claude/codex/pi 都装在 WSL 里），UNC 上单次 stat 约 1ms。
+                // 实测一轮（遍历 57 个会话 + 57 次 stat + 未改动文件整轮跳过）约
+                // 70–100ms，所以 20s 间隔约 0.5% CPU —— 换来的是新用量最多晚 20 秒
+                // 入库，而不是 60 秒。未改动的文件由各自的增量游标（mtime + 尾部
+                // 指纹）整轮跳过，不会重新解析。
                 let db_for_session_sync = state.db.clone();
                 tauri::async_runtime::spawn(async move {
-                    const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
+                    const SESSION_SYNC_INTERVAL_SECS: u64 = 20;
 
                     async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
                         // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
