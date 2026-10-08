@@ -1534,4 +1534,53 @@ mod tests {
         assert!(result.errors[0].contains("安全上限"));
         Ok(())
     }
+
+    /// 增量同步的有效性：没有变化的文件必须整轮跳过（不解析、不写库）。
+    ///
+    /// 这是「Pi 用量统计不费性能」的核心依据 —— WSL 上单个 stat 约 1ms，
+    /// 所以省掉的必须是整轮解析/事务，而不只是记录级去重。
+    /// 只读一次文件、内容一字未改时，第二轮应完全空转。
+    #[test]
+    fn unchanged_file_is_skipped_without_parsing() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = session_path(temp.path(), "incremental");
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-inc","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                &assistant_line("turn-1", "2023-11-14T22:13:21Z", 10),
+            ],
+        );
+
+        let db = Database::memory()?;
+
+        // 第一轮：导入
+        let first = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(first.files_scanned, 1);
+        assert_eq!(first.imported, 1, "首轮应导入 1 条");
+        assert_eq!(first.skipped, 0);
+
+        // 第二轮：文件未改动 → 整个文件走 revision 早退，什么都不做
+        let second = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(second.files_scanned, 1);
+        assert_eq!(
+            (second.imported, second.skipped),
+            (0, 0),
+            "未改动的文件必须整轮跳过（而不是重新解析后靠去重计数）"
+        );
+
+        // 第三轮：追加一条 → 只导入新增的那条
+        let mut file = File::options()
+            .append(true)
+            .open(&path)
+            .expect("open session for append");
+        writeln!(file, "{}", assistant_line("turn-2", "2023-11-14T22:13:22Z", 20))
+            .expect("append session line");
+        drop(file);
+
+        let third = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(third.imported, 1, "追加后只应导入新增的 1 条");
+        assert_eq!(third.skipped, 0, "追加路径不应重复导入旧记录");
+        Ok(())
+    }
 }

@@ -822,4 +822,52 @@ mod tests {
             "auth.json must be untouched"
         );
     }
+
+    /// 路由模式的核心投影：把一张真实 Pi 卡片投影到本地代理。
+    ///
+    /// 这是 `mode::controller::write_proxy` 的 `AppType::Pi` 分支实际调用的逻辑，
+    /// 也是 `sync_native_locked` 那道投影守卫判定的对象 —— 两者必须一致，
+    /// 否则投影会被当成真实配置写回卡片（曾导致 Pi 全部卡片不可转发）。
+    #[test]
+    fn projecting_a_real_card_targets_the_local_proxy_and_is_guarded() {
+        let original = json!({
+            "name": "anyrouter",
+            "baseUrl": "https://anyrouter.top",
+            "api": "anthropic-messages",
+            "apiKey": "sk-real-upstream-key",
+            "models": [{"id": "gpt-6-astra-cc-format"}, {"id": "claude-haiku-4-5-20251001"}]
+        });
+
+        let projected = project_node_if_object(&original, "http://127.0.0.1:15721");
+
+        // 1) 上游地址被改写成本地代理；Anthropic 类不走 /v1
+        assert_eq!(projected["baseUrl"], json!("http://127.0.0.1:15721"));
+        // 2) 真实 key 换成占位符（不能把用户 key 留在客户端文件里）
+        assert_eq!(projected["apiKey"], json!(PI_PROXY_API_KEY_PLACEHOLDER));
+        // 3) 带上 Pi 客户端标识，转发时据此走 Pi 目录而不是 Codex
+        assert_eq!(
+            projected["headers"][PI_CLIENT_APP_HEADER],
+            json!(PI_CLIENT_APP_VALUE)
+        );
+        // 4) 模型列表与其它未知字段保留
+        assert_eq!(projected["models"].as_array().map(Vec::len), Some(2));
+        assert_eq!(projected["name"], json!("anyrouter"));
+
+        // 5) 投影后必须被守卫认出来 —— sync_native_locked 靠它避免污染卡片
+        assert!(
+            is_projected_provider_node(&projected),
+            "投影结果必须被 is_projected_provider_node 识别"
+        );
+        assert!(document_has_proxy_projection(&json!({
+            "providers": {"anyrouter": projected.clone()}
+        })));
+
+        // 6) 原始卡片本身不受影响（纯函数，不改入参）
+        assert_eq!(original["baseUrl"], json!("https://anyrouter.top"));
+        assert_eq!(original["apiKey"], json!("sk-real-upstream-key"));
+
+        // 7) 幂等：再投影一次结果不变
+        let again = project_node_if_object(&projected, "http://127.0.0.1:15721");
+        assert_eq!(again, projected, "重复投影必须幂等");
+    }
 }
