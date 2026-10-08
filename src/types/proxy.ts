@@ -47,6 +47,8 @@ export interface ProxyTakeoverStatus {
   codex: boolean;
   gemini: boolean;
   grokbuild: boolean;
+  /** Pi 复用 Claude/Codex 监听，接管的是 `models.json`；模式行据此渲染。 */
+  pi: boolean;
   opencode: boolean;
   openclaw: boolean;
   hermes: boolean;

@@ -54,9 +54,17 @@ export const SKILLS_APP_IDS: AppId[] = [
   "mcode",
 ];
 
+/**
+ * 支持「直连 / 路由」两种模式的应用。
+ *
+ * Pi 也在内：它复用 Claude/Codex 的本地监听（后端 `AppType::Pi` 接管的是
+ * `models.json` 而不是 env/TOML），因此支持直连与路由。
+ * 但它**不支持 Stack/聚合**——见 `StackAppId` 只含 claude/codex，
+ * 与后端 `mode::stack::supports_stack` 保持一致。
+ */
 export type ProxyAppId = Extract<
   AppId,
-  "claude" | "codex" | "gemini" | "grokbuild"
+  "claude" | "codex" | "gemini" | "grokbuild" | "pi"
 >;
 
 /** Apps with a complete local gateway + failover data plane. */
@@ -65,6 +73,7 @@ export const PROXY_APP_IDS: ProxyAppId[] = [
   "codex",
   "gemini",
   "grokbuild",
+  "pi",
 ];
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {

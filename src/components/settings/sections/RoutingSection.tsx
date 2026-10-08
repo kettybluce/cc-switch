@@ -98,6 +98,8 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
     codex: useProvidersQuery("codex").data,
     gemini: useProvidersQuery("gemini").data,
     grokbuild: useProvidersQuery("grokbuild").data,
+    // Pi 支持直连/路由（接管 models.json），所以也要能显示它当前路由到谁。
+    pi: useProvidersQuery("pi").data,
   };
   const { data: desktop } = useProvidersQuery("claude-desktop");
   const desktopCurrent = desktop?.providers[desktop.currentProviderId];
