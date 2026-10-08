@@ -11,7 +11,9 @@ use std::str::FromStr;
 fn require_proxy_app(app_type: &str) -> Result<crate::app_config::AppType, String> {
     let app = crate::app_config::AppType::from_str(app_type)
         .map_err(|error| format!("无效的应用类型: {error}"))?;
-    if !app.supports_local_proxy() {
+    // Pi 复用 Claude/Codex 监听，`supports_local_proxy()` 对它刻意是 false，
+    // 但它有专门的接管分支（投影 models.json），所以同样允许进入模式系统。
+    if !app.supports_local_proxy() && !matches!(app, crate::app_config::AppType::Pi) {
         return Err(format!("{} 不支持本地路由", app.as_str()));
     }
     Ok(app)

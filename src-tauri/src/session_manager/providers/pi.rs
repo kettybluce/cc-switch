@@ -345,6 +345,9 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         .filter(|message| !message.is_empty());
     Ok(SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
+        // `--session` 同时接受文件路径和会话 id；用 id 更短、可直接粘贴，
+        // 且不依赖会话文件在磁盘上的绝对路径（WSL/Windows 路径形式不同）。
+        resume_command: Some(format!("pi --session {}", header.id)),
         session_id: header.id,
         title,
         summary: summary_text,
@@ -352,10 +355,6 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         created_at: header.timestamp,
         last_active_at: summary.last_active_at.or(header.timestamp),
         source_path: Some(source_path.clone()),
-        resume_command: Some(format!(
-            "pi --session {}",
-            crate::session_manager::terminal::shell_escape(&source_path)
-        )),
     })
 }
 
@@ -940,11 +939,11 @@ mod tests {
         // Pi's session picker prefers the message timestamp over the enclosing
         // entry timestamp when both are present.
         assert_eq!(session.last_active_at, Some(1_700_000_001_000));
-        // Pi resumes a session by its exact file path.
-        assert!(session
-            .resume_command
-            .as_deref()
-            .is_some_and(|command| command.starts_with("pi --session ")));
+        // Pi resumes a session by its id (the picker also accepts a partial id).
+        assert_eq!(
+            session.resume_command.as_deref(),
+            Some("pi --session cc-switch-capture-session")
+        );
 
         let messages =
             load_messages_with_layout(&root, &path, SessionLayout::Flat).expect("load messages");

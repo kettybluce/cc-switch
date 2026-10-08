@@ -44,11 +44,18 @@ use super::stack::{self, StackModel, StackView};
 use super::state::{op, Contract, Mode, ModeState, PendingTarget, StackState};
 
 /// 支持代理模式的应用。
-pub const PROXY_APPS: [AppType; 4] = [
+///
+/// Pi 也在内：它没有自己的 `proxy_config` 行（复用 Claude/Codex 监听，
+/// 见 `AppType::supports_local_proxy` 的注释），但 `write_proxy` / `write_direct`
+/// 都有 `AppType::Pi` 分支——接管时把 `models.json` 投影到该监听，
+/// 退出时按数据库卡片（SSOT）还原。所以它同样支持「直连 / 路由」两种模式。
+/// （聚合/Stack 模式对 Pi 无意义，`stack::supports_stack` 不含它。）
+pub const PROXY_APPS: [AppType; 5] = [
     AppType::Claude,
     AppType::Codex,
     AppType::Gemini,
     AppType::GrokBuild,
+    AppType::Pi,
 ];
 
 fn err(error: impl std::fmt::Display) -> String {
@@ -602,7 +609,10 @@ fn usable_direct<'a>(app: &AppType, direct: Option<&'a Provider>) -> Option<&'a 
 }
 
 fn require_proxy_app(app: &AppType) -> Result<(), String> {
-    if app.supports_local_proxy() {
+    // Pi 的接管不走 `proxy_config`（复用 Claude/Codex 监听，所以
+    // `supports_local_proxy()` 对它刻意是 false），但 `write_proxy` / `write_direct`
+    // 都有 `AppType::Pi` 分支，因此它同样能进模式系统（直连 / 路由）。
+    if app.supports_local_proxy() || matches!(app, AppType::Pi) {
         Ok(())
     } else {
         Err(format!("{} 不支持本地路由", app.as_str()))

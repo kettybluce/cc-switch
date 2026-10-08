@@ -848,6 +848,18 @@ fn tool_action_shell_command(tool: &str, action: ToolLifecycleAction) -> Option<
 /// 强制生成 POSIX 版命令。
 #[cfg(target_os = "windows")]
 fn wsl_tool_action_shell_command(tool: &str, action: ToolLifecycleAction) -> Option<String> {
+    // ★ WSL 里 update 一律走包管理器，**不要**用工具自带的官方 self-updater。
+    //
+    // 原因：`claude update` 之类是二进制自带的更新器，它更新自己那条分发渠道，
+    // **不回写 npm 全局包**。WSL 里这些 CLI 基本是 npm 装的（`~/.npm-global`），
+    // 于是官方更新器会「谎报成功」——打印
+    // `Successfully updated ... to version X`，但
+    // `~/.npm-global/lib/node_modules/.../package.json` 的 version 一字未动。
+    // 实测：claude 官方 update 报 2.1.293，npm 包仍 2.1.281；
+    // 换成 `npm i -g @anthropic-ai/claude-code@latest` 后两处才一致。
+    //
+    // install 仍优先 POSIX 官方 installer：那是「安装」不是「更新」，
+    // 且会落到 `~/.local/bin` 等原生位置，与本问题无关。
     match action {
         ToolLifecycleAction::Install => {
             let command = posix_install_command_for(tool);
@@ -858,7 +870,11 @@ fn wsl_tool_action_shell_command(tool: &str, action: ToolLifecycleAction) -> Opt
             }
         }
         ToolLifecycleAction::Update => {
-            tool_action_shell_command_for_shell(tool, action, LifecycleCommandShell::Posix)
+            // hermes 不在 npm 表里（它走官方 Unix installer），保持专用命令。
+            if tool == "hermes" {
+                return Some(HERMES_UPDATE_UNIX.to_string());
+            }
+            Some(npm_install_command_for(tool)?.to_string())
         }
     }
 }
@@ -7025,13 +7041,29 @@ mod tests {
 
         #[test]
         fn wsl_npm_tools_use_posix_update_chain_without_batch_call() {
-            // WSL 内跑的是 POSIX shell,不能带 Windows batch 的 `call`。同时 update
-            // fallback 仍应先尝试官方 CLI 自升级。
+            // WSL 内跑的是 POSIX shell,不能带 Windows batch 的 `call`。
+            //
+            // 并且 **不能**再用官方 self-updater 打头：`claude update` 是二进制自带
+            // 的更新器，只更新它自己的分发渠道，不回写 npm 全局包。WSL 里这些 CLI
+            // 是 npm 装的，官方更新器会谎报成功而版本不变（实测 2.1.281 报成
+            // 2.1.293，npm 包一字未动）。所以 update 直接走包管理器。
             let cmd = wsl_tool_action_shell_command("claude", ToolLifecycleAction::Update).unwrap();
-            assert_eq!(
-                cmd,
-                "claude update || npm i -g @anthropic-ai/claude-code@latest"
+            assert_eq!(cmd, "npm i -g @anthropic-ai/claude-code@latest");
+            assert!(
+                !cmd.contains("claude update"),
+                "WSL update 不能走官方 self-updater: {cmd}"
             );
+            assert!(!cmd.contains("call "), "WSL 命令不能带 batch 的 call: {cmd}");
+
+            // 其余 npm 管理的工具同样直接走包管理器
+            for (tool, pkg) in [
+                ("codex", "@openai/codex"),
+                ("pi", "@earendil-works/pi-coding-agent"),
+            ] {
+                let c = wsl_tool_action_shell_command(tool, ToolLifecycleAction::Update).unwrap();
+                assert!(c.starts_with("npm i -g "), "{tool}: {c}");
+                assert!(c.contains(pkg), "{tool} 应升级 {pkg}: {c}");
+            }
         }
     }
 
