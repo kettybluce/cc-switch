@@ -3960,6 +3960,21 @@ fn build_wsl_env_argv(extra_env: &[(&str, String)]) -> Result<Vec<String>, Strin
     Ok(env_argv)
 }
 
+/// WSL 会从 Windows 继承代理环境变量（WSL 的 autoProxy 默认开启）。
+/// v2rayN 退出后这些变量仍留在 WSL 会话里，指向已经没人监听的端口，
+/// 于是 WSL 内所有 HTTP 请求都会撞死端口——CPA / 各家 API 全部连不上。
+/// 这里在执行 CLI 之前探测一次代理端点：不可达就清掉；可达则原样保留
+/// （用户可能正需要代理访问墙外服务）。
+#[cfg(target_os = "windows")]
+const WSL_STALE_PROXY_GUARD: &str = concat!(
+    "if [ -n \"${http_proxy:-}${https_proxy:-}${HTTP_PROXY:-}${HTTPS_PROXY:-}\" ]; then ",
+    "_ccs_p=\"${http_proxy:-${https_proxy:-${HTTP_PROXY:-${HTTPS_PROXY:-}}}}\"; ",
+    "_ccs_hp=\"${_ccs_p#*://}\"; _ccs_hp=\"${_ccs_hp%%/*}\"; ",
+    "if ! bash -c \"exec 3<>/dev/tcp/${_ccs_hp%%:*}/${_ccs_hp##*:}\" 2>/dev/null; then ",
+    "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; ",
+    "fi; fi; ",
+);
+
 #[cfg(target_os = "windows")]
 fn build_wsl_tool_command(
     tool: &str,
@@ -3970,6 +3985,7 @@ fn build_wsl_tool_command(
         .chain(args.iter().copied())
         .collect::<Vec<_>>()
         .join(" ");
+    let invocation = format!("{WSL_STALE_PROXY_GUARD}{invocation}");
     let command = format!(
         "for flag in -lic -lc -c; do if \"${{SHELL:-sh}}\" \"$flag\" 'command -v {tool}' >/dev/null 2>&1; then exec \"${{SHELL:-sh}}\" \"$flag\" '{invocation}'; fi; done; exit 127"
     );
@@ -6991,6 +7007,30 @@ mod tests {
                 !install_cmd.contains('|') && install_cmd.contains(" -o $tmp && bash $tmp"),
                 "WSL hermes 安装不应依赖 pipefail,得到: {install_cmd}"
             );
+        }
+
+        #[test]
+        fn wsl_tool_command_clears_proxy_only_when_proxy_is_unreachable() {
+            // WSL 的 autoProxy 会把 v2rayN 的 127.0.0.1:10808 注入 WSL 环境变量；
+            // v2rayN 退出后变量残留，WSL 内所有 HTTP 请求都会撞死端口。
+            // 构建出的命令必须先探测代理端点，不可达才清掉（可达时保留，用户可能正需要代理）。
+            let cmd = build_wsl_tool_command("claude", &["--version"], None).unwrap();
+            assert!(
+                cmd.contains(
+                    "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY"
+                ),
+                "WSL 命令应包含清除残留代理变量的逻辑,得到: {cmd}"
+            );
+            assert!(
+                cmd.contains("/dev/tcp/"),
+                "应先探测代理端点是否可达,得到: {cmd}"
+            );
+            assert!(
+                cmd.contains("if [ -n \"${http_proxy:-}"),
+                "清除逻辑必须包在代理存在性判断里,得到: {cmd}"
+            );
+            assert!(cmd.contains("command -v claude"), "应保留 CLI 探测,得到: {cmd}");
+            assert!(cmd.contains("claude --version"), "应保留原始调用,得到: {cmd}");
         }
 
         #[test]
