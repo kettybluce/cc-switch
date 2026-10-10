@@ -29,4 +29,5 @@ copilot-api
 .history
 CODEBUDDY.md
 mainWindow.js
-docs/
+
+docs/CPA-*.md
