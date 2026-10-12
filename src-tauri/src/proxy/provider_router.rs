@@ -131,7 +131,8 @@ impl ProviderRouter {
     }
 
     /// Shared Claude listen: Pi clients (`x-cc-switch-app: pi`) use the Pi
-    /// catalog. Everyone else keeps the listen app's current/failover chain.
+    /// catalog. Claude Code may hit the cross-provider model catalog. Everyone
+    /// else keeps the listen app's current/failover chain.
     pub async fn select_providers_for_request(
         &self,
         listen_app: &str,
@@ -139,10 +140,52 @@ impl ProviderRouter {
         request_model: &str,
     ) -> Result<Vec<Provider>, AppError> {
         if crate::pi_config::request_is_pi_client(headers) {
-            self.select_pi_providers(listen_app, request_model)
-        } else {
-            self.select_providers(listen_app).await
+            return self.select_pi_providers(listen_app, request_model);
         }
+        if listen_app == AppType::Claude.as_str() {
+            if let Some(providers) = self.select_claude_catalog_providers(request_model)? {
+                return Ok(providers);
+            }
+        }
+        self.select_providers(listen_app).await
+    }
+
+    /// Resolve a Claude cross-provider catalog hit (settings KV).
+    pub fn resolve_claude_model_route(
+        &self,
+        request_model: &str,
+    ) -> Option<crate::claude_model_routing::ResolvedClaudeModelRoute> {
+        let config = self.db.get_claude_model_routing().ok()?;
+        crate::claude_model_routing::resolve_claude_model_route(&config, request_model)
+    }
+
+    /// Catalog hit → single target provider, no failover chain.
+    /// Returns `Ok(None)` on miss / disabled so callers fall back to default selection.
+    pub fn select_claude_catalog_providers(
+        &self,
+        request_model: &str,
+    ) -> Result<Option<Vec<Provider>>, AppError> {
+        let Some(route) = self.resolve_claude_model_route(request_model) else {
+            return Ok(None);
+        };
+        let Some(provider) = self
+            .db
+            .get_provider_by_id(&route.provider_id, AppType::Claude.as_str())?
+        else {
+            log::warn!(
+                "[claude] [catalog] provider '{}' not found for clientModel '{}'",
+                route.provider_id,
+                route.client_model
+            );
+            return Ok(None);
+        };
+        log::info!(
+            "[claude] [catalog] {} → provider={} upstream={}",
+            route.client_model,
+            provider.id,
+            route.upstream_model
+        );
+        Ok(Some(vec![provider]))
     }
 
     /// Select forwardable Pi providers for a request arriving on the shared
@@ -914,6 +957,145 @@ mod tests {
             .expect("count pi rows")
         };
         assert_eq!(pi_rows, 0);
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
+    }
+    #[tokio::test]
+    #[serial]
+    async fn claude_catalog_hit_returns_only_target_provider_no_failover() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let current = Provider::with_id(
+            "current".to_string(),
+            "Current".to_string(),
+            json!({}),
+            None,
+        );
+        let target = Provider::with_id(
+            "prov_deepseek".to_string(),
+            "DeepSeek".to_string(),
+            json!({"env": {"ANTHROPIC_MODEL": "should-not-matter"}}),
+            None,
+        );
+        db.save_provider("claude", &current).unwrap();
+        db.save_provider("claude", &target).unwrap();
+        db.set_current_provider("claude", "current").unwrap();
+        db.add_to_failover_queue("claude", "current").unwrap();
+        db.add_to_failover_queue("claude", "prov_deepseek").unwrap();
+
+        let mut proxy_cfg = db.get_proxy_config_for_app("claude").await.unwrap();
+        proxy_cfg.auto_failover_enabled = true;
+        db.update_proxy_config_for_app(proxy_cfg).await.unwrap();
+
+        let routing = crate::claude_model_routing::ClaudeModelRoutingConfig {
+            enabled: true,
+            entries: vec![crate::claude_model_routing::ClaudeModelRoutingEntry {
+                client_model: "prov_deepseek/deepseek-chat".to_string(),
+                provider_id: "prov_deepseek".to_string(),
+                upstream_model: "deepseek-chat".to_string(),
+                label: "DeepSeek Chat".to_string(),
+                description: String::new(),
+            }],
+            ..Default::default()
+        };
+        db.set_claude_model_routing(&routing).unwrap();
+
+        let router = ProviderRouter::new(db.clone());
+        let providers = router
+            .select_providers_for_request(
+                "claude",
+                &http::HeaderMap::new(),
+                "prov_deepseek/deepseek-chat",
+            )
+            .await
+            .unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "prov_deepseek");
+
+        // Miss (incl. aliases) keeps failover queue behavior (both queued providers)
+        let miss = router
+            .select_providers_for_request("claude", &http::HeaderMap::new(), "sonnet")
+            .await
+            .unwrap();
+        assert_eq!(miss.len(), 2);
+        let miss_ids: Vec<&str> = miss.iter().map(|p| p.id.as_str()).collect();
+        assert!(miss_ids.contains(&"current"));
+        assert!(miss_ids.contains(&"prov_deepseek"));
+
+        // Current provider setting unchanged by selection
+        assert_eq!(
+            db.get_current_provider("claude").unwrap().as_deref(),
+            Some("current")
+        );
+        assert_eq!(crate::database::SCHEMA_VERSION, 18);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn claude_catalog_disabled_ignores_entries() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let current = Provider::with_id(
+            "current".to_string(),
+            "Current".to_string(),
+            json!({}),
+            None,
+        );
+        let target = Provider::with_id(
+            "prov_deepseek".to_string(),
+            "DeepSeek".to_string(),
+            json!({}),
+            None,
+        );
+        db.save_provider("claude", &current).unwrap();
+        db.save_provider("claude", &target).unwrap();
+        db.set_current_provider("claude", "current").unwrap();
+
+        let routing = crate::claude_model_routing::ClaudeModelRoutingConfig {
+            enabled: false,
+            entries: vec![crate::claude_model_routing::ClaudeModelRoutingEntry {
+                client_model: "prov_deepseek/deepseek-chat".to_string(),
+                provider_id: "prov_deepseek".to_string(),
+                upstream_model: "deepseek-chat".to_string(),
+                label: String::new(),
+                description: String::new(),
+            }],
+            ..Default::default()
+        };
+        db.set_claude_model_routing(&routing).unwrap();
+
+        let router = ProviderRouter::new(db);
+        let providers = router
+            .select_providers_for_request(
+                "claude",
+                &http::HeaderMap::new(),
+                "prov_deepseek/deepseek-chat",
+            )
+            .await
+            .unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "current");
+    }
+
+    #[test]
+    fn claude_catalog_settings_kv_round_trip() {
+        let db = Database::memory().unwrap();
+        let cfg = crate::claude_model_routing::ClaudeModelRoutingConfig {
+            enabled: true,
+            replace_built_in_options: false,
+            write_available_models: true,
+            enable_gateway_discovery: false,
+            entries: vec![crate::claude_model_routing::ClaudeModelRoutingEntry {
+                client_model: "a/b".to_string(),
+                provider_id: "a".to_string(),
+                upstream_model: "b".to_string(),
+                label: "L".to_string(),
+                description: "D".to_string(),
+            }],
+        };
+        db.set_claude_model_routing(&cfg).unwrap();
+        let loaded = db.get_claude_model_routing().unwrap();
+        assert_eq!(loaded, cfg);
         assert_eq!(crate::database::SCHEMA_VERSION, 18);
     }
 }

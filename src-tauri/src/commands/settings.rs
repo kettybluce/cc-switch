@@ -718,3 +718,49 @@ pub async fn set_log_config(
     );
     Ok(true)
 }
+
+/// 获取 Claude 跨供应商模型路由配置
+#[tauri::command]
+pub async fn get_claude_model_routing(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::claude_model_routing::ClaudeModelRoutingConfig, String> {
+    state
+        .db
+        .get_claude_model_routing()
+        .map_err(|e| e.to_string())
+}
+
+/// 设置 Claude 跨供应商模型路由配置，并在 Claude 接管激活时刷新 live modelPicker
+#[tauri::command]
+pub async fn set_claude_model_routing(
+    state: tauri::State<'_, crate::AppState>,
+    mut config: crate::claude_model_routing::ClaudeModelRoutingConfig,
+) -> Result<bool, String> {
+    // Phase 1: gateway discovery is not implemented.
+    config.enable_gateway_discovery = false;
+    for entry in &mut config.entries {
+        if entry.client_model.trim().is_empty() {
+            entry.client_model = crate::claude_model_routing::default_client_model(
+                &entry.provider_id,
+                &entry.upstream_model,
+            );
+        }
+        entry.client_model = entry.client_model.trim().to_string();
+        entry.provider_id = entry.provider_id.trim().to_string();
+        entry.upstream_model = entry.upstream_model.trim().to_string();
+        entry.label = entry.label.trim().to_string();
+        entry.description = entry.description.trim().to_string();
+    }
+    config.entries.retain(|e| {
+        !e.provider_id.is_empty() && !e.upstream_model.is_empty() && !e.client_model.is_empty()
+    });
+    state
+        .db
+        .set_claude_model_routing(&config)
+        .map_err(|e| e.to_string())?;
+    state
+        .proxy_service
+        .refresh_claude_live_model_routing_while_proxy_active()
+        .await?;
+    Ok(true)
+}
