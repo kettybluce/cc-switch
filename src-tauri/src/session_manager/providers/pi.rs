@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -11,7 +12,8 @@ use crate::session_manager::{SessionMessage, SessionMeta};
 use super::pi_blocks::PiTranscript;
 use super::utils::for_each_jsonl_value;
 use super::utils::{
-    extract_text, parse_timestamp_to_ms, path_basename, truncate_summary, TITLE_MAX_CHARS,
+    extract_text, parse_timestamp_to_ms, path_basename, truncate_summary, FileParseCache,
+    TITLE_MAX_CHARS,
 };
 
 const PROVIDER_ID: &str = "pi";
@@ -229,19 +231,35 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     }
 }
 
+/// 会话页每次打开都会全量扫描；按 `(mtime, len)` 缓存解析结果，没变过的文件
+/// 不再重复「读全文 + 逐行 JSON 解析」。`codex` / `claude` 早就是这个做法，
+/// Pi 之前漏了——它的 `read_tree` 会把整个会话文件读一遍并逐行解析。
+static PARSE_CACHE: LazyLock<FileParseCache> = LazyLock::new(FileParseCache::new);
+
 fn scan_sessions_in_root(root: &Path, layout: SessionLayout) -> Vec<SessionMeta> {
     let mut files = Vec::new();
     collect_jsonl_files(root, layout, &mut files, true);
-    files
-        .into_iter()
-        .filter_map(|path| match parse_session(&path) {
-            Ok(session) => Some(session),
-            Err(error) => {
-                log::debug!("Skipping invalid Pi session {}: {error}", path.display());
-                None
-            }
-        })
-        .collect()
+    PARSE_CACHE.scan(files, scan_session_file)
+}
+
+/// 供 [`FileParseCache`] 使用：读不了（被占用 / 权限）返回 `Err`，让缓存**不要**
+/// 记住这次失败，下一轮重试；内容本身解析不出会话则返回 `Ok(None)`，可以缓存，
+/// 文件一改动 `(mtime, len)` 变化就会自然重来。
+fn scan_session_file(path: &Path) -> std::io::Result<Option<SessionMeta>> {
+    match parse_session(path) {
+        Ok(session) => Ok(Some(session)),
+        Err(error)
+            if error.starts_with("Failed to resolve Pi session")
+                || error.starts_with("Failed to open Pi session")
+                || error.starts_with("Failed to read Pi session") =>
+        {
+            Err(std::io::Error::other(error))
+        }
+        Err(error) => {
+            log::debug!("Skipping invalid Pi session {}: {error}", path.display());
+            Ok(None)
+        }
+    }
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
@@ -765,6 +783,43 @@ mod tests {
 
         let session = parse_session(&path).expect("parse future session");
         assert_eq!(session.summary.as_deref(), Some("future"));
+    }
+
+    #[test]
+    fn repeated_scans_reuse_the_cache_and_pick_up_file_changes() {
+        // 会话页每次打开都会全量扫描；没变过的文件必须走缓存，否则每次都要
+        // 把整个会话文件读一遍并逐行 JSON 解析。
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join("cached.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"session-1\",\"cwd\":\"/work\"}\n\
+             {\"type\":\"message\",\"id\":\"m1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"first title\"}}\n",
+        )
+        .expect("session");
+
+        let first = scan_sessions_in_root(&root, SessionLayout::Flat);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].summary.as_deref(), Some("first title"));
+
+        // 再扫一次：内容没变，走缓存，结果必须一致
+        let second = scan_sessions_in_root(&root, SessionLayout::Flat);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].summary.as_deref(), Some("first title"));
+
+        // 文件变了：缓存必须失效，读出新内容
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"session-1\",\"cwd\":\"/work\"}\n\
+             {\"type\":\"message\",\"id\":\"m1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"second title\"}}\n",
+        )
+        .expect("rewrite session");
+
+        let third = scan_sessions_in_root(&root, SessionLayout::Flat);
+        assert_eq!(third.len(), 1);
+        assert_eq!(third[0].summary.as_deref(), Some("second title"));
     }
 
     #[test]
