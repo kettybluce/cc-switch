@@ -791,6 +791,11 @@ describe("App integration with MSW", () => {
         "Custom Pi",
       ),
     );
+    // Pi 现在走模式面板（SwitchModePanel），该面板必须转发 onRemoveFromConfig，
+    // 否则这条路径下「移除」会退化成 undefined、点击无反应。
+    await waitFor(() =>
+      expect(screen.getByText("remove")).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByText("remove"));
 
     expect(screen.getByTestId("confirm-message")).toHaveTextContent(

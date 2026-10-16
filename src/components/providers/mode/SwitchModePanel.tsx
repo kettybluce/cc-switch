@@ -55,6 +55,10 @@ type ListCallbacks = Pick<
   React.ComponentProps<typeof ProviderList>,
   | "onEdit"
   | "onDelete"
+  // Pi 走模式面板（它在 PROXY_APP_IDS 里），而「从配置移除但保留卡片」是它卡片上的
+  // 主操作之一。原先这里没转发它，导致 Pi 落到模式面板后移除入口消失——只有
+  // 「更多」菜单里的彻底删除可用。这里补上转发，与下方普通列表分支保持一致。
+  | "onRemoveFromConfig"
   | "onDuplicate"
   | "onConfigureUsage"
   | "onOpenWebsite"

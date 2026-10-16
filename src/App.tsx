@@ -1246,6 +1246,19 @@ function App() {
     },
     onDelete: (provider: Provider) =>
       setConfirmAction({ provider, action: "delete" }),
+    // 「从配置移除但保留卡片」：这些应用支持把卡片从 live 配置里摘掉。
+    // 放在 listCallbacks 里而不是只挂在下方普通 ProviderList 分支上——因为 Pi
+    // 现在走 SwitchModePanel（它在 PROXY_APP_IDS 里），若只挂普通分支，
+    // Pi 的移除入口会消失（只有「更多」里的彻底删除可用）。
+    onRemoveFromConfig:
+      activeApp === "opencode" ||
+      activeApp === "openclaw" ||
+      activeApp === "hermes" ||
+      activeApp === "pi" ||
+      activeApp === "mcode"
+        ? (provider: Provider) =>
+            setConfirmAction({ provider, action: "remove" })
+        : undefined,
     onDuplicate: handleDuplicateProvider,
     onConfigureUsage: setUsageProvider,
     onOpenWebsite: handleOpenWebsite,
@@ -1303,15 +1316,6 @@ function App() {
               void (activeApp === "pi"
                 ? handleEnablePiProvider(provider)
                 : switchProvider(provider))
-            }
-            onRemoveFromConfig={
-              activeApp === "opencode" ||
-              activeApp === "openclaw" ||
-              activeApp === "hermes" ||
-              activeApp === "pi" ||
-              activeApp === "mcode"
-                ? (provider) => setConfirmAction({ provider, action: "remove" })
-                : undefined
             }
             onDisableOmo={
               activeApp === "opencode" ? handleDisableOmo : undefined
