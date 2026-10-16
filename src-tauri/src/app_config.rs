@@ -452,6 +452,18 @@ impl AppType {
         )
     }
 
+    /// 有设备级的直连 / 路由模式（`live-state.json`，`mode::controller`）：本地路由的四个应用，
+    /// 加上 Claude Desktop 与 Pi。Desktop 经同一个路由服务转发，但没有 `proxy_config` 行、不做故障
+    /// 转移，所以不算 [`Self::supports_local_proxy`]。
+    ///
+    /// Pi 同理不算 `supports_local_proxy()`（它复用 Claude/Codex 监听，没有自己的
+    /// `proxy_config` 行），但 `mode::controller` 的 `write_proxy` / `write_direct` 都有
+    /// `AppType::Pi` 分支——接管时把 `models.json` 投影到该监听、退出时按数据库卡片还原。
+    /// 因此它同样进模式系统，必须与 `mode::controller::PROXY_APPS` 保持一致。
+    pub fn has_route_mode(&self) -> bool {
+        self.supports_local_proxy() || matches!(self, AppType::ClaudeDesktop | AppType::Pi)
+    }
+
     /// Return an iterator over all app types
     pub fn all() -> impl Iterator<Item = AppType> {
         [

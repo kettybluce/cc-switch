@@ -117,6 +117,8 @@ pub struct ProxyTakeoverStatus {
     /// Pi 复用 Claude/Codex 监听；接管时改写的是 `models.json` 而非 env/TOML。
     /// 前端的模式行按这个字段决定是否给 Pi 渲染「直连 / 路由」。
     pub pi: bool,
+    #[serde(rename = "claude-desktop", default)]
+    pub claude_desktop: bool,
     pub opencode: bool,
     pub openclaw: bool,
 }
