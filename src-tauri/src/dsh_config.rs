@@ -445,17 +445,32 @@ pub(crate) fn upsert_provider(
     validate_provider_json(key, config)?;
     let _guard = lock_patch_file()?;
     let path = default_home_patch_path()?;
-    let mut entries = read_patch(&path)?;
+    upsert_provider_at(&path, key, config)
+}
+
+/// [`upsert_provider`] 的可测版本：显式指定 patch 路径，不读设置。
+pub(crate) fn upsert_provider_at(
+    path: &Path,
+    key: &str,
+    config: &serde_json::Value,
+) -> Result<(), AppError> {
+    validate_provider_json(key, config)?;
+    let mut entries = read_patch(path)?;
     let yaml = json_to_yaml(config)?;
     apply_providers_patch(&mut entries, &ProvidersPatch::new().upsert(key, yaml))?;
-    write_patch_atomic(&path, &entries)
+    write_patch_atomic(path, &entries)
 }
 
 /// 删除一个供应商。不存在时视为成功（幂等）。
 pub(crate) fn remove_provider(key: &str) -> Result<(), AppError> {
     let _guard = lock_patch_file()?;
     let path = default_home_patch_path()?;
-    let mut entries = read_patch(&path)?;
+    remove_provider_at(&path, key)
+}
+
+/// [`remove_provider`] 的可测版本。
+pub(crate) fn remove_provider_at(path: &Path, key: &str) -> Result<(), AppError> {
+    let mut entries = read_patch(path)?;
     if providers_of(&entries)
         .and_then(Value::as_mapping)
         .is_none_or(|map| !map.contains_key(Value::String(key.to_string())))
@@ -463,25 +478,58 @@ pub(crate) fn remove_provider(key: &str) -> Result<(), AppError> {
         return Ok(());
     }
     apply_providers_patch(&mut entries, &ProvidersPatch::new().remove(key))?;
-    write_patch_atomic(&path, &entries)
+    write_patch_atomic(path, &entries)
 }
 
 /// 设置默认模型，并整体写回。
 pub(crate) fn write_default_model(provider: &str, model: &str) -> Result<(), AppError> {
     let _guard = lock_patch_file()?;
     let path = default_home_patch_path()?;
-    let mut entries = read_patch(&path)?;
+    write_default_model_at(&path, provider, model)
+}
+
+/// [`write_default_model`] 的可测版本。
+pub(crate) fn write_default_model_at(
+    path: &Path,
+    provider: &str,
+    model: &str,
+) -> Result<(), AppError> {
+    let mut entries = read_patch(path)?;
     set_default_model(&mut entries, provider, model)?;
-    write_patch_atomic(&path, &entries)
+    write_patch_atomic(path, &entries)
 }
 
 /// 判断某个供应商 key 是否已存在于 patch 中。
 pub(crate) fn provider_exists(key: &str) -> Result<bool, AppError> {
     let path = default_home_patch_path()?;
-    let entries = read_patch(&path)?;
+    provider_exists_at(&path, key)
+}
+
+/// [`provider_exists`] 的可测版本。
+pub(crate) fn provider_exists_at(path: &Path, key: &str) -> Result<bool, AppError> {
+    let entries = read_patch(path)?;
     Ok(providers_of(&entries)
         .and_then(Value::as_mapping)
         .is_some_and(|map| map.contains_key(Value::String(key.to_string()))))
+}
+
+/// [`read_providers`] 的可测版本。
+pub(crate) fn read_providers_at(
+    path: &Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, AppError> {
+    let entries = read_patch(path)?;
+    let mut out = serde_json::Map::new();
+    if let Some(providers) = providers_of(&entries) {
+        if let Some(map) = providers.as_mapping() {
+            for (key, value) in map {
+                let Some(name) = key.as_str() else { continue };
+                let json = serde_json::to_value(value)
+                    .map_err(|e| AppError::Config(format!("转换 DSH 供应商 '{name}' 失败: {e}")))?;
+                out.insert(name.to_string(), json);
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ============================================================================
@@ -492,9 +540,9 @@ pub(crate) fn provider_exists(key: &str) -> Result<bool, AppError> {
 mod tests {
     use super::*;
 
-    fn sample_patch() -> Vec<Value> {
-        parse_patch(
-            r#"
+    /// 测试用的 patch 文本。同时供 `sample_patch()` 与「写到磁盘」的用例使用，
+    /// 保证只有一份数据源。
+    const SAMPLE_PATCH_TEXT: &str = r#"
 - id: ui-chat
   name: "@deepseek-ai/dsh-client-ui-chat"
   config:
@@ -516,9 +564,15 @@ mod tests {
   config:
     provider: user-real
     model: user-model
-"#,
-        )
-        .expect("sample parses")
+"#;
+
+    fn sample_patch_text() -> &'static str {
+        SAMPLE_PATCH_TEXT
+    }
+
+    fn sample_patch() -> Vec<Value> {
+        parse_patch(sample_patch_text())
+            .expect("sample parses")
     }
 
     #[test]
@@ -680,7 +734,10 @@ models:
 
     #[test]
     fn writes_atomically_and_round_trips_on_disk() {
-        let dir = std::env::temp_dir().join(format!("dsh_cfg_test_{}", std::process::id()));
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("dsh_cfg_test_{}_{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         let path = home_patch_path(&dir);
         let mut entries = sample_patch();
@@ -710,14 +767,184 @@ models:
 
     #[test]
     fn read_patch_treats_missing_and_blank_as_empty() {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let missing = std::env::temp_dir().join("dsh_cfg_test_missing_xyz/cordis.patch.yml");
         assert_eq!(read_patch(&missing).unwrap().len(), 0);
 
-        let dir = std::env::temp_dir().join(format!("dsh_cfg_blank_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("dsh_cfg_blank_{}_{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         let blank = home_patch_path(&dir);
         std::fs::write(&blank, "   \n\n").unwrap();
         assert_eq!(read_patch(&blank).unwrap().len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ========================================================================
+    // 高层业务操作（走文件的完整链路）
+    // ========================================================================
+
+    /// 建一个临时目录并放入给定的 patch 内容，返回 (目录, patch 路径)。
+    ///
+    /// 目录名带原子自增序号——不能用 `line!()`：同一行上的多个用例会拿到
+    /// 同一个名字，而 Rust 测试默认并行执行，会互相踩。
+    fn temp_patch(content: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("dsh_biz_{}_{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = home_patch_path(&dir);
+        std::fs::write(&path, content).unwrap();
+        (dir, path)
+    }
+
+    fn provider_json(base_url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "displayName": "CCS Card",
+            "apiKeyEnv": "K_CCS",
+            "api": "openai-completions",
+            "baseURL": base_url,
+            "models": [{ "id": "model-a" }]
+        })
+    }
+
+    #[test]
+    fn upsert_provider_preserves_existing_providers_on_disk() {
+        // 端到端验证「读全量 → 合并 → 整体写回」：磁盘上原有的 provider
+        // 必须在写入后仍然存在。这是防「整体替换」事故的最后一道关卡。
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        upsert_provider_at(&path, "ccs-new", &provider_json("http://ccs/v1")).unwrap();
+
+        let providers = read_providers_at(&path).unwrap();
+        assert!(providers.contains_key("user-real"), "原有 provider 丢失");
+        assert!(providers.contains_key("ccs-new"), "新 provider 未写入");
+        assert_eq!(
+            providers["ccs-new"]["baseURL"].as_str(),
+            Some("http://ccs/v1")
+        );
+        assert_eq!(
+            providers["user-real"]["apiKeyEnv"].as_str(),
+            Some("K_USER"),
+            "原有 provider 的字段被改动"
+        );
+    }
+
+    #[test]
+    fn upsert_provider_updates_in_place_without_duplicating() {
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        upsert_provider_at(&path, "user-real", &provider_json("http://updated/v1")).unwrap();
+
+        let providers = read_providers_at(&path).unwrap();
+        assert_eq!(providers.len(), 1, "不应产生重复条目");
+        assert_eq!(
+            providers["user-real"]["baseURL"].as_str(),
+            Some("http://updated/v1")
+        );
+    }
+
+    #[test]
+    fn upsert_provider_rejects_empty_key_and_non_object() {
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        assert!(upsert_provider_at(&path, "  ", &provider_json("http://x/v1")).is_err());
+        assert!(
+            upsert_provider_at(&path, "k", &serde_json::json!("not an object")).is_err()
+        );
+        // 校验失败不该留下半成品
+        assert_eq!(read_providers_at(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_provider_removes_only_the_target() {
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        upsert_provider_at(&path, "ccs-new", &provider_json("http://ccs/v1")).unwrap();
+
+        remove_provider_at(&path, "user-real").unwrap();
+        let providers = read_providers_at(&path).unwrap();
+        assert!(!providers.contains_key("user-real"), "目标未删除");
+        assert!(providers.contains_key("ccs-new"), "误删了别的 provider");
+    }
+
+    #[test]
+    fn remove_provider_is_idempotent() {
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        // 删不存在的 key 应成功且不改动文件内容
+        remove_provider_at(&path, "nope").unwrap();
+        assert_eq!(read_providers_at(&path).unwrap().len(), 1);
+
+        // 删两次也只成功一次
+        remove_provider_at(&path, "user-real").unwrap();
+        remove_provider_at(&path, "user-real").unwrap();
+        assert!(read_providers_at(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn write_default_model_persists_across_reads() {
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        write_default_model_at(&path, "user-real", "model-x").unwrap();
+
+        let entries = read_patch(&path).unwrap();
+        assert_eq!(
+            default_model_of(&entries),
+            Some(("user-real".to_string(), "model-x".to_string()))
+        );
+    }
+
+    #[test]
+    fn provider_exists_reflects_disk_state() {
+        let (_dir, path) = temp_patch(&sample_patch_text());
+        assert!(provider_exists_at(&path, "user-real").unwrap());
+        assert!(!provider_exists_at(&path, "ccs-new").unwrap());
+
+        upsert_provider_at(&path, "ccs-new", &provider_json("http://ccs/v1")).unwrap();
+        assert!(provider_exists_at(&path, "ccs-new").unwrap());
+    }
+
+    #[test]
+    fn upsert_creates_patch_when_file_absent() {
+        // 全新环境：patch 文件不存在，第一次写入应能创建并带上正确的条目 id
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("dsh_fresh_{}_{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = home_patch_path(&dir);
+
+        upsert_provider_at(&path, "first", &provider_json("http://first/v1")).unwrap();
+        let entries = read_patch(&path).unwrap();
+        assert_eq!(find_entry_index(&entries, ID_LLM_PI_AI), Some(0));
+        assert_eq!(entries[0]["name"].as_str(), Some(NAME_LLM_PI_AI));
+        assert!(provider_exists_at(&path, "first").unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_lifecycle_matches_how_cc_switch_uses_it() {
+        // 模拟 CC Switch 的典型用法序列，确认各函数能协同工作
+        let (_dir, path) = temp_patch(&sample_patch_text());
+
+        // 1. 新增卡片
+        upsert_provider_at(&path, "cpa", &provider_json("http://cpa/v1")).unwrap();
+        // 2. 编辑卡片
+        upsert_provider_at(&path, "cpa", &provider_json("http://cpa-new/v1")).unwrap();
+        // 3. 启用并设为默认
+        write_default_model_at(&path, "cpa", "model-a").unwrap();
+
+        let providers = read_providers_at(&path).unwrap();
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers["cpa"]["baseURL"].as_str(), Some("http://cpa-new/v1"));
+        assert_eq!(
+            default_model_of(&read_patch(&path).unwrap()),
+            Some(("cpa".to_string(), "model-a".to_string()))
+        );
+
+        // 4. 彻底删除
+        remove_provider_at(&path, "cpa").unwrap();
+        assert!(!provider_exists_at(&path, "cpa").unwrap());
+        assert!(provider_exists_at(&path, "user-real").unwrap());
+        // 默认模型条目仍在（DSH 侧会忽略不存在的 provider，这里不代为清理）
+        assert!(default_model_of(&read_patch(&path).unwrap()).is_some());
     }
 }
