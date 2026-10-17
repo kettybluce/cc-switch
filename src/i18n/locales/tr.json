@@ -2181,6 +2181,18 @@
       "failed": "Codex kullanımı yeniden oluşturulamadı: {{error}}",
       "actionEllipsis": "Codex Kullanımını Yeniden Oluşturun"
     },
+    "rebuildPi": {
+      "title": "Pi Kullanım Bakımı",
+      "description": "Yerel oturum günlüklerinden Pi oturum kullanımını yeniden oluşturun",
+      "warning": "Öncelikle veritabanı yedeklenir. Kaynağı JSONL silinen geçmiş yeniden içe aktarılamaz.",
+      "action": "Pi Kullanımını Yeniden Oluşturun",
+      "confirmTitle": "Pi kullanımı yeniden oluşturulsun mu?",
+      "confirmMessage": "Bu, mevcut Pi oturum ayrıntılarını ve birleştirmeleri temizler, ardından bunları yerel Pi günlüklerinden tekrar içe aktarır.\n\nSilinen günlüklerle geçmiş kaybolacak. Toplayıcı yükseltmesinden sonra (yanıt gecikmesinin oturum günlüğünün kaydettiği durationMs kullanacak şekilde değiştirilmesi gibi), geçmiş kayıtları yenilemek için yeniden oluşturma gerekir.",
+      "confirmAction": "Yedekleme ve Yeniden Oluşturma",
+      "completed": "Yeniden oluşturma tamamlandı: {{imported}} içe aktarıldı, {{errors}} hataları, {{suspected}} şüpheli kopyalar, {{deferred}} ertelenmiş dosyalar",
+      "failed": "Pi kullanımı yeniden oluşturulamadı: {{error}}",
+      "actionEllipsis": "Pi Kullanımını Yeniden Oluşturun"
+    },
     "totalRecords": "Toplam {{total}} kayıtları",
     "goToPage": "Git",
     "pageInputPlaceholder": "Sayfa",

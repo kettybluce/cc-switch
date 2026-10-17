@@ -8,7 +8,8 @@ use crate::error::AppError;
 use crate::proxy::usage::calculator::CostCalculator;
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
-    estimated_latency_ms, metadata_modified_nanos, update_sync_state_on_conn, SessionSyncResult,
+    estimated_latency_ms, metadata_modified_nanos, plausible_latency_ms,
+    update_sync_state_on_conn, SessionSyncResult,
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH;
 use crate::services::usage_stats::find_model_pricing;
@@ -139,6 +140,137 @@ pub fn sync_pi_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let files = crate::session_manager::providers::pi::session_files()
         .map_err(|error| AppError::Config(format!("无法发现 Pi 会话: {error}")))?;
     Ok(sync_pi_files(db, &files))
+}
+
+/// 表是否存在（schema 迁移期间的旧库可能缺表，先探再删）。
+fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool, AppError> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map_err(|error| AppError::Database(format!("查询表 {table} 失败: {error}")))?;
+    Ok(count > 0)
+}
+
+/// 列是否存在（`data_source` / `provider_id` 都是后加的列，旧库可能没有）。
+fn sqlite_column_exists(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, AppError> {
+    if !sqlite_table_exists(conn, table)? {
+        return Ok(false);
+    }
+    let pragma = format!("PRAGMA table_info({table})");
+    let mut statement = conn
+        .prepare(&pragma)
+        .map_err(|error| AppError::Database(format!("读取表结构 {table} 失败: {error}")))?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| AppError::Database(format!("查询表结构 {table} 失败: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::Database(format!("解析表结构 {table} 失败: {error}")))?;
+    Ok(names.iter().any(|name| name == column))
+}
+
+/// 清掉 Pi 的会话用量明细、汇总与同步游标，供重建（导入逻辑是
+/// `INSERT OR IGNORE`，不先删就永远拿不到新算出来的字段——如 `latency_ms`
+/// 改用 `message.durationMs` 后，历史行的 0 不会被覆盖）。
+///
+/// 与 `reset_codex_usage_on_conn` 同构：只删 Pi 自己的行，绝不动其他 agent。
+/// 游标按路径归属删（`session_log_sync` 没有 data_source 列），只认
+/// `<root>/agent/sessions/` 这一段——与 `pi::session_files()` 的枚举范围一致，
+/// 避免把用户的 `.pi` 无关目录也算进来。
+pub(crate) fn reset_pi_usage_on_conn(conn: &rusqlite::Connection) -> Result<(), AppError> {
+    if sqlite_table_exists(conn, "proxy_request_logs")?
+        && sqlite_column_exists(conn, "proxy_request_logs", "data_source")?
+    {
+        conn.execute(
+            "DELETE FROM proxy_request_logs WHERE data_source = 'pi_session'",
+            [],
+        )
+        .map_err(|error| AppError::Database(format!("清理 Pi 会话明细失败: {error}")))?;
+    }
+    if sqlite_table_exists(conn, "usage_daily_rollups")?
+        && sqlite_column_exists(conn, "usage_daily_rollups", "provider_id")?
+    {
+        conn.execute(
+            "DELETE FROM usage_daily_rollups WHERE provider_id = '_pi_session'",
+            [],
+        )
+        .map_err(|error| AppError::Database(format!("清理 Pi 用量汇总失败: {error}")))?;
+    }
+    if sqlite_table_exists(conn, "session_log_sync")?
+        && sqlite_column_exists(conn, "session_log_sync", "file_path")?
+    {
+        let paths = {
+            let mut statement = conn
+                .prepare("SELECT file_path FROM session_log_sync")
+                .map_err(|error| {
+                    AppError::Database(format!("读取会话同步 cursor 失败: {error}"))
+                })?;
+            let paths = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|error| AppError::Database(format!("查询会话同步 cursor 失败: {error}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    AppError::Database(format!("解析会话同步 cursor 失败: {error}"))
+                })?;
+            paths
+        };
+        for file_path in paths.into_iter().filter(|path| is_pi_cursor_path(path)) {
+            conn.execute(
+                "DELETE FROM session_log_sync WHERE file_path = ?1",
+                [file_path],
+            )
+            .map_err(|error| AppError::Database(format!("清理 Pi 同步 cursor 失败: {error}")))?;
+        }
+    }
+    // 去重账本也要清：导入逻辑是「先查 dedup 再插明细」，只删明细会让重扫时
+    // 每条记录都被判定为已见过（skipped），重建导入数恒为 0。
+    if sqlite_table_exists(conn, "session_usage_dedup")?
+        && sqlite_column_exists(conn, "session_usage_dedup", "data_source")?
+    {
+        conn.execute(
+            "DELETE FROM session_usage_dedup WHERE data_source = 'pi_session'",
+            [],
+        )
+        .map_err(|error| AppError::Database(format!("清理 Pi 去重账本失败: {error}")))?;
+    }
+    Ok(())
+}
+
+/// 判断一条同步游标是否属于 Pi。只认 `agent/sessions` 这一段，避免误伤
+/// 用户自己放在 `.pi` 下的无关目录。
+fn is_pi_cursor_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized.contains("/.pi/agent/sessions/")
+}
+
+impl Database {
+    /// 备份由调用方负责（Tauri 命令层先 `backup_database_file` 再调这里）。
+    pub(crate) fn reset_pi_usage(&self) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute("SAVEPOINT reset_pi_usage", [])
+            .map_err(|error| AppError::Database(format!("开启 Pi 重建事务失败: {error}")))?;
+        let result = reset_pi_usage_on_conn(&conn);
+        match result {
+            Ok(()) => {
+                conn.execute("RELEASE reset_pi_usage", [])
+                    .map_err(|error| {
+                        AppError::Database(format!("提交 Pi 重建事务失败: {error}"))
+                    })?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK TO reset_pi_usage", []);
+                let _ = conn.execute("RELEASE reset_pi_usage", []);
+                Err(error)
+            }
+        }
+    }
 }
 
 fn sync_pi_files(db: &Database, files: &[PathBuf]) -> SessionSyncResult {
@@ -558,16 +690,8 @@ fn parse_usage_record(
 
     let identity = pi_request_identity(entry, kind, usage_value, message);
 
-    // Pi initializes an assistant message's timestamp before the request and
-    // appends the entry on message_end. Their difference includes first-token
-    // waiting, so it is an estimate, not an exact generation time. Other usage
-    // carriers have no equivalent request-start timestamp.
     let latency_ms = (kind == "assistant")
-        .then(|| {
-            let start = message?.get("timestamp").and_then(parse_timestamp_millis)?;
-            let end = entry.get("timestamp").and_then(parse_timestamp_millis)?;
-            estimated_latency_ms(start, end)
-        })
+        .then(|| pi_latency_ms(message, entry))
         .flatten()
         .unwrap_or(0);
 
@@ -597,6 +721,35 @@ fn nonempty_string(value: Option<&Value>) -> Option<&str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
+
+/// Pi 记录的请求耗时。
+///
+/// **优先用 pi 自己写的 `message.durationMs`**：那是上游测得的精确响应耗时
+/// （实测值域 179–4408ms）。只用时间戳相减估不出东西——pi 的
+/// `message.timestamp`（请求开始）与 `entry.timestamp`（message_end 追加）
+/// 同属一个 entry，差值通常只有几十毫秒，低于 `MIN_PLAUSIBLE_LATENCY_MS`(100)
+/// 就被 `estimated_latency_ms` 拒掉，历史数据里 178 条 pi 记录的
+/// `latency_ms` 全是 0 就是这么来的。
+///
+/// 拿不到 `durationMs` 时（pi 只在部分消息上记它）退回时间戳估算，两者都
+/// 没有才返回 None —— 调用方写 0，表示没有计时。
+fn pi_latency_ms(message: Option<&Value>, entry: &Value) -> Option<i64> {
+    if let Some(explicit) = message
+        .and_then(|message| message.get("durationMs"))
+        .and_then(Value::as_i64)
+        .and_then(plausible_latency_ms)
+    {
+        return Some(explicit);
+    }
+
+    // 兜底：Pi initializes an assistant message's timestamp before the request
+    // and appends the entry on message_end. Their difference includes
+    // first-token waiting, so it is an estimate, not an exact generation time.
+    let start = message?.get("timestamp").and_then(parse_timestamp_millis)?;
+    let end = entry.get("timestamp").and_then(parse_timestamp_millis)?;
+    estimated_latency_ms(start, end)
+}
+
 
 fn bounded_label(value: Option<&Value>, fallback: &str) -> String {
     truncate_usage_label(nonempty_string(value).unwrap_or(fallback)).to_string()
@@ -1155,9 +1308,89 @@ mod tests {
         }
     }
 
+    /// **回归测试**：pi 自己记的 `message.durationMs` 必须优先于时间戳估算。
+    ///
+    /// 这是真实数据形状（实测 118 条 assistant 消息里 13 条带该字段）：
+    /// `message.timestamp` 与 `entry.timestamp` 同属一个 entry、只差几十毫秒，
+    /// 估算必然低于 `MIN_PLAUSIBLE_LATENCY_MS`(100) 被拒 → 历史 178 条 pi 记录
+    /// `latency_ms` 全是 0。修好后带 `durationMs` 的记录应拿到精确耗时。
     #[test]
-    fn missing_or_implausible_timestamps_do_not_estimate_latency() {
-        let mut entry: Value =
+    fn prefers_explicit_duration_ms_over_timestamp_estimate() {
+        // 两个时间戳只差 30ms —— 估算路径会拒（< 100ms），只能靠 durationMs。
+        let mut entry: Value = serde_json::from_str(&assistant_line(
+            "timed",
+            "2026-10-12T14:40:37.776Z",
+            1,
+        ))
+        .expect("assistant entry");
+        entry["message"]["timestamp"] = Value::from(1_760_291_637_746i64); // 起点
+        entry["message"]["durationMs"] = Value::from(3_430i64); // pi 自己测的
+
+        let record = parse_usage_record(&entry, "session", None, 0).expect("usage record");
+        assert_eq!(record.latency_ms, 3_430);
+    }
+
+    /// `durationMs` 缺失或不可信时，仍回退到时间戳估算（不回归原有能力）。
+    #[test]
+    fn falls_back_to_timestamp_estimate_when_duration_ms_absent() {
+        let mut entry: Value = serde_json::from_str(&assistant_line(
+            "timed",
+            "2023-11-14T22:13:22.250Z",
+            1,
+        ))
+        .expect("assistant entry");
+        entry["message"]["timestamp"] = Value::from(1_700_000_000_000i64);
+
+        // 无 durationMs → 走估算，得到 2250ms
+        let record = parse_usage_record(&entry, "session", None, 0).expect("usage record");
+        assert_eq!(record.latency_ms, 2_250);
+
+        // durationMs 显式 null → 同样回退
+        entry["message"]["durationMs"] = Value::Null;
+        let record = parse_usage_record(&entry, "session", None, 0).expect("usage record");
+        assert_eq!(record.latency_ms, 2_250);
+    }
+
+    /// `durationMs` 是脏数据（0 / 负数 / 超一小时）时丢弃，回退估算而非照单全收。
+    #[test]
+    fn ignores_implausible_duration_ms() {
+        for bad in [0i64, -1, 99, 3_600_001, i64::MAX] {
+            let mut entry: Value = serde_json::from_str(&assistant_line(
+                "timed",
+                "2023-11-14T22:13:22.250Z",
+                1,
+            ))
+            .expect("assistant entry");
+            entry["message"]["timestamp"] = Value::from(1_700_000_000_000i64);
+            entry["message"]["durationMs"] = Value::from(bad);
+
+            let record = parse_usage_record(&entry, "session", None, 0).expect("usage record");
+            assert_eq!(
+                record.latency_ms, 2_250,
+                "durationMs={bad} 应被丢弃并回退到时间戳估算"
+            );
+        }
+    }
+
+    /// 非 assistant 消息（toolResult 等）不读 `durationMs`：那条计时属于工具调用，
+    /// 不是模型响应耗时，混进来会让「平均响应时间」虚低。
+    #[test]
+    fn non_assistant_entries_ignore_duration_ms() {
+        let mut entry: Value = serde_json::from_str(&assistant_line(
+            "tool",
+            "2023-11-14T22:13:22Z",
+            1,
+        ))
+        .expect("assistant entry");
+        entry["message"]["role"] = Value::from("toolResult");
+        entry["message"]["durationMs"] = Value::from(3_430i64);
+
+        let record = parse_usage_record(&entry, "session", None, 0).expect("tool usage");
+        assert_eq!(record.latency_ms, 0);
+    }
+
+    #[test]
+    fn missing_or_implausible_timestamps_do_not_estimate_latency() {        let mut entry: Value =
             serde_json::from_str(&assistant_line("untimed", "2023-11-14T22:13:22Z", 1))
                 .expect("assistant entry");
         let start_ms = 1_700_000_000_000i64;
@@ -1816,6 +2049,134 @@ mod tests {
         let third = sync_pi_files(&db, std::slice::from_ref(&path));
         assert_eq!(third.imported, 1, "追加后只应导入新增的 1 条");
         assert_eq!(third.skipped, 0, "追加路径不应重复导入旧记录");
+        Ok(())
+    }
+
+    /// 重建必须只删 Pi 自己的行：别的 agent 的明细/汇总/cursor 一条不能少。
+    #[test]
+    fn reset_pi_usage_only_removes_pi_rows_and_cursors() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pi_cursor = temp.path().join(".pi/agent/sessions/s.jsonl");
+        let claude_cursor = temp.path().join(".claude/projects/c.jsonl");
+        let codex_cursor = temp.path().join(".codex/sessions/x.jsonl");
+
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "INSERT INTO proxy_request_logs (
+                     request_id, provider_id, app_type, model, input_tokens,
+                     output_tokens, cache_read_tokens, latency_ms, status_code,
+                     created_at, data_source
+                 ) VALUES
+                     ('pi-row', '_pi_session', 'pi', 'm', 1, 1, 0, 0, 200, 1, 'pi_session'),
+                     ('claude-row', '_claude_session', 'claude', 'm', 1, 1, 0, 0, 200, 1, 'session_log'),
+                     ('codex-row', '_codex_session', 'codex', 'm', 1, 1, 0, 0, 200, 1, 'codex_session');
+                  INSERT INTO usage_daily_rollups (date, app_type, provider_id, model)
+                  VALUES
+                     ('2026-10-12', 'pi', '_pi_session', 'm'),
+                     ('2026-10-12', 'claude', '_claude_session', 'm'),
+                     ('2026-10-12', 'codex', '_codex_session', 'm');",
+            )?;
+            for path in [
+                pi_cursor.to_string_lossy().to_string(),
+                claude_cursor.to_string_lossy().to_string(),
+                codex_cursor.to_string_lossy().to_string(),
+            ] {
+                conn.execute(
+                    "INSERT INTO session_log_sync
+                     (file_path, last_modified, last_line_offset, last_synced_at)
+                     VALUES (?1, 1, 1, 1)",
+                    [path],
+                )?;
+            }
+
+            reset_pi_usage_on_conn(&conn)?;
+
+            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).expect("count") };
+            assert_eq!(count("SELECT COUNT(*) FROM proxy_request_logs WHERE data_source='pi_session'"), 0);
+            assert_eq!(count("SELECT COUNT(*) FROM usage_daily_rollups WHERE provider_id='_pi_session'"), 0);
+            // 别的 agent 一条不动
+            assert_eq!(count("SELECT COUNT(*) FROM proxy_request_logs"), 2);
+            assert_eq!(count("SELECT COUNT(*) FROM usage_daily_rollups"), 2);
+            assert_eq!(count("SELECT COUNT(*) FROM session_log_sync"), 2);
+        }
+        Ok(())
+    }
+
+    /// 重建后重扫必须能拿到 `durationMs` 带来的真实 latency。
+    /// `INSERT OR IGNORE` 不会覆盖已存在行，所以必须先 reset 再 sync——
+    /// 这正是加 `reset_pi_usage` 的原因。
+    #[test]
+    fn rebuild_after_reset_picks_up_duration_ms_latency() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join(".pi/agent/sessions");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("s.jsonl");
+
+        // 第一轮：无 durationMs，时间戳可估出延迟（但不精确）
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-dur","timestamp":"2023-11-14T22:13:20Z","cwd":"/work"}"#,
+                &assistant_line("turn-1", "2023-11-14T22:13:22Z", 5),
+            ],
+        );
+        let first = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(first.imported, 1);
+        {
+            let conn = lock_conn!(db.conn);
+            let latency: i64 = conn.query_row(
+                "SELECT latency_ms FROM proxy_request_logs WHERE data_source='pi_session'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert!(latency > 0, "时间戳差 2s 时应估出延迟, got {latency}");
+        }
+
+        // 文件被重写、带上 durationMs（模拟 pi 开始记精确耗时）
+        // 同时改 cwd 让文件长度变化，确保 revision 与上一轮不同（mtime 精度可能不够）。
+        let mut entry: Value =
+            serde_json::from_str(&assistant_line("turn-1", "2023-11-14T22:13:22Z", 5)).unwrap();
+        entry["message"]["durationMs"] = Value::from(3_430i64);
+        write_lines(
+            &path,
+            &[
+                r#"{"type":"session","version":3,"id":"session-dur","timestamp":"2023-11-14T22:13:20Z","cwd":"/work-dir-with-duration"}"#,
+                &entry.to_string(),
+            ],
+        );
+
+        // 不 reset 直接 sync → INSERT OR IGNORE 命中已存在行，latency 不变
+        let without_reset = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(without_reset.imported, 0, "已存在的行不会被重复导入");
+        {
+            let conn = lock_conn!(db.conn);
+            let latency: i64 = conn.query_row(
+                "SELECT latency_ms FROM proxy_request_logs WHERE data_source='pi_session'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_ne!(latency, 3_430, "不 reset 时旧值不会被覆盖");
+        }
+
+        // reset + sync → 新行带精确 latency
+        {
+            let conn = lock_conn!(db.conn);
+            reset_pi_usage_on_conn(&conn)?;
+        }
+        let after_reset = sync_pi_files(&db, std::slice::from_ref(&path));
+        assert_eq!(after_reset.imported, 1, "reset 后应重新导入");
+        {
+            let conn = lock_conn!(db.conn);
+            let latency: i64 = conn.query_row(
+                "SELECT latency_ms FROM proxy_request_logs WHERE data_source='pi_session'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(latency, 3_430, "reset+重扫后应拿到 durationMs");
+        }
         Ok(())
     }
 }

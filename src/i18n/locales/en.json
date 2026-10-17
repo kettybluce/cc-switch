@@ -2254,6 +2254,18 @@
       "failed": "Codex usage rebuild failed: {{error}}",
       "actionEllipsis": "Rebuild Codex Usage"
     },
+    "rebuildPi": {
+      "title": "Pi Usage Maintenance",
+      "description": "Rebuild Pi session usage from local session logs",
+      "warning": "The database is backed up first. History whose source JSONL has been deleted cannot be re-imported.",
+      "action": "Rebuild Pi Usage",
+      "confirmTitle": "Rebuild Pi usage?",
+      "confirmMessage": "This clears existing Pi session details and rollups, then imports them again from local Pi logs.\n\nHistory with deleted logs will be lost. After a collector upgrade (e.g. response latency switching to the durationMs the session log already records), a rebuild is required to refresh historical rows.",
+      "confirmAction": "Back Up and Rebuild",
+      "completed": "Rebuild complete: {{imported}} imported, {{errors}} errors, {{suspected}} suspected duplicates, {{deferred}} deferred files",
+      "failed": "Pi usage rebuild failed: {{error}}",
+      "actionEllipsis": "Rebuild Pi Usage"
+    },
     "totalRecords": "{{total}} records total",
     "goToPage": "Go",
     "pageInputPlaceholder": "Page",

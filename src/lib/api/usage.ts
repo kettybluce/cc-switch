@@ -232,6 +232,12 @@ export const usageApi = {
     return invoke("rebuild_codex_usage");
   },
 
+  /** 重建 Pi 会话用量：删明细 + 去重账本 + 同步游标后全量重扫。
+   *  采集算法升级后（如 latency_ms 改用 durationMs）必须走这个才能刷新历史行。 */
+  rebuildPiUsage: async (): Promise<SessionSyncResult> => {
+    return invoke("rebuild_pi_usage");
+  },
+
   getDataSourceBreakdown: async (): Promise<DataSourceSummary[]> => {
     return invoke("get_usage_data_sources");
   },

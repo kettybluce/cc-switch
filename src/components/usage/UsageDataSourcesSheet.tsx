@@ -32,6 +32,9 @@ interface UsageDataSourcesSheetProps {
   rebuildingCodex: boolean;
   /** 只负责打开确认框；确认框里写清后果 */
   onRebuildCodex: () => void;
+  rebuildingPi: boolean;
+  /** 只负责打开确认框；确认框里写清后果 */
+  onRebuildPi: () => void;
 }
 
 function SourceCard({
@@ -92,6 +95,8 @@ export function UsageDataSourcesSheet({
   onOpenRoutingSettings,
   rebuildingCodex,
   onRebuildCodex,
+  rebuildingPi,
+  onRebuildPi,
 }: UsageDataSourcesSheetProps) {
   const { t, i18n } = useTranslation();
   const coveredApps = joinNames(
@@ -196,6 +201,32 @@ export function UsageDataSourcesSheet({
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 )}
                 {t("usage.rebuildCodex.actionEllipsis")}
+              </Button>
+            </div>
+          </SourceCard>
+
+          <SourceCard
+            title={t("usage.rebuildPi.title")}
+            help={{
+              title: t("usage.sources.piHelpTitle"),
+              body: t("usage.rebuildPi.description"),
+            }}
+          >
+            <p className="m-0 text-caption text-fg-2">
+              {t("usage.rebuildPi.warning")}
+            </p>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="neutral"
+                size="compact"
+                disabled={rebuildingPi}
+                onClick={onRebuildPi}
+              >
+                {rebuildingPi && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
+                {t("usage.rebuildPi.actionEllipsis")}
               </Button>
             </div>
           </SourceCard>

@@ -360,6 +360,34 @@ pub async fn rebuild_codex_usage(
     .map_err(|error| AppError::Message(format!("Codex 用量重建任务失败: {error}")))?
 }
 
+/// 备份数据库后，仅重建 Pi session 用量。锁覆盖 backup → reset → import
+/// 整个序列，避免后台同步在清理和重导之间插入数据。
+///
+/// **为什么 Pi 也需要重建入口**：导入逻辑是 `INSERT OR IGNORE`，已入库的行不会被
+/// 更新。采集算法升级后（如 `latency_ms` 改用 pi 自己记的 `message.durationMs`），
+/// 历史行的旧值永远是旧值——必须 reset 删掉明细 + 去重账本 + 同步游标才能重算出
+/// 新值。与 Codex 的重建入口同构，用户在同一个「数据来源」面板里点。
+#[tauri::command]
+pub async fn rebuild_pi_usage(
+    state: State<'_, AppState>,
+) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
+    let db = state.db.clone();
+    let _guard = crate::services::session_usage::session_sync_mutex()
+        .lock()
+        .await;
+    tauri::async_runtime::spawn_blocking(move || {
+        db.backup_database_file()?;
+        db.reset_pi_usage()?;
+        let result = crate::services::session_usage_pi::sync_pi_usage(&db);
+        // 与 finish_codex_rebuild 同理：reset 已成功就意味着数据必然变化，
+        // 必须通知前端刷新，否则重导导入 0 条时用户看不到任何反馈。
+        crate::usage_events::notify_log_recorded();
+        result
+    })
+    .await
+    .map_err(|error| AppError::Message(format!("Pi 用量重建任务失败: {error}")))?
+}
+
 /// 获取数据来源分布
 #[tauri::command]
 pub fn get_usage_data_sources(

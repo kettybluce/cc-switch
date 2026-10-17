@@ -222,6 +222,15 @@ pub(crate) fn estimated_latency_ms(start_ms: i64, end_ms: i64) -> Option<i64> {
         .then_some(latency)
 }
 
+/// 校验会话日志里**上游自己记录的**耗时字段（如 Pi 的 `message.durationMs`）。
+/// 与 [`estimated_latency_ms`] 共用同一套合理区间，但不需要起点终点——它是测出来
+/// 的值，不是相减估出来的。区间外（0、负数、超过一小时）一律视为脏数据丢弃。
+pub(crate) fn plausible_latency_ms(latency_ms: i64) -> Option<i64> {
+    (MIN_PLAUSIBLE_LATENCY_MS..=MAX_PLAUSIBLE_LATENCY_MS)
+        .contains(&latency_ms)
+        .then_some(latency_ms)
+}
+
 pub(crate) fn parse_timestamp_millis(timestamp: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .ok()

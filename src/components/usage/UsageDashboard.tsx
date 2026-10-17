@@ -225,6 +225,8 @@ export function UsageDashboard({
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
   const [rebuildingCodex, setRebuildingCodex] = useState(false);
+  const [showRebuildPiConfirm, setShowRebuildPiConfirm] = useState(false);
+  const [rebuildingPi, setRebuildingPi] = useState(false);
   const [syncingSession, setSyncingSession] = useState(false);
   const [lastManualSyncAt, setLastManualSyncAt] = useState(
     lastManualSessionSyncAt,
@@ -235,7 +237,7 @@ export function UsageDashboard({
   const { syncSessionUsage } = useUsageAutoRefresh({
     refreshIntervalMs,
     sessionAutoSyncEnabled,
-    paused: rebuildingCodex || !settingsReady,
+    paused: rebuildingCodex || rebuildingPi || !settingsReady,
     // 预设范围和「结束于现在」的自定义范围都随时间移动，没有新用量也要定时重算
     rollingRange: range.preset !== "custom" || !!range.liveEndTime,
   });
@@ -316,6 +318,30 @@ export function UsageDashboard({
       toast.error(t("usage.rebuildCodex.failed", { error: String(error) }));
     } finally {
       setRebuildingCodex(false);
+    }
+  };
+
+  const rebuildPiUsage = async () => {
+    setShowRebuildPiConfirm(false);
+    setRebuildingPi(true);
+    try {
+      const result = await usageApi.rebuildPiUsage();
+      await queryClient.invalidateQueries({ queryKey: usageKeys.all });
+      const message = t("usage.rebuildPi.completed", {
+        imported: result.imported,
+        errors: result.errors.length,
+        suspected: result.suspectedDuplicates,
+        deferred: result.deferredFiles,
+      });
+      if (result.errors.length > 0 || result.deferredFiles > 0) {
+        toast.warning(message);
+      } else {
+        toast.success(message);
+      }
+    } catch (error) {
+      toast.error(t("usage.rebuildPi.failed", { error: String(error) }));
+    } finally {
+      setRebuildingPi(false);
     }
   };
 
@@ -917,6 +943,8 @@ export function UsageDashboard({
         onOpenRoutingSettings={onOpenRoutingSettings}
         rebuildingCodex={rebuildingCodex}
         onRebuildCodex={() => setShowRebuildConfirm(true)}
+        rebuildingPi={rebuildingPi}
+        onRebuildPi={() => setShowRebuildPiConfirm(true)}
       />
       <ConfirmDialog
         isOpen={showRebuildConfirm}
@@ -928,6 +956,17 @@ export function UsageDashboard({
         zIndex="top"
         onConfirm={() => void rebuildCodexUsage()}
         onCancel={() => setShowRebuildConfirm(false)}
+      />
+      <ConfirmDialog
+        isOpen={showRebuildPiConfirm}
+        title={t("usage.rebuildPi.confirmTitle")}
+        message={t("usage.rebuildPi.confirmMessage")}
+        confirmText={t("usage.rebuildPi.confirmAction")}
+        // 重建前会自动备份数据库，可从备份恢复：不算不可撤销，不用红色确认键
+        variant="info"
+        zIndex="top"
+        onConfirm={() => void rebuildPiUsage()}
+        onCancel={() => setShowRebuildPiConfirm(false)}
       />
     </div>
   );

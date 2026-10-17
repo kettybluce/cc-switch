@@ -2254,6 +2254,18 @@
       "failed": "Codex 用量重建失败：{{error}}",
       "actionEllipsis": "重建 Codex 用量"
     },
+    "rebuildPi": {
+      "title": "Pi 用量维护",
+      "description": "从本地会话日志重新构建 Pi 用量",
+      "warning": "重建前会自动备份数据库。若源 JSONL 已删除，对应历史将无法重新导入。",
+      "action": "重建 Pi 用量",
+      "confirmTitle": "确认重建 Pi 用量",
+      "confirmMessage": "此操作会清除现有 Pi 会话明细与汇总，再从本地 Pi 日志重新导入。\n\n已删除日志对应的历史将丢失。采集算法升级后（如响应耗时改用量日志自带的 durationMs），需要重建才能刷新历史记录。",
+      "confirmAction": "备份并重建",
+      "completed": "重建完成：导入 {{imported}} 条，错误 {{errors}}，疑似重复 {{suspected}}，暂缓文件 {{deferred}}",
+      "failed": "Pi 用量重建失败：{{error}}",
+      "actionEllipsis": "重建 Pi 用量"
+    },
     "totalRecords": "共 {{total}} 条记录",
     "goToPage": "跳转",
     "pageInputPlaceholder": "页码",

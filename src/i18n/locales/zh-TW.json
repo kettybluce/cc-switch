@@ -2230,6 +2230,18 @@
       "failed": "Codex 用量重建失敗：{{error}}",
       "actionEllipsis": "重建 Codex 用量"
     },
+    "rebuildPi": {
+      "title": "Pi 用量維護",
+      "description": "從本機工作階段日誌重新建構 Pi 用量",
+      "warning": "重建前會自動備份資料庫。若來源 JSONL 已刪除，對應歷史將無法重新匯入。",
+      "action": "重建 Pi 用量",
+      "confirmTitle": "確認重建 Pi 用量",
+      "confirmMessage": "此操作會清除現有 Pi 工作階段明細與彙總，再從本機 Pi 日誌重新匯入。\n\n已刪除日誌對應的歷史將遺失。採集演算法升級後（如回應耗時改用量工作日誌自帶的 durationMs），需要重建才能重新整理歷史記錄。",
+      "confirmAction": "備份並重建",
+      "completed": "重建完成：匯入 {{imported}} 筆，錯誤 {{errors}}，疑似重複 {{suspected}}，暫緩檔案 {{deferred}}",
+      "failed": "Pi 用量重建失敗：{{error}}",
+      "actionEllipsis": "重建 Pi 用量"
+    },
     "totalRecords": "共 {{total}} 筆紀錄",
     "goToPage": "跳轉",
     "pageInputPlaceholder": "頁碼",
