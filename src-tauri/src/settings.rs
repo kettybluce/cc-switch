@@ -527,6 +527,9 @@ pub struct AppSettings {
     pub hermes_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi_config_dir: Option<String>,
+    /// DSH 的 home 目录（默认 `~/.dsh`，可指向 WSL 侧）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_config_dir: Option<String>,
 
     // ===== 当前供应商 ID（设备级）=====
     /// 当前 Claude 供应商 ID（本地存储，优先于数据库 is_current）
@@ -658,6 +661,7 @@ impl Default for AppSettings {
             openclaw_config_dir: None,
             hermes_config_dir: None,
             pi_config_dir: None,
+            dsh_config_dir: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
@@ -747,6 +751,13 @@ impl AppSettings {
 
         self.pi_config_dir = self
             .pi_config_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        self.dsh_config_dir = self
+            .dsh_config_dir
             .as_ref()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -1123,6 +1134,15 @@ pub fn get_pi_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
     settings
         .pi_config_dir
+        .as_ref()
+        .map(|path| resolve_override_path(path))
+}
+
+/// DSH home 目录的覆盖值（设置里填的路径，可指向 WSL 侧）。
+pub fn get_dsh_override_dir() -> Option<PathBuf> {
+    let settings = settings_store().read().ok()?;
+    settings
+        .dsh_config_dir
         .as_ref()
         .map(|path| resolve_override_path(path))
 }

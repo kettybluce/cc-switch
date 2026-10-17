@@ -925,6 +925,7 @@
     "browsePlaceholderOpenclaw": "例如：/home/<您的帳號>/.openclaw",
     "browsePlaceholderHermes": "例如：/home/<您的帳號>/.hermes",
     "browsePlaceholderPi": "例如：/home/<您的帳號>/.pi/agent",
+    "browsePlaceholderDsh": "例如：/home/<您的帳號>/.dsh",
     "browseDirectory": "瀏覽目錄",
     "resetDefault": "還原預設目錄（需儲存後生效）",
     "checkForUpdates": "檢查更新",

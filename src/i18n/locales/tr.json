@@ -913,6 +913,7 @@
     "browsePlaceholderOpenclaw": "ör. /home/<your-username>/.openclaw",
     "browsePlaceholderHermes": "ör. /home/<your-username>/.hermes",
     "browsePlaceholderPi": "ör. /home/<your-username>/.pi/agent",
+    "browsePlaceholderDsh": "ör. /home/<your-username>/.dsh",
     "browseDirectory": "Dizine Göz Atın",
     "resetDefault": "Varsayılan dizine sıfırla (kaydettikten sonra etkili olur)",
     "checkForUpdates": "Güncellemeleri Kontrol Et",

@@ -925,6 +925,7 @@
     "browsePlaceholderOpenclaw": "例: /home/<your-username>/.openclaw",
     "browsePlaceholderHermes": "例: /home/<your-username>/.hermes",
     "browsePlaceholderPi": "例: /home/<your-username>/.pi/agent",
+    "browsePlaceholderDsh": "例: /home/<your-username>/.dsh",
     "browseDirectory": "ディレクトリを選択",
     "resetDefault": "デフォルトに戻す（保存後に反映）",
     "checkForUpdates": "アップデートを確認",

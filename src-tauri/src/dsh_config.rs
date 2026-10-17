@@ -59,12 +59,14 @@ pub(crate) const DSH_HOME_DIR_NAME: &str = ".dsh";
 
 /// 解析 DSH home 目录。
 ///
-/// 与 DSH 自身的 `resolveDshHome()` 保持同一语义：
-/// 优先取 `DSH_HOME`，为空或未设置时回落到 `~/.dsh`。
-///
-/// 注：CC Switch 运行在 Windows 侧，而 DSH 可能装在 WSL 里。因此这里只负责
-/// 给出「与当前进程同侧」的路径；跨 WSL 的场景由调用方按配置目录另行处理。
+/// 优先级（与其它应用保持一致的直觉）：
+/// 1. 设置里用户显式配置的目录（`dshConfigDir`，可指向 WSL 侧）；
+/// 2. 环境变量 `DSH_HOME`（与 DSH 自身语义一致）；
+/// 3. `~/.dsh`。
 pub(crate) fn resolve_dsh_home() -> Result<PathBuf, AppError> {
+    if let Some(path) = crate::settings::get_dsh_override_dir() {
+        return Ok(path);
+    }
     match std::env::var(DSH_HOME_ENV) {
         Ok(value) if !value.trim().is_empty() => Ok(PathBuf::from(value.trim())),
         _ => {

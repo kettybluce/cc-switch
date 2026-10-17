@@ -27,6 +27,7 @@ export const APP_IDS: AppId[] = [
   "hermes",
   "pi",
   "mcode",
+  "dsh",
 ];
 
 export const DEFAULT_VISIBLE_APPS: VisibleApps = {
@@ -40,6 +41,9 @@ export const DEFAULT_VISIBLE_APPS: VisibleApps = {
   hermes: true,
   pi: true,
   mcode: true,
+  // DSH 默认隐藏：没装 DSH 的用户不该在侧栏看到它。与后端
+  // VisibleApps::default 的 dsh: false 保持一致。
+  dsh: false,
 };
 
 /** App IDs shown in Skills panels. */
@@ -140,8 +144,11 @@ export function usesEditorView(appId: AppId): boolean {
   return EDITOR_VIEW_APP_IDS.includes(appId);
 }
 
-/** Claude Desktop、OpenClaw 不由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`） */
-export type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw">;
+/**
+ * Claude Desktop、OpenClaw 不由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`）。
+ * DSH 阶段一不接入 MCP 管理，也排除在外（与后端 `McpApps::is_enabled_for` 的 Dsh => false 一致）。
+ */
+export type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw" | "dsh">;
 export const MCP_APP_IDS: McpAppId[] = [
   "claude",
   "codex",
@@ -257,6 +264,16 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-fuchsia-500/10 ring-1 ring-fuchsia-500/20 hover:bg-fuchsia-500/20 text-fuchsia-600 dark:text-fuchsia-400",
     badgeClass:
       "bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300 hover:bg-fuchsia-500/20 border-0 gap-1.5",
+  },
+  dsh: {
+    label: "DeepSeek Harness",
+    icon: (
+      <ProviderIcon icon="deepseek" name="DeepSeek Harness" size={14} showFallback={false} />
+    ),
+    activeClass:
+      "bg-cyan-500/10 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400",
+    badgeClass:
+      "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-500/20 border-0 gap-1.5",
   },
 };
 

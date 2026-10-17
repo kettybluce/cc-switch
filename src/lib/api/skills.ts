@@ -26,6 +26,8 @@ export interface SkillApps {
   hermes: boolean;
   pi: boolean;
   mcode?: boolean;
+  /** DSH 阶段一不接入 Skills 管理，故为可选 */
+  dsh?: boolean;
 }
 
 /** 已安装的 Skill（v3.10.0+ 统一结构） */
