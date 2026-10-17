@@ -149,7 +149,9 @@ ${posixScriptInstallCommand("https://raw.githubusercontent.com/NousResearch/herm
 # Pi
 npm i -g @earendil-works/pi-coding-agent@latest
 # MiniMax Code
-${posixScriptInstallCommand("https://filecdn.minimax.chat/public/install.sh")} || ${MCODE_NPM_INSTALL_COMMAND}`;
+${posixScriptInstallCommand("https://filecdn.minimax.chat/public/install.sh")} || ${MCODE_NPM_INSTALL_COMMAND}
+# DeepSeek Harness
+npm i -g @deepseek-ai/dsh@latest`;
 
 const WINDOWS_ONE_CLICK_INSTALL_COMMANDS = `# Claude Code
 ${CLAUDE_NPM_INSTALL_COMMAND}
@@ -168,7 +170,9 @@ ${HERMES_WINDOWS_INSTALL_COMMAND}
 # Pi
 npm i -g @earendil-works/pi-coding-agent@latest
 # MiniMax Code
-${MCODE_WINDOWS_INSTALL_COMMAND}`;
+${MCODE_WINDOWS_INSTALL_COMMAND}
+# DeepSeek Harness
+npm i -g @deepseek-ai/dsh@latest`;
 
 export const ONE_CLICK_INSTALL_COMMANDS = isWindows()
   ? WINDOWS_ONE_CLICK_INSTALL_COMMANDS
@@ -184,6 +188,7 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
   hermes: "Hermes",
   pi: "Pi",
   mcode: "MiniMax Code",
+  dsh: "DeepSeek Harness",
 };
 
 // 后端返回的 tool 是 string；这里收敛唯一的 ToolName 断言与兜底，供升级确认

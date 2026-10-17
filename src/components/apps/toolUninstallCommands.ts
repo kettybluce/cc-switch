@@ -31,6 +31,7 @@ const COMMANDS: Record<UninstallMethod, UninstallCommand[]> = {
     { tool: "openclaw", command: "npm uninstall -g openclaw" },
     { tool: "pi", command: "npm uninstall -g @earendil-works/pi-coding-agent" },
     { tool: "mcode", command: "npm uninstall -g @minimax-ai/code" },
+    { tool: "dsh", command: "npm uninstall -g @deepseek-ai/dsh" },
   ],
   pnpm: [
     { tool: "opencode", command: "pnpm remove -g opencode-ai" },

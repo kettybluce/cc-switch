@@ -626,6 +626,7 @@ fn tool_display_name(tool: &str) -> &'static str {
         "hermes" => "Hermes",
         "pi" => "Pi",
         "mcode" => "MiniMax Code",
+        "dsh" => "DeepSeek Harness",
         _ => "Unknown",
     }
 }
@@ -843,6 +844,11 @@ fn npm_install_command_for(tool: &str) -> Option<&'static str> {
         "mcode" => Some(
             "npm i -g @minimax-ai/code@latest --ignore-scripts=false --include=optional \"--allow-scripts=@minimax-ai/code,better-sqlite3\"",
         ),
+        // DSH 与 claude/codex/pi 同为 npm 全局包，安装与升级都走 npm。
+        // **必须在此表**：`wsl_tool_action_shell_command` 的 Update 分支是
+        // `npm_install_command_for(tool)?`，漏了它 dsh 的安装/升级按钮会直接报
+        // "Unsupported tool action target: dsh"。
+        "dsh" => Some("npm i -g @deepseek-ai/dsh@latest"),
         _ => None,
     }
 }
@@ -2990,6 +2996,12 @@ fn resolve_path_default(
 /// 都会卡住整个"全部升级"预检——到点整组击杀，该条按探测失败降级，预检继续。
 const INSTALL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// 外层 `wsl.exe` 调用的超时。比 `INSTALL_PROBE_TIMEOUT` 略宽：内层脚本自己还有一层
+/// `timeout`（同为 10s），外层要留出 wsl.exe 启动 distro + 登录 shell 初始化的余量，
+/// 否则会在内层 `timeout` 生效前就把整个进程树杀掉，把"脚本超时"误报成"外层超时"。
+#[cfg(target_os = "windows")]
+const WSL_SHELL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// 带超时的 `--version` 探测（非 Windows）。与 `scan_cli_version` 的裸 `output()`
 /// 不同：stdin 显式置 null、经 `isolate_child_process_group` 进独立会话，超时可整组击杀。
 /// `new_path` 取 `&OsStr` 而非 `&str`：与 `prepend_search_dir_to_path` 同一约定，
@@ -3267,30 +3279,12 @@ fn wsl_install_enum_payload(tool: &str) -> String {
 }
 
 /// base64 编码（标准字母表 + `=` padding）。distro 里 `base64 -d` 解这个。
-/// 不引第三方 crate：字母表就 64 个字符，手写比加依赖划算（D7）。
+/// 复用项目已有的 `base64` crate（Cargo.toml:75，同文件 misc.rs:680 的
+/// `powershell_encoded_command` 就在用 `STANDARD`），不手写第二份实现（D6）。
 #[cfg(target_os = "windows")]
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    STANDARD.encode(input)
 }
 
 /// 枚举输出的哨兵：rc 文件的欢迎语/提示符都出现在它之前，只认它之后的行。
@@ -4544,6 +4538,11 @@ fn run_wsl_tool_command(
 ///
 /// 不设 `--cd`：枚举脚本只读 `$HOME` 与固定系统目录，与 cwd 无关；省掉一次
 /// `wsl_unc_path_to_linux` 的 UNC→Linux 转换（枚举场景没有主机侧路径可用）。
+///
+/// **必须带 deadline**：内层脚本虽有 `timeout` 兜底，但 `timeout` 本身不存在（distro
+/// 极简安装）或 wsl.exe 卡在 distro 启动上时，外层 `wsl.exe` 会无限等。与 Windows 版
+/// `enumerate_tool_installations` 对 `resolve_path_default` 加超时是同一条纪律
+/// （见 misc.rs:3044-3046 的注释：否则整个预检永久卡死）。
 #[cfg(target_os = "windows")]
 fn run_wsl_shell_command(distro: &str, command: &str) -> Result<std::process::Output, String> {
     use std::process::{Command, Stdio};
@@ -4558,12 +4557,32 @@ fn run_wsl_shell_command(distro: &str, command: &str) -> Result<std::process::Ou
         .arg("--")
         .args(["sh", "-c", command])
         .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = cmd
         .spawn()
         .map_err(|e| format!("[WSL:{distro}] failed to spawn shell: {e}"))?;
-    wait_child_output(child, None)
+    let output = wait_child_output(
+        child,
+        CommandDeadline::from_timeout(Some(WSL_SHELL_PROBE_TIMEOUT)),
+    )
+    .map_err(|e| {
+        if e.starts_with("Command timed out") {
+            format!("[WSL:{distro}] {e}")
+        } else {
+            e
+        }
+    })?;
+    if output.status.code() == Some(124) {
+        return Err(format!(
+            "[WSL:{distro}] {}",
+            CommandDeadline::from_timeout(Some(WSL_SHELL_PROBE_TIMEOUT))
+                .map(CommandDeadline::timeout_error)
+                .unwrap_or_else(|| "Command timed out".to_string())
+        ));
+    }
+    Ok(output)
 }
 
 /// 基于已枚举的安装列表生成锚定升级命令（复用 enumerate 结果，避免二次探测）。
@@ -6684,9 +6703,45 @@ mod tests {
         }
     }
 
+    /// dsh 工具生命周期元数据的全链路一致性。
+    ///
+    /// **这条测试是为了抓住一类真实缺陷**：新增一个工具时，`npm_package_for` /
+    /// `latest_version` / `tool_display_name` 常常逐一补上，但真正**生成命令**的
+    /// `npm_install_command_for` 容易漏——而漏了它不会编译报错，只在用户点「安装」/
+    /// 「升级」时才炸：`wsl_tool_action_shell_command` 的 Update 分支是
+    /// `npm_install_command_for(tool)?`，直接返回 None → 按钮报
+    /// "Unsupported tool action target: dsh"。
     #[test]
-    fn mcode_install_root_candidate_follows_platform_layout() {
-        assert_eq!(
+    fn dsh_lifecycle_metadata_is_consistent() {
+        assert_eq!(normalize_requested_tools(&["dsh".to_string()]), vec!["dsh"]);
+        assert_eq!(tool_display_name("dsh"), "DeepSeek Harness");
+        assert_eq!(npm_package_for("dsh"), Some("@deepseek-ai/dsh"));
+
+        // 安装与升级都必须落到 npm 静态命令（dsh 没有官方 self-updater 契约）。
+        let npm = npm_install_command_for("dsh")
+            .expect("npm_install_command_for 必须覆盖 dsh，否则安装/升级按钮直接报错");
+        assert_eq!(npm, "npm i -g @deepseek-ai/dsh@latest");
+        for shell in [
+            LifecycleCommandShell::Posix,
+            LifecycleCommandShell::WindowsBatch,
+        ] {
+            assert_eq!(
+                tool_action_shell_command_for_shell("dsh", ToolLifecycleAction::Update, shell)
+                    .as_deref(),
+                Some(npm)
+            );
+            assert_eq!(
+                tool_action_shell_command_for_shell("dsh", ToolLifecycleAction::Install, shell)
+                    .as_deref(),
+                Some(npm)
+            );
+        }
+        // dsh 不走 self-updater：官方更新器不回写 npm 包，会"谎报成功"。
+        assert_eq!(official_update_args("dsh"), None);
+    }
+
+    #[test]
+    fn mcode_install_root_candidate_follows_platform_layout() {        assert_eq!(
             mcode_install_root_candidate("/opt/mcode/bin/mcode", McodeLayout::Posix),
             "/opt/mcode"
         );

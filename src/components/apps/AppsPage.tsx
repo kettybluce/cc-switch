@@ -80,10 +80,11 @@ const SOURCE_LABEL: Record<string, string> = {
 
 type Row =
   | { kind: "tool"; tool: ToolName }
-  | { kind: "desktop" }
-  /** 未接入工具生命周期的应用：只有侧栏显示开关。DSH 是第一个。 */
-  | { kind: "visibilityOnly"; app: AppId };
+  | { kind: "desktop" };
 
+// 所有接入工具生命周期的 agent 都走 "tool" 行（含版本探测 + 安装/升级/卸载）。
+// dsh 曾因"装在 WSL、走 nightly 通道"被排除在外，只留一个侧栏开关
+// （`visibilityOnly` 行）——现已接入，那一行连同 `Row` 的第三个变体一并删除。
 const ROWS: Row[] = [
   { kind: "tool", tool: "claude" },
   { kind: "desktop" },
@@ -378,24 +379,6 @@ export function AppsPage() {
                   }
                   visibility={visibilitySwitch("claude-desktop")}
                 />
-              ) : row.kind === "visibilityOnly" ? (
-                <AppRow
-                  key={row.app}
-                  app={row.app}
-                  name={
-                    <span className="truncate">
-                      {APP_DISPLAY_NAME[row.app]}
-                    </span>
-                  }
-                  meta={
-                    <span className="truncate">
-                      {t("appsPage.noToolManagement", {
-                        defaultValue: "不在此页管理安装与版本",
-                      })}
-                    </span>
-                  }
-                  visibility={visibilitySwitch(row.app)}
-                />
               ) : (
                 <ToolRow
                   key={row.tool}
@@ -573,7 +556,25 @@ function ToolRow({
     Boolean(tools.loadingTools[tool]) ||
     (tools.isLoadingTools && !tools.toolVersionByName.has(tool));
   const isOutdated = isUpdateAvailable(info?.version, info?.latest_version);
-  const nodeGap = isOutdated ? info?.update_blocked_by_node : null;
+  const hasLatest = Boolean(info?.latest_version);
+  // 「升级」按钮的显示条件：
+  // 1. 正常情况：latest 严格高于 current（`isUpdateAvailable`）——所有工具通用。
+  // 2. **仅 dsh：版本相同也显示**。dsh 走 rc 预发布通道（当前 0.2.0-rc.2 = npm
+  //    latest），用户需要主动追一次最新 rc；此时"没有新版本"的结论对他们没有意义。
+  //    其他工具保持原语义，不在已最新时挂一个可点的「升级」按钮。
+  // 版本读不到（没有 latest）时不显示——那意味着探测失败，按钮点了也是盲操作。
+  // 判定用**字符串全等**而非 compareVersions === 0：后者对"无法解析"和"开发构建"
+  // 也返回 0（见 version.ts 的契约），会把探测失败的场景误判成"版本相同"。
+  const isSameVersion =
+    tool === "dsh" &&
+    hasLatest &&
+    Boolean(info?.version) &&
+    !isOutdated &&
+    info!.version === info!.latest_version;
+  // nodeGap 在"版本相同也显示升级"的场景同样适用：同版本重装/修复同样要跑
+  // `npm i -g @latest`，Node 不达标时一样会失败，所以不能只按 isOutdated 取。
+  const nodeGap =
+    isOutdated || isSameVersion ? info?.update_blocked_by_node : null;
   const broken = Boolean(info?.installed_but_broken);
   const isBusy = tools.busyTools.has(tool);
   const busyAction = tools.busyTools.get(tool);
@@ -584,7 +585,7 @@ function ToolRow({
       ? null
       : !info?.version
         ? "install"
-        : isOutdated && !nodeGap
+        : (isOutdated || isSameVersion) && !nodeGap
           ? "update"
           : null);
   const sourceLabel = defaultInstall

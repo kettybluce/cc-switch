@@ -4170,7 +4170,6 @@
     "columnVisible": "显示",
     "visibleHelp": "关掉后，这个应用不再出现在侧栏、托盘菜单、MCP / Skills 的应用列，以及提示词和会话的应用下拉里。只是不显示：它的供应商、MCP 等配置都还在，它自己的配置文件也不会被改动。",
     "desktopHelp": "Claude Desktop 是桌面应用，不能在这里安装或升级；CC Switch 通过它的配置文件接入。",
-    "noToolManagement": "不在此页管理安装与版本",
     "desktopUnsupported": "当前系统不支持",
     "desktopConnected": "已接入",
     "desktopNotConnected": "未接入",
@@ -4189,7 +4188,8 @@
       "openclaw": "通过 npm 安装",
       "hermes": "安装时运行官方安装脚本",
       "pi": "通过 npm 安装",
-      "mcode": "安装时运行官方安装脚本，失败时改用 npm"
+      "mcode": "安装时运行官方安装脚本，失败时改用 npm",
+      "dsh": "通过 npm 安装"
     }
   },
   "appPage": {

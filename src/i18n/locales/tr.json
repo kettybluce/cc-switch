@@ -4069,7 +4069,6 @@
     "columnVisible": "Göster",
     "visibleHelp": "Kapalıyken uygulama artık kenar çubuğunda, tepsi menüsünde, MCP / Skills uygulama sütunlarında veya İstemler ve Oturumlar'daki uygulama seçicilerde görünmez. Yalnızca gizlenir: sağlayıcıları, MCP sunucuları ve diğer ayarları yerinde kalır, kendi yapılandırma dosyalarına da dokunulmaz.",
     "desktopHelp": "Claude Desktop bir masaüstü uygulamasıdır ve buraya yüklenemez veya yükseltilemez; CC Switch, yapılandırma dosyası aracılığıyla ona bağlanır.",
-    "noToolManagement": "Kurulum ve sürüm burada yönetilmez",
     "desktopUnsupported": "Bu sistemde desteklenmiyor",
     "desktopConnected": "Bağlı",
     "desktopNotConnected": "Bağlı değil",
@@ -4087,7 +4086,8 @@
       "openclaw": "Npm ile yükler",
       "hermes": "Resmi komut dosyasıyla yüklenir",
       "pi": "Npm ile yükler",
-      "mcode": "Resmi komut dosyasıyla yüklenir, npm'ye geri döner"
+      "mcode": "Resmi komut dosyasıyla yüklenir, npm'ye geri döner",
+      "dsh": "Npm ile yükler"
     }
   },
   "appPage": {
