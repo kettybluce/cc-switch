@@ -7,7 +7,7 @@
 
 | 阶段 | 范围 | 状态 |
 |---|---|---|
-| 阶段一 | 模型配置同步：CC Switch 改卡片 → DSH 的 `cordis.patch.yml` 生效 | **进行中（后端已完成，前端部分完成）** |
+| 阶段一 | 模型配置同步：CC Switch 改卡片 → DSH 的 `cordis.patch.yml` 生效 | **代码已完成并通过测试，等真实环境端到端验证** |
 | 阶段二 | 使用记录（用量） | 未开始 |
 | 阶段三 | 会话列表 | 未开始 |
 | 阶段四 | 更新日志（DSH 走 nightly 通道） | 未开始 |
@@ -77,6 +77,18 @@ export DSH_HOME=/tmp/dsh-sandbox
 
 ## 四、已完成工作
 
+### 提交记录（阶段一）
+
+| 提交 | 内容 |
+|---|---|
+| `445d64fe` | 调研结论文档化 |
+| `90b5b2ae` | `dsh_config` 模块：读/合并/写/保真 + 11 个单测 |
+| `2e7837d3` | `AppType::Dsh` 接入后端 27 处 match（14 文件） |
+| `cd891343` | `services/provider/dsh.rs` + ProviderService 7 个路由点 |
+| `767ada67` | 前端接入：应用标识、目录设置、图标、i18n（17 文件） |
+| `9b375f7f` | 阶段一收尾：DSH 专用表单、命令层、应用页接入（24 文件） |
+| `4c7888d8` | 本文档 |
+
 ### 后端（全部完成）
 
 | 提交 | 内容 |
@@ -103,7 +115,7 @@ export DSH_HOME=/tmp/dsh-sandbox
 - 遇到结构异常（如 `config: oops`）拒绝改写而非猜测修复；
 - 未知字段与未知条目全程保留。
 
-**单测防线**（`cargo test --lib dsh_config`，11 通过）
+**单测防线**（`cargo test --lib dsh`，12 通过）
 - `apply_providers_patch_never_drops_existing_providers` ← 防「整体替换」事故
 - `apply_providers_patch_preserves_unknown_fields`
 - `refuses_to_rewrite_non_mapping_nodes`
@@ -116,7 +128,7 @@ export DSH_HOME=/tmp/dsh-sandbox
 4. `enable` 顺带把该 provider 的首个模型设为默认；
 5. `add` 在数据库保存失败时回滚已写入 patch 的项。
 
-### 前端（部分完成）
+### 前端（已完成）
 
 | 文件 | 改动 |
 |---|---|
@@ -129,27 +141,28 @@ export DSH_HOME=/tmp/dsh-sandbox
 | `src/components/usage/RequestLogTable.tsx` | 短名 `DSH` |
 | `src/components/providers/forms/EndpointSpeedTest.tsx` | 超时 8s |
 | `src/lib/api/skills.ts` | `SkillApps.dsh` 可选 |
-| `src/i18n/locales/*.json` | 5 个语言加 `browsePlaceholderDsh` |
-| `tests/msw/state.ts`、`SessionManagerPage.test.tsx` | mock 补 dsh |
+| `src/components/providers/forms/DshProviderForm.tsx` | **新增**，DSH 专用表单（不收 API Key，只收环境变量名） |
+| `src/components/providers/forms/ProviderForm.tsx` | `appId === "dsh"` 时返回 DshProviderForm |
+| `src/components/providers/AddProviderDialog.tsx`、`EditProviderDialog.tsx`、`ProviderList.tsx`、`presentation.ts`、`hooks/useProviderActions.ts`、`utils/providerConfigUtils.ts`、`lib/api/providers.ts`、`lib/query/mutations.ts`、`apps/AppsPage.tsx`、`App.tsx` | 识别 dsh |
+| `src-tauri/src/commands/dsh.rs` | **新增**，`import_dsh_providers_from_live` / `get_dsh_live_provider_ids` / `set_dsh_default_model` |
+| `src-tauri/src/commands/mod.rs`、`lib.rs` | 注册上述命令 |
+| `src/i18n/locales/*.json` | 5 个语言补 DSH 表单与提示文案 |
+| `tests/msw/state.ts`、`SessionManagerPage.test.tsx`、`NewLayoutDialog.test.tsx`、`useDirectorySettings.test.tsx` | mock 与断言适配 |
 
 ### 已验证
 
-- `cargo check --lib` 通过
+- `cargo check --lib` 无 error
 - `pnpm typecheck` 通过（EXIT=0）
-- `cargo test --lib dsh_config` 11 通过
+- `pnpm test:unit` **227 文件 / 2968 用例全部通过**
+- `cargo test --lib dsh` **12 通过**
 
 ## 五、剩余工作
 
-### 5.1 前端（未完成）
+### 5.1 前端
 
-| # | 事项 | 说明 |
-|---|---|---|
-| F1 | **ProviderForm 支持 DSH** | 目前新增/编辑卡片表单不认识 `dsh`。需要决定：复用通用表单，还是像 Mcode 那样单独写一个 `DshProviderForm` |
-| F2 | 应用列表可切换 | 后端 `VisibleApps.dsh` 默认 false，需确认前端设置页能把它打开 |
-| F3 | 打开配置目录按钮 | 已接 `get_config_dir("dsh")`，需在 UI 验证 |
-| F4 | 前端单测 | 目前只有后端单测，前端行为未覆盖 |
+无阻塞项。F1–F4 均已完成。
 
-### 5.2 端到端验证（阻塞中）
+### 5.2 端到端验证（阻塞中，唯一阻塞点）
 
 **依赖**：WSL 的 `~/.dsh` 存在。用户需先执行：
 
@@ -164,6 +177,8 @@ dsh --profile headless "hello"
 4. 切换默认模型 → `agent-default-model` 正确更新；
 5. 在 WSL 里跑 `dsh` 确认读到了新配置。
 
+详细步骤见 `docs/DSH-TEST-PLAN.md`。
+
 ### 5.3 阶段二/三/四（未开始）
 
 | 阶段 | 需要先搞清的事 |
@@ -174,12 +189,10 @@ dsh --profile headless "hello"
 
 ## 六、已知遗留
 
-- **dead_code 警告**：`dsh_config` 中 `read_default_model`、`provider_api`、
-  `import_dsh_providers_from_live` 等尚未被命令层调用，故报未使用。
-  接入前端命令后消除——不是为消警而保留。
-- **命令层未接入**：`import_dsh_providers_from_live` 已写好但还没有对应的
-  Tauri command。
-- **最后一次全量前端测试未跑完**（被中断），`pnpm typecheck` 已通过。
+- **端到端未验证**：阶段一所有代码已写完并通过静态检查与测试，但**从未在真实 DSH 上跑过**。唯一的阻塞是 WSL 的 `~/.dsh` 不存在（等用户初始化）。
+- **新增应用会拖挂计数型断言**：`NewLayoutDialog` 曾硬编码「getAll 被调 10 次」，加 dsh 后失败；已改为 `APP_IDS.length`。但项目里可能还有同类硬编码，下次新增应用时注意。
+- **DSH 默认隐藏**：`VisibleApps.dsh` 为 false，用户需在「应用」页手动打开才会在侧栏出现。
+- **密钥需用户自管**：方案 A 下 CC Switch 不写 key，用户要在 WSL 环境变量里设置 `apiKeyEnv` 指向的变量名。
 
 ## 七、关键文件索引
 
@@ -188,7 +201,10 @@ dsh --profile headless "hello"
 | `src-tauri/src/dsh_config.rs` | 配置读写核心 + 单测 |
 | `src-tauri/src/services/provider/dsh.rs` | 业务服务 |
 | `src-tauri/src/services/provider/mod.rs` | 7 个路由点 |
+| `src-tauri/src/commands/dsh.rs` | Tauri 命令 |
+| `src/components/providers/forms/DshProviderForm.tsx` | DSH 专用表单 |
 | `src-tauri/src/app_config.rs` | `AppType::Dsh` |
 | `src-tauri/src/settings.rs` | `VisibleApps.dsh`、`dsh_config_dir` |
 | `docs/DSH-INTEGRATION-RESEARCH.md` | 调研结论（含实测证据） |
+| `docs/DSH-TEST-PLAN.md` | 端到端测试计划 |
 | 本文 | 计划与进度 |
