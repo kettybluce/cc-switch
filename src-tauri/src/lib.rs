@@ -24,6 +24,8 @@ mod lightweight;
 mod linux_fix;
 pub mod live;
 mod dsh_config;
+#[cfg(test)]
+mod l3_dsh_tests;
 mod mcode_config;
 mod mcp;
 pub mod mode;

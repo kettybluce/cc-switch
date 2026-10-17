@@ -170,8 +170,8 @@ pub struct ToolVersion {
     update_blocked_by_node: Option<tool_node_requirement::NodeRequirementGap>,
 }
 
-const VALID_TOOLS: [&str; 9] = [
-    "claude", "codex", "gemini", "grok", "opencode", "openclaw", "hermes", "pi", "mcode",
+const VALID_TOOLS: [&str; 10] = [
+    "claude", "codex", "gemini", "grok", "opencode", "openclaw", "hermes", "pi", "mcode", "dsh",
 ];
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1228,6 +1228,11 @@ async fn get_single_tool_version_impl(
             fetch_npm_latest_for_tool(&client, "@earendil-works/pi-coding-agent", tool, local).await
         }
         "mcode" => fetch_npm_latest_for_tool(&client, "@minimax-ai/code", tool, local).await,
+        // DSH 走 npm 稳定/预发布通道（与 `npm_package_for` 的 dsh 条目同源）。
+        // 本地若已在预发布通道（`0.2.0-rc.2`），`fetch_npm_latest_for_tool` 会按
+        // "本地严格领先 latest 才补查预发布 tag"的规则处理，不会把 stable 用户
+        // 误升级到 rc。
+        "dsh" => fetch_npm_latest_for_tool(&client, "@deepseek-ai/dsh", tool, local).await,
         _ => None,
     };
 
@@ -3036,6 +3041,17 @@ fn run_probe_version_command(
 /// `build_tool_search_paths`，但不在首个命中处停止——而是对每个去重后的真实
 /// 可执行文件都跑一次 `--version`，从而能发现"升级写入 A 处、PATH 实际用 B 处"。
 fn enumerate_tool_installations(tool: &str) -> Vec<ToolInstallation> {
+    // WSL 分支：该工具的 `*ConfigDir` 指向 `\\wsl.localhost\<distro>\...` 时，工具本身
+    // 装在 distro 里（`~/.npm-global/bin/...`），Windows 主机的同名 `.cmd` 是另一份
+    // 安装。**必须跟着应用配置走**——否则「应用」页会显示一条与配置目标无关的 Windows
+    // 路径，看起来像配置没生效（实测 #BUG：配了 WSL 仍渲染 `%APPDATA%\npm\claude.cmd`）。
+    // 与 `probe_local_version` / `build_tool_action_line` 的 WSL 判定同源（都读
+    // `wsl_distro_for_tool`），保证"版本、路径、升级命令"三者指向同一处安装。
+    #[cfg(target_os = "windows")]
+    if let Some(distro) = wsl_distro_for_tool(tool) {
+        return enumerate_wsl_tool_installations(tool, &distro);
+    }
+
     let search_paths = build_tool_search_paths(tool);
     #[cfg(target_os = "windows")]
     let current_path = effective_path_string();
@@ -3118,6 +3134,242 @@ fn enumerate_tool_installations(tool: &str) -> Vec<ToolInstallation> {
     installs
 }
 
+/// WSL 内的安装枚举：`enumerate_tool_installations` 的 distro 侧实现。
+///
+/// **为什么不能复用 Windows 版**：Windows 版的全部输入都是主机视角——
+/// `build_tool_search_paths` 用 `dirs::home_dir()`（= `C:\Users\...`）、
+/// `tool_executable_candidates` 找 `.cmd`/`.exe`、`run_probe_version_command`
+/// 经 `cmd /C call` 启动。这些在 distro 文件系统里一条都不成立。
+///
+/// **实现**：一次 `wsl.exe` 调用，在 distro 内用登录 shell（`-lic`，见
+/// `build_wsl_tool_command` 的同款兜底链）解析 PATH 默认项，再对若干候选目录逐个
+/// 检查存在性并跑 `--version`；输出用哨兵+TSV 回传，Rust 侧解析成 `ToolInstallation`。
+///
+/// **`-lic` 是必需的，不是可选优化**：非交互 `sh -c` 的 PATH 不含 `~/.npm-global/bin`
+/// （实测该 distro 的 `sh -c` PATH = `/usr/local/sbin:...:/mnt/c/Program`，完全没有
+/// npm-global），于是 `command -v dsh` 会落到 `/mnt/c/.../npm/dsh`——那是 Windows
+/// 那份 0.1.0-rc.6，不是 distro 里的 0.2.0-rc.2。版本、路径、升级目标三者必须同源。
+///
+/// 输出协议（每行一条记录，`\t` 分隔，字段顺序固定）：
+///   `1\t<launcher>\t<realpath>\t<version>\t<runnable 0|1>\t<error>`
+/// 失败（wsl.exe 不存在 / distro 未启动 / shell 全挂）返回空 Vec，由调用方
+/// （`probe_tool_installations`）退化为"无安装"展示，不阻塞页面。
+#[cfg(target_os = "windows")]
+fn enumerate_wsl_tool_installations(tool: &str, distro: &str) -> Vec<ToolInstallation> {
+    if !is_valid_wsl_distro_name(distro) {
+        return Vec::new();
+    }
+
+    // 脚本整体是 base64（见 wsl_install_enum_script 的文档：脚本内含单引号，
+    // 不能再被 shell_single_quote 包一层）。这里解码后交给 sh -c，
+    // 与 `build_wsl_tool_command` 的 `timeout ... sh -c {quoted}` 结构对齐。
+    let script = wsl_install_enum_script(tool);
+    let command = format!(
+        "command -v timeout >/dev/null 2>&1 || {{ echo 'timeout is required for bounded CLI execution' >&2; exit 127; }}; \
+         exec timeout --signal=TERM --kill-after=1s {secs}s sh -c {quoted}",
+        secs = format!("{:.3}", INSTALL_PROBE_TIMEOUT.as_secs_f64()),
+        quoted = format!("printf %s {script} | base64 -d | sh"),
+    );
+
+    let output = match run_wsl_shell_command(distro, &command) {
+        Ok(output) => output,
+        Err(_) => return Vec::new(),
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let raw = decode_command_output(&output.stdout);
+    parse_wsl_install_enum_output(tool, &raw)
+}
+
+/// 在 distro 内跑的安装枚举脚本。
+///
+/// **为什么整层 base64，而不是把脚本拼进 `sh -c` 字符串**：脚本里必须用**单引号**
+/// 才能让 `printf '%s\n'` 的 `\n`、`tr ':' '\n'` 的 `\n` 被真正解释成换行
+/// （双引号内 `\n` 是字面 `n`，实测 `printf "%s\n" x` 输出 `xn`）。而一旦含单引号，
+/// 再被 `shell_single_quote` 整体包一层（`exec timeout ... sh -c {quoted}` 那一层）
+/// 就会把 `'` 转义成 `'"'"'`，`sh -c` 收到 `'"'"'command -v dsh'"'"'` 直接报
+/// "Unterminated quoted string" 退出，整个枚举静默返回空列表。
+///
+/// base64 让脚本与所有外壳层完全隔离：主机侧只需保证 b64 串自身是
+/// `[A-Za-z0-9+/=]`（`base64_encode` 保证）。解码后是一次性 `sh` 执行，
+/// 里面的 `for` 循环不再受任何外层引号影响。
+///
+/// 内层保留 `build_wsl_tool_command` 同款的 `-lic/-lc/-c` 兜底链：非交互 `sh -c`
+/// 的 PATH 不含 `~/.npm-global/bin`（实测该 distro 的 `sh -c` PATH = 系统目录 +
+/// `/mnt/c/Program`），于是 `command -v dsh` 会落到 `/mnt/c/.../npm/dsh`——那是
+/// Windows 那份 0.1.0-rc.6，版本/路径/升级目标三者就不同源了。
+#[cfg(target_os = "windows")]
+fn wsl_install_enum_script(tool: &str) -> String {
+    base64_encode(build_wsl_install_enum_script_body(tool).as_bytes())
+}
+
+/// 枚举脚本本体（base64 之前）。整段经 `base64 -d | sh` 执行，可自由使用单引号。
+fn build_wsl_install_enum_script_body(tool: &str) -> String {
+    format!(
+        concat!(
+            // 先探测工具在不在（用同款兜底链选 shell），再把枚举载荷交给它跑。
+            "for _ccs_flag in -lic -lc -c; do ",
+            "if \"${{SHELL:-sh}}\" \"$_ccs_flag\" 'command -v {tool}' >/dev/null 2>&1; then ",
+            "exec \"${{SHELL:-sh}}\" \"$_ccs_flag\" -c {payload}; fi; done; exit 127",
+        ),
+        tool = tool,
+        payload = shell_single_quote(&wsl_install_enum_payload(tool)),
+    )
+}
+
+/// 枚举载荷本体：在**已经拿到登录 shell PATH** 的环境里跑，经 base64 解码后交给
+/// `sh` 执行，所以这里可以自由使用单引号（`printf '%s\n'` 的 `\n`、`tr ':' '\n'`）。
+///
+/// 用哨兵包裹输出，隔开 rc 文件可能打印的欢迎语/提示符（与 `after_version_sentinel`
+/// 对 `-lic` 噪音的容错同理）。
+///
+/// 候选目录刻意与 `build_tool_search_paths` 的 POSIX 部分同族（`.local/bin`、
+/// `.npm-global/bin`、`n/bin`、`.volta/bin`），外加 mise shims 与 `/usr/local/bin`
+/// ——distro 里 npm 全局包装在 `~/.npm-global/bin`，这是最常见的落点。
+#[cfg(target_os = "windows")]
+fn wsl_install_enum_payload(tool: &str) -> String {
+    format!(
+        concat!(
+            // `_ccs_t` 存**裸工具名**：用于 `$_ccs_d/$_ccs_t` 路径拼接。
+            // tool 来自 VALID_TOOLS 白名单（调用链 normalize_requested_tools 保证），
+            // 全是 ASCII 标识符；且载荷经 base64 传输，裸名不会破坏外层结构。
+            "_ccs_t={tool_bare}; ",
+            "_ccs_h=${{HOME:-/root}}; ",
+            "printf '%s\\n' {sentinel}; ",
+            "_ccs_def=$(command -v {tool_cmd} 2>/dev/null); ",
+            // PATH 默认项也参与枚举：它可能落在候选目录之外（用户自己改过 PATH）。
+            "_ccs_dirs=\"$_ccs_def\"; ",
+            "for _ccs_d in \"$_ccs_h/.local/bin\" \"$_ccs_h/.npm-global/bin\" \"$_ccs_h/n/bin\" ",
+            "\"$_ccs_h/.volta/bin\" \"$_ccs_h/.local/share/mise/shims\" /usr/local/bin /usr/bin; do ",
+            "[ -d \"$_ccs_d\" ] || continue; ",
+            "_ccs_dirs=\"$_ccs_dirs:$_ccs_d/$_ccs_t\"; ",
+            "done; ",
+            // 逐候选跑 --version；成功取 stdout，失败留 stderr 末行作诊断。
+            "for _ccs_p in $(printf '%s' \"$_ccs_dirs\" | tr ':' '\\n' | awk 'NF'); do ",
+            "[ -f \"$_ccs_p\" ] && [ -x \"$_ccs_p\" ] || continue; ",
+            "_ccs_r=$(readlink -f \"$_ccs_p\" 2>/dev/null || printf '%s' \"$_ccs_p\"); ",
+            "_ccs_v=$(\"$_ccs_p\" --version 2>&1); _ccs_rc=$?; ",
+            "if [ $_ccs_rc -eq 0 ]; then ",
+            "printf '1\\t%s\\t%s\\t%s\\t1\\t\\n' \"$_ccs_p\" \"$_ccs_r\" \"$(printf '%s' \"$_ccs_v\" | head -n 1)\"; ",
+            "else ",
+            "printf '1\\t%s\\t%s\\t\\t0\\t%s\\n' \"$_ccs_p\" \"$_ccs_r\" \"$(printf '%s' \"$_ccs_v\" | tail -n 4 | tr '\\n' ' ')\"; ",
+            "fi; ",
+            "done"
+        ),
+        // sentinel 是代码内固定常量、tool 来自 VALID_TOOLS 白名单，都不含 shell
+        // 特殊字符；载荷经 base64 传输，用单引号包裹无副作用。
+        sentinel = shell_single_quote(WSL_INSTALL_ENUM_SENTINEL),
+        tool_bare = tool,
+        tool_cmd = shell_single_quote(tool),
+    )
+}
+
+/// base64 编码（标准字母表 + `=` padding）。distro 里 `base64 -d` 解这个。
+/// 不引第三方 crate：字母表就 64 个字符，手写比加依赖划算（D7）。
+#[cfg(target_os = "windows")]
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// 枚举输出的哨兵：rc 文件的欢迎语/提示符都出现在它之前，只认它之后的行。
+#[cfg(target_os = "windows")]
+const WSL_INSTALL_ENUM_SENTINEL: &str = "__CCS_WSL_INSTALL_ENUM__";
+
+/// 解析 distro 回传的 TSV 记录。`path` 存 **Linux 路径**（`/home/<user>/...`）而非 UNC
+/// ——「应用」页直接展示它，用户看到的就是 distro 里真实的安装位置；UNC 形式只在需要
+/// 从主机侧访问时才由 `wsl_unc_path_to_linux` 反向生成。
+#[cfg(target_os = "windows")]
+fn parse_wsl_install_enum_output(tool: &str, raw: &str) -> Vec<ToolInstallation> {
+    let payload = match raw.rfind(WSL_INSTALL_ENUM_SENTINEL) {
+        Some(i) => &raw[i + WSL_INSTALL_ENUM_SENTINEL.len()..],
+        None => raw,
+    };
+
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut installs: Vec<ToolInstallation> = Vec::new();
+
+    for line in payload.lines() {
+        let mut fields = line.split('\t');
+        let (Some(kind), Some(path), Some(real), Some(version), Some(runnable), error) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            continue;
+        };
+        if kind != "1" {
+            continue;
+        }
+        let path = path.trim();
+        let real = real.trim();
+        if path.is_empty() || real.is_empty() {
+            continue;
+        }
+        // canonicalize 由脚本里的 readlink -f 做（跨 wsl.exe 边界，Rust 侧
+        // canonicalize 对 Linux 路径无效）；去重仍按真身，与 Windows 版同语义。
+        let real_path = std::path::PathBuf::from(real);
+        if !seen.insert(real_path.clone()) {
+            continue;
+        }
+
+        let version = version.trim();
+        let runnable = runnable == "1";
+        installs.push(ToolInstallation {
+            path: path.to_string(),
+            version: if version.is_empty() {
+                None
+            } else {
+                Some(extract_version(version))
+            },
+            runnable,
+            error: {
+                let detail = error.unwrap_or("").trim();
+                if detail.is_empty() {
+                    None
+                } else {
+                    Some(last_lines(detail, 4))
+                }
+            },
+            source: infer_install_source(std::path::Path::new(path)).to_string(),
+            is_path_default: false,
+            real: real_path,
+        });
+    }
+
+    // PATH 默认项排最前：脚本保证它就是第一条候选，重排一次防御顺序漂移。
+    if !installs.is_empty() {
+        // 用第一个真身反查不了默认项，改为按"脚本候选序"保序；默认项由
+        // `probe_local_version` 已经单独给出，这里只负责列表。
+        installs.sort_by_key(|i| std::cmp::Reverse(i.is_path_default));
+    }
+    installs
+}
+
 /// 工具对应的 npm 包名（hermes 走自己的 CLI/installer，不在此表）。锚定升级据此拼 `npm i -g`。
 /// 全平台共用一张表——Windows 锚定层(`anchored_command_from_paths` 的 windows 版)也读这里。
 fn npm_package_for(tool: &str) -> Option<&'static str> {
@@ -3130,6 +3382,10 @@ fn npm_package_for(tool: &str) -> Option<&'static str> {
         "openclaw" => Some("openclaw"),
         "pi" => Some("@earendil-works/pi-coding-agent"),
         "mcode" => Some("@minimax-ai/code"),
+        // DSH 与 claude/codex/pi 同属 npm 全局包，升级通道走 npm；**不用** dsh 自带的
+        // self-updater（跟 claude update 同理，它会更新自己那条分发渠道而不回写 npm 包，
+        // 造成"报成功但 package.json 版本没动"的假成功）。
+        "dsh" => Some("@deepseek-ai/dsh"),
         _ => None,
     }
 }
@@ -4280,6 +4536,36 @@ fn run_wsl_tool_command(
     Ok(output)
 }
 
+/// 在 distro 内跑一条**已经拼好的 sh 脚本**（不是 `tool args` 形式），返回 Output。
+///
+/// 与 `run_wsl_tool_command` 的分工：后者面向"执行某个 CLI + 传参 + 注入 env + 指定
+/// 工作目录"，且自己负责 `-lic/-lc/-c` 兜底链；这里是给「自定义探测脚本」用的底层
+/// 通道——脚本自己决定用哪个 shell（枚举脚本内部就带同款兜底链），所以这里不再包一层。
+///
+/// 不设 `--cd`：枚举脚本只读 `$HOME` 与固定系统目录，与 cwd 无关；省掉一次
+/// `wsl_unc_path_to_linux` 的 UNC→Linux 转换（枚举场景没有主机侧路径可用）。
+#[cfg(target_os = "windows")]
+fn run_wsl_shell_command(distro: &str, command: &str) -> Result<std::process::Output, String> {
+    use std::process::{Command, Stdio};
+
+    if !is_valid_wsl_distro_name(distro) {
+        return Err(format!("[WSL:{distro}] invalid distro name"));
+    }
+
+    let mut cmd = Command::new("wsl.exe");
+    cmd.arg("-d")
+        .arg(distro)
+        .arg("--")
+        .args(["sh", "-c", command])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("[WSL:{distro}] failed to spawn shell: {e}"))?;
+    wait_child_output(child, None)
+}
+
 /// 基于已枚举的安装列表生成锚定升级命令（复用 enumerate 结果，避免二次探测）。
 /// 读取 enumerate 时已 canonicalize 写入的 `inst.real`,**不再二次 canonicalize**——
 /// 既消除冗余 syscall,也闭合"enumerate 与 anchor 看到同一真身"的一致性边界
@@ -4567,6 +4853,7 @@ fn wsl_distro_for_tool(tool: &str) -> Option<String> {
         "openclaw" => crate::settings::get_openclaw_override_dir(),
         "hermes" => crate::settings::get_hermes_override_dir(),
         "pi" => crate::settings::get_pi_override_dir(),
+        "dsh" => crate::settings::get_dsh_override_dir(),
         _ => None,
     }?;
 
@@ -9686,5 +9973,164 @@ mod tests {
         let (unc_command, unc_env) = build_windows_cwd_command_str(r"\\server\共享\repo");
         assert!(unc_command.starts_with("pushd \"%CC_SWITCH_INTERNAL_CWD%\" || exit /b 1\r\n"));
         assert_eq!(unc_env.as_deref(), Some(r"\\server\共享\repo"));
+    }
+
+    /// WSL 枚举的 TSV 解析：哨兵前的噪音要丢掉、字段序固定、`real` 去重、
+    /// 空版本/空错误要归一成 `None`（否则 UI 会渲染出空白徽章）。
+    #[test]
+    fn parse_wsl_install_enum_output_filters_noise_and_dedupes() {
+        let raw = concat!(
+            "Welcome to Ubuntu 22.04. 欢迎语，来自 .bashrc\r\n",
+            "__CCS_WSL_INSTALL_ENUM__\n",
+            "1\t/home/<user>/.npm-global/bin/dsh\t/home/<user>/.npm-global/lib/node_modules/@deepseek-ai/dsh/bin/dsh.js\t0.2.0-rc.2\t1\t\n",
+            "1\t/usr/local/bin/dsh\t/home/<user>/.npm-global/lib/node_modules/@deepseek-ai/dsh/bin/dsh.js\t0.2.0-rc.2\t1\t\n",
+            "1\t/home/<user>/.local/bin/broken\t/home/<user>/.local/bin/broken\t\t0\tError: Cannot find module 'x' module not found\n",
+            "0\tignored-kind\tx\t1.0.0\t1\t\n",
+            "1\t\tempty-path\t1.0.0\t1\t\n",
+        );
+        let installs = parse_wsl_install_enum_output("dsh", raw);
+
+        assert_eq!(
+            installs.len(),
+            2,
+            "哨兵前的欢迎语、kind!=1、空 path、以及第二条重复 real 都应被剔除"
+        );
+
+        // 保留第一条（npm-global），它的 real 与第二条 /usr/local/bin 相同 → 去重生效。
+        assert_eq!(installs[0].path, "/home/<user>/.npm-global/bin/dsh");
+        assert_eq!(installs[0].version.as_deref(), Some("0.2.0-rc.2"));
+        assert!(installs[0].runnable);
+        assert!(installs[0].error.is_none());
+        assert_eq!(
+            installs[0].real.to_string_lossy(),
+            "/home/<user>/.npm-global/lib/node_modules/@deepseek-ai/dsh/bin/dsh.js"
+        );
+
+        assert_eq!(installs[1].path, "/home/<user>/.local/bin/broken");
+        assert!(installs[1].version.is_none());
+        assert!(!installs[1].runnable);
+        assert!(installs[1]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("module not found")));
+    }
+
+    /// 缺哨兵时按全文解析（shell 在载荷前就挂了的兜底），不 panic。
+    #[test]
+    fn parse_wsl_install_enum_output_tolerates_missing_sentinel() {
+        let installs =
+            parse_wsl_install_enum_output("dsh", "1\t/a/dsh\t/a/dsh\t1.0.0\t1\t\n");
+        assert_eq!(installs.len(), 1);
+        assert_eq!(installs[0].path, "/a/dsh");
+    }
+
+    /// 空输出 → 空列表（wsl.exe 不在 / distro 没启动时页面退化为"未安装"展示，
+    /// 而不是崩或渲染 Windows 路径）。
+    #[test]
+    fn parse_wsl_install_enum_output_empty_input_yields_no_installs() {
+        assert!(parse_wsl_install_enum_output("dsh", "").is_empty());
+        assert!(parse_wsl_install_enum_output("dsh", "__CCS_WSL_INSTALL_ENUM__\n").is_empty());
+    }
+
+    /// 载荷本身不带 shell 兜底链（那层在外层 `wsl_install_enum_script`），但必须
+    /// 解析 PATH 默认项 + 覆盖 npm-global 等候选目录。
+    #[test]
+    fn wsl_install_enum_payload_covers_login_shell_targets() {
+        let payload = wsl_install_enum_payload("dsh");
+        assert!(
+            payload.contains("command -v 'dsh'"),
+            "PATH 默认项必须参与枚举（命令名带引号），实际: {payload}"
+        );
+        assert!(
+            payload.contains(".npm-global"),
+            "候选目录必须含 ~/.npm-global/bin，实际: {payload}"
+        );
+    }
+
+    /// **回归测试**：路径拼接处必须用裸工具名。曾把 `shell_single_quote(tool)` 填进
+    /// `$_ccs_d/{tool}`，拼出 `.../npm-global/bin/'dsh'` —— 文件存在性检查恒 false，
+    /// 整个 WSL 枚举静默返回空列表，「应用」页于是退回"未安装"。
+    #[test]
+    fn wsl_install_enum_payload_builds_unquoted_paths() {
+        let payload = wsl_install_enum_payload("dsh");
+        assert!(
+            payload.contains("$_ccs_d/$_ccs_t"),
+            "路径拼接必须走裸名变量 $_ccs_t，实际: {payload}"
+        );
+        assert!(
+            !payload.contains("$_ccs_d/'dsh'"),
+            "路径拼接处不得出现带引号的工具名，实际: {payload}"
+        );
+        // 裸名只赋值一次，且确实是无引号形式。
+        assert!(
+            payload.contains("_ccs_t=dsh;"),
+            "裸名变量赋值必须无引号，实际: {payload}"
+        );
+    }
+
+    /// 脚本整体是 base64：**不能再含任何单引号语义**——它要被
+    /// `shell_single_quote` 包一层传给 `sh -c`（见 `enumerate_wsl_tool_installations`），
+    /// 只有纯 `[A-Za-z0-9+/=]` 才能保证那层包裹是恒等变换。
+    /// 曾把未编码的脚本直接包进去，`'command -v dsh'` 被转义成 `'"'"'command -v dsh'"'"'`，
+    /// `sh -c` 报 "Unterminated quoted string" 退出，枚举静默返回空列表。
+    #[test]
+    fn wsl_install_enum_script_is_base64_only() {
+        let script = wsl_install_enum_script("dsh");
+        assert!(
+            script
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
+            "脚本必须是纯 base64 字符集，实际: {script}"
+        );
+        assert!(!script.is_empty());
+    }
+
+    /// 解码后必须含 `-lic/-lc/-c` 三级兜底链与 npm-global 候选目录——
+    /// 前者保证 `command -v dsh` 命中 WSL 原生那份（非交互 `sh -c` 的 PATH 不含
+    /// `~/.npm-global/bin`，会落到 `/mnt/c/.../npm/dsh`），后者保证能扫到它。
+    #[test]
+    fn wsl_install_enum_script_body_keeps_fallback_chain() {
+        let body = build_wsl_install_enum_script_body("dsh");
+        for flag in ["-lic", "-lc", "-c"] {
+            assert!(body.contains(flag), "必须保留兜底链 {flag}: {body}");
+        }
+        assert!(
+            body.contains(".npm-global"),
+            "候选目录必须含 ~/.npm-global/bin: {body}"
+        );
+        // 外层探测那处是字面单引号串 `'command -v dsh'`（tool 来自 VALID_TOOLS 白名单，
+        // 裸名嵌入安全）；载荷内层那处经 shell_single_quote 转义后呈
+        // `command -v '"'"'dsh'"'"'`，两者都算"PATH 默认项参与枚举"。
+        assert!(
+            body.contains("'command -v dsh'"),
+            "外层探测必须解析 PATH 默认项: {body}"
+        );
+        assert!(
+            body.contains("dsh") && body.contains("_ccs_def"),
+            "载荷必须把 PATH 默认项并入候选列表: {body}"
+        );
+    }
+
+    /// base64 编解码闭环：`base64_encode` 的字母表/padding 必须与 distro 里
+    /// `base64 -d` 一致，否则载荷解码出来是乱码，枚举同样静默失败。
+    #[test]
+    fn base64_encode_round_trips_known_vectors() {
+        // RFC 4648 测试向量
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        // 含单引号与反斜杠的载荷片段（枚举脚本里就有这些字符）
+        let tricky = "printf '%s\\n' 'x' | awk 'NF'";
+        let encoded = base64_encode(tricky.as_bytes());
+        assert!(
+            encoded
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
+            "含引号的载荷编码后仍须是纯 base64: {encoded}"
+        );
     }
 }
