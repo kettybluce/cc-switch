@@ -1,0 +1,194 @@
+# DSH 接入工作计划与进度
+
+> 目标：让 CC Switch 能像管理 claude/codex/pi 那样管理 DeepSeek Harness（DSH）的模型配置。
+> 本文记录完整计划、已完成部分、剩余工作与关键约束，供后续接手。
+
+## 一、总体目标与阶段划分
+
+| 阶段 | 范围 | 状态 |
+|---|---|---|
+| 阶段一 | 模型配置同步：CC Switch 改卡片 → DSH 的 `cordis.patch.yml` 生效 | **进行中（后端已完成，前端部分完成）** |
+| 阶段二 | 使用记录（用量） | 未开始 |
+| 阶段三 | 会话列表 | 未开始 |
+| 阶段四 | 更新日志（DSH 走 nightly 通道） | 未开始 |
+
+用户已确认：
+- 采用**方案 A** 处理密钥——CC Switch 只管 `baseURL` / `api` / `models`，密钥由用户自己在 WSL 环境变量里维护；
+- DSH 装在 **WSL**，由用户手动初始化（跑一次 `dsh`）。
+
+## 二、环境现状
+
+| 项 | 值 |
+|---|---|
+| WSL 发行版 | Ubuntu-22.04（`networkingMode=mirrored`，`autoProxy=false`） |
+| WSL 内 DSH | `@deepseek-ai/dsh` **0.2.0-rc.2**，命令 `/home/<user>/.npm-global/bin/dsh` |
+| WSL 的 `~/.dsh` | **尚不存在**（等用户跑一次 `dsh` 初始化） |
+| Windows 侧 DSH | 0.1.0-rc.6，**属生产环境，禁止改动** |
+| CC Switch 写入点 | `$DSH_HOME/cordis.patch.yml`（home 级 patch，优先级最高） |
+
+### ⚠️ 不可违背的规则
+
+**验证 DSH 配置必须用隔离的 `DSH_HOME`，绝不可写入用户真实的 `~/.dsh`。**
+
+```bash
+export DSH_HOME=/tmp/dsh-sandbox
+```
+
+此前曾因直接写用户 Windows 侧的真实 `~/.dsh/cordis.patch.yml`，用测试桩覆盖了其正在使用的供应商配置，导致 DSH 无法工作。
+
+## 三、核心技术结论（均已实测）
+
+### 1. 配置树叠加顺序
+
+后者覆盖前者：
+
+```
+空根
+ └ bundles 的 patch
+   └ profile 的 cordis.patch.yml
+     └ $DSH_HOME/cordis.patch.yml      ← CC Switch 写这里
+       └ --patch 命令行
+```
+
+### 2. providers 是整体替换，不是深合并
+
+实测：profile 层写 `user-real`、home 层写 `ccs-new`，合并后**只剩 `ccs-new`**。
+
+**因此所有写操作必须「读全量 → 内存合并 → 整体写回」，绝不能只写自己那一项。**
+
+### 3. 模型配置结构
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      <key>:
+        displayName: 显示名
+        apiKeyEnv: 环境变量名      # 密钥只存变量名
+        api: openai-completions
+        baseURL: http://host/v1
+        models:
+          - id: 模型 ID
+- id: agent-default-model
+  config:
+    provider: <key>                # 当前选中
+    model: <modelId>
+```
+
+## 四、已完成工作
+
+### 后端（全部完成）
+
+| 提交 | 内容 |
+|---|---|
+| `445d64fe` | 调研结论文档化 |
+| `90b5b2ae` | `dsh_config` 模块：读/合并/写/保真 + **11 个单测** |
+| `2e7837d3` | `AppType::Dsh` 接入后端 **27 处 match**（14 文件） |
+| `cd891343` | `services/provider/dsh.rs` + ProviderService **7 个路由点** |
+
+**`dsh_config` 的关键 API**
+
+| 函数 | 作用 |
+|---|---|
+| `resolve_dsh_home()` | 优先级：设置里的 `dshConfigDir` → `DSH_HOME` → `~/.dsh` |
+| `read_providers()` | 以 JSON 形式读出全部供应商 |
+| `upsert_provider(key, config)` | **唯一写入口**，内部走读改写全流程 |
+| `remove_provider(key)` | 删除（幂等） |
+| `write_default_model(provider, model)` | 设置默认模型 |
+| `validate_provider_json` | 写库前校验 |
+
+**安全设计**
+- `PATCH_FILE_LOCK` 串行化并发写；
+- `write_patch_atomic` 先写临时文件再改名；
+- 遇到结构异常（如 `config: oops`）拒绝改写而非猜测修复；
+- 未知字段与未知条目全程保留。
+
+**单测防线**（`cargo test --lib dsh_config`，11 通过）
+- `apply_providers_patch_never_drops_existing_providers` ← 防「整体替换」事故
+- `apply_providers_patch_preserves_unknown_fields`
+- `refuses_to_rewrite_non_mapping_nodes`
+- `writes_atomically_and_round_trips_on_disk`
+
+**`services/provider/dsh.rs` 与 Pi 的差异**
+1. 无投影/还原概念（阶段一不做本地代理接管）；
+2. `list` 以 patch 为准而非数据库，避免「库里有卡但 DSH 看不见」；
+3. `delete`（彻底删）与 `remove`（移除但留卡）都映射到「从 patch 移除」；
+4. `enable` 顺带把该 provider 的首个模型设为默认；
+5. `add` 在数据库保存失败时回滚已写入 patch 的项。
+
+### 前端（部分完成）
+
+| 文件 | 改动 |
+|---|---|
+| `src/lib/api/types.ts` | `AppId` 加 `"dsh"` |
+| `src/config/appConfig.tsx` | `APP_IDS`、`DEFAULT_VISIBLE_APPS`（**dsh: false，默认隐藏**）、`APP_ICON_MAP`（青色主题）、`McpAppId` 排除 dsh |
+| `src/types.ts` | `VisibleApps.dsh`、`Settings.dshConfigDir` |
+| `src/hooks/useDirectorySettings.ts` | 目录元信息 `.dsh`、各处 Record 补 dsh |
+| `src/components/settings/sections/AppConfigSection.tsx` | `dshConfigDir` 字段与占位符 |
+| `src/components/shell/AppGlyph.tsx` | 应用名 `DeepSeek Harness`、图标 `deepseek` |
+| `src/components/usage/RequestLogTable.tsx` | 短名 `DSH` |
+| `src/components/providers/forms/EndpointSpeedTest.tsx` | 超时 8s |
+| `src/lib/api/skills.ts` | `SkillApps.dsh` 可选 |
+| `src/i18n/locales/*.json` | 5 个语言加 `browsePlaceholderDsh` |
+| `tests/msw/state.ts`、`SessionManagerPage.test.tsx` | mock 补 dsh |
+
+### 已验证
+
+- `cargo check --lib` 通过
+- `pnpm typecheck` 通过（EXIT=0）
+- `cargo test --lib dsh_config` 11 通过
+
+## 五、剩余工作
+
+### 5.1 前端（未完成）
+
+| # | 事项 | 说明 |
+|---|---|---|
+| F1 | **ProviderForm 支持 DSH** | 目前新增/编辑卡片表单不认识 `dsh`。需要决定：复用通用表单，还是像 Mcode 那样单独写一个 `DshProviderForm` |
+| F2 | 应用列表可切换 | 后端 `VisibleApps.dsh` 默认 false，需确认前端设置页能把它打开 |
+| F3 | 打开配置目录按钮 | 已接 `get_config_dir("dsh")`，需在 UI 验证 |
+| F4 | 前端单测 | 目前只有后端单测，前端行为未覆盖 |
+
+### 5.2 端到端验证（阻塞中）
+
+**依赖**：WSL 的 `~/.dsh` 存在。用户需先执行：
+
+```bash
+dsh --profile headless "hello"
+```
+
+然后验证：
+1. CC Switch 设置里把 DSH 的目录指向 `\\wsl.localhost\Ubuntu-22.04\home\<user>\.dsh`；
+2. 在 CC Switch 里新增一张 DSH 卡片 → 检查 `~/.dsh/cordis.patch.yml` 被正确写入；
+3. 原有的 provider 未被覆盖（这是防护重点）；
+4. 切换默认模型 → `agent-default-model` 正确更新；
+5. 在 WSL 里跑 `dsh` 确认读到了新配置。
+
+### 5.3 阶段二/三/四（未开始）
+
+| 阶段 | 需要先搞清的事 |
+|---|---|
+| 用量 | `~/.dsh/sessions/*.jsonl.zstd` 为 zstd 压缩，格式待分析 |
+| 会话 | 同上；另需确认 DSH 是否有稳定的会话索引 |
+| 更新日志 | DSH 是 nightly 通道（`download.deepseek.com/dsh-desk/feeds/win-x64/`），与现有工具版本检测机制不同 |
+
+## 六、已知遗留
+
+- **dead_code 警告**：`dsh_config` 中 `read_default_model`、`provider_api`、
+  `import_dsh_providers_from_live` 等尚未被命令层调用，故报未使用。
+  接入前端命令后消除——不是为消警而保留。
+- **命令层未接入**：`import_dsh_providers_from_live` 已写好但还没有对应的
+  Tauri command。
+- **最后一次全量前端测试未跑完**（被中断），`pnpm typecheck` 已通过。
+
+## 七、关键文件索引
+
+| 文件 | 作用 |
+|---|---|
+| `src-tauri/src/dsh_config.rs` | 配置读写核心 + 单测 |
+| `src-tauri/src/services/provider/dsh.rs` | 业务服务 |
+| `src-tauri/src/services/provider/mod.rs` | 7 个路由点 |
+| `src-tauri/src/app_config.rs` | `AppType::Dsh` |
+| `src-tauri/src/settings.rs` | `VisibleApps.dsh`、`dsh_config_dir` |
+| `docs/DSH-INTEGRATION-RESEARCH.md` | 调研结论（含实测证据） |
+| 本文 | 计划与进度 |
