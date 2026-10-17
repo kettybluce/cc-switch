@@ -393,6 +393,96 @@ pub(crate) fn write_patch_atomic(path: &Path, entries: &[Value]) -> Result<(), A
 }
 
 // ============================================================================
+// 高层业务操作（读 → 改 → 整体写回）
+// ============================================================================
+
+/// 文件锁。多个命令并发写同一份 patch 时会互相覆盖，故串行化。
+static PATCH_FILE_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
+fn lock_patch_file() -> Result<std::sync::MutexGuard<'static, ()>, AppError> {
+    PATCH_FILE_LOCK
+        .lock()
+        .map_err(|e| AppError::Config(format!("DSH 配置锁已损坏: {e}")))
+}
+
+/// 以 JSON 形式读取当前全部供应商（数据库卡片用的形态）。
+pub(crate) fn read_providers() -> Result<serde_json::Map<String, serde_json::Value>, AppError> {
+    let path = default_home_patch_path()?;
+    let entries = read_patch(&path)?;
+    let mut out = serde_json::Map::new();
+    if let Some(providers) = providers_of(&entries) {
+        if let Some(map) = providers.as_mapping() {
+            for (key, value) in map {
+                let Some(name) = key.as_str() else { continue };
+                let json = serde_json::to_value(value).map_err(|e| {
+                    AppError::Config(format!("转换 DSH 供应商 '{name}' 失败: {e}"))
+                })?;
+                out.insert(name.to_string(), json);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 读当前默认模型。
+pub(crate) fn read_default_model() -> Result<Option<(String, String)>, AppError> {
+    let path = default_home_patch_path()?;
+    let entries = read_patch(&path)?;
+    Ok(default_model_of(&entries))
+}
+
+/// 新增或更新一个供应商，并整体写回。
+///
+/// 这是「读全量 → 合并 → 整体写回」的唯一入口。任何调用方都不该自己拼
+/// patch 文本，否则会重演「providers 被整体替换」的事故。
+pub(crate) fn upsert_provider(
+    key: &str,
+    config: &serde_json::Value,
+) -> Result<(), AppError> {
+    validate_provider_json(key, config)?;
+    let _guard = lock_patch_file()?;
+    let path = default_home_patch_path()?;
+    let mut entries = read_patch(&path)?;
+    let yaml = json_to_yaml(config)?;
+    apply_providers_patch(&mut entries, &ProvidersPatch::new().upsert(key, yaml))?;
+    write_patch_atomic(&path, &entries)
+}
+
+/// 删除一个供应商。不存在时视为成功（幂等）。
+pub(crate) fn remove_provider(key: &str) -> Result<(), AppError> {
+    let _guard = lock_patch_file()?;
+    let path = default_home_patch_path()?;
+    let mut entries = read_patch(&path)?;
+    if providers_of(&entries)
+        .and_then(Value::as_mapping)
+        .is_none_or(|map| !map.contains_key(Value::String(key.to_string())))
+    {
+        return Ok(());
+    }
+    apply_providers_patch(&mut entries, &ProvidersPatch::new().remove(key))?;
+    write_patch_atomic(&path, &entries)
+}
+
+/// 设置默认模型，并整体写回。
+pub(crate) fn write_default_model(provider: &str, model: &str) -> Result<(), AppError> {
+    let _guard = lock_patch_file()?;
+    let path = default_home_patch_path()?;
+    let mut entries = read_patch(&path)?;
+    set_default_model(&mut entries, provider, model)?;
+    write_patch_atomic(&path, &entries)
+}
+
+/// 判断某个供应商 key 是否已存在于 patch 中。
+pub(crate) fn provider_exists(key: &str) -> Result<bool, AppError> {
+    let path = default_home_patch_path()?;
+    let entries = read_patch(&path)?;
+    Ok(providers_of(&entries)
+        .and_then(Value::as_mapping)
+        .is_some_and(|map| map.contains_key(Value::String(key.to_string()))))
+}
+
+// ============================================================================
 // 测试
 // ============================================================================
 
