@@ -23,6 +23,7 @@ mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
 pub mod live;
+mod dsh_config;
 mod mcode_config;
 mod mcp;
 pub mod mode;
