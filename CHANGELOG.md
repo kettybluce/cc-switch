@@ -5,6 +5,25 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.15.0] - 2026-10-17
+
+本版把上游从 v4.0.9 追平到 v4.0.14，同时保留本分支自研的 Pi 支持（直连 / 路由、WSL 会话与用量、本地代理投影）。
+
+### Added
+
+- **合入上游 v4.0.14**：包含 Claude Desktop 路由模式、用量面板自定义（币种与汇率、侧栏 Today 项、请求日志列、记住上次视图）、Gemini 4 Argon 定价、SiliconFlow 与 TokenFactory 预设更新等。
+- **Pi 支持直连 / 路由模式切换**：Pi 复用 Claude/Codex 的本地监听，接管时把 `models.json` 投影到该监听，退出时按数据库卡片（SSOT）还原。
+
+### Fixed
+
+- **Pi 供应商无法「从配置移除」**：Pi 走模式面板（`SwitchModePanel`）后，`onRemoveFromConfig` 未被转发，卡片上只剩彻底删除。现改为由 `listCallbacks` 统一提供并透传，移除入口恢复。
+- **`claude-opus-5-5` / `claude-fable-5.1` 思维档位丢失**：合并时 `piThinkingProfiles.ts` 保留了旧版，丢掉上游新增的 `forceAdaptiveThinking` 条目；已整体采用上游超集版本。
+- **WSL 残留代理导致 CLI 全部连不上**：执行 WSL CLI 前探测代理端点，不可达才清除；端口不可解析或无 bash 时保留，避免误清可用代理。
+
+### Changed
+
+- **版本号**：`4.0.14` → `4.15.0`。
+
 ## [4.0.14] - 2026-10-16
 
 This release adds a wide range of customization options to the usage dashboard: a new Settings tab, amounts in a chosen currency with an editable exchange rate, a choice of what the sidebar Today label shows, selectable request log columns with new cache write, hit rate, total time and status code columns, and the last tab, range and chart metrics remembered. "Open Terminal" on a Claude card now explains what the folder is for and remembers recent folders. Fixes cover Codex through the local route to Gemini failing on the second tool-call turn, Codex retry and stream timeout keys dropped in routing mode, Skills repos over 128 MiB, custom pricing for model ids with capital letters, OpenCode speed estimates and deep-link imports, Hermes dev builds always showing an update, failover queue reordering, and Windows session groups split by path case.
