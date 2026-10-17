@@ -1766,6 +1766,10 @@ pub fn run() {
             commands::set_hermes_memory,
             commands::get_hermes_memory_limits,
             commands::set_hermes_memory_enabled,
+            // DSH specific
+            commands::import_dsh_providers_from_live,
+            commands::get_dsh_live_provider_ids,
+            commands::set_dsh_default_model,
             // Global upstream proxy
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,

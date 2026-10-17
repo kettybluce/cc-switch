@@ -129,6 +129,8 @@ export function ProviderList({
     useOpenClawLiveProviderIds(appId === "openclaw");
   const { data: hermesLiveIds, isPending: isHermesLiveIdsPending } =
     useHermesLiveProviderIds(appId === "hermes");
+  // DSH 的成员关系由后端在 list 里带上（meta.liveConfigManaged），不再单独开一条查询：
+  // 同一次 list 已经读了 patch，前端再读一次只会多一次 UNC I/O 和一次竞态窗口。
   const { data: hermesModelConfig } = useHermesModelConfig(appId === "hermes");
   const { data: openclawDefaultModel } = useOpenClawDefaultModel(
     appId === "openclaw",
@@ -157,6 +159,10 @@ export function ProviderList({
     (provider: Provider): boolean => {
       switch (appId) {
         case "mcode":
+          return provider.meta?.liveConfigManaged === true;
+        case "dsh":
+          // 后端 list 会把 patch 里的标 true、只在库里的标 false。
+          // 未标记（旧卡）时保守地当作不在配置里，让「添加」可用。
           return provider.meta?.liveConfigManaged === true;
         case "opencode":
           return opencodeLiveIds?.includes(provider.id) ?? false;
@@ -201,6 +207,9 @@ export function ProviderList({
       }
       if (appId === "hermes") {
         return (await providersApi.importHermesFromLive()) > 0;
+      }
+      if (appId === "dsh") {
+        return (await providersApi.importDshFromLive()) > 0;
       }
       if (appId === "claude-desktop") {
         return (await providersApi.importClaudeDesktopFromClaude()) > 0;

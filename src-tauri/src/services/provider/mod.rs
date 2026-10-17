@@ -52,6 +52,14 @@ pub fn import_dsh_providers_from_live(state: &AppState) -> Result<usize, AppErro
     dsh::import_from_live(state)
 }
 
+/// 把 DSH 某家供应商的指定模型设为默认。
+///
+/// 只改 `agent-default-model`，不重写 provider 本身——调用方通常刚在 `enable`
+/// 里写过它，重复写一遍会让 UNC 上的文件多一次往返。
+pub fn set_dsh_default_model(state: &AppState, id: &str, model: &str) -> Result<(), AppError> {
+    dsh::set_default_model(state, id, model)
+}
+
 pub use claude_editor::{EditorSave, EditorView};
 
 // Internal re-exports (pub(crate))

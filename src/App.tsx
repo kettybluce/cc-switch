@@ -924,32 +924,38 @@ function App() {
       activeApp === "opencode" ||
       activeApp === "openclaw" ||
       activeApp === "hermes" ||
-      activeApp === "pi"
+      activeApp === "pi" ||
+      activeApp === "dsh"
     ) {
       let liveProviderIds: string[] = [];
       try {
-        liveProviderIds =
-          activeApp === "opencode"
-            ? await queryClient.ensureQueryData({
-                queryKey: ["opencodeLiveProviderIds"],
-                queryFn: () => providersApi.getOpenCodeLiveProviderIds(),
-              })
-            : activeApp === "openclaw"
-              ? await queryClient.ensureQueryData({
-                  queryKey: openclawKeys.liveProviderIds,
-                  queryFn: () => providersApi.getOpenClawLiveProviderIds(),
-                })
-              : activeApp === "hermes"
-                ? await queryClient.ensureQueryData({
-                    queryKey: hermesKeys.liveProviderIds,
-                    queryFn: () => providersApi.getHermesLiveProviderIds(),
-                  })
-                : (
-                    await queryClient.ensureQueryData({
-                      queryKey: ["pi", "currentState"],
-                      queryFn: () => piApi.getCurrentState(),
-                    })
-                  ).enabledProviderIds;
+        if (activeApp === "opencode") {
+          liveProviderIds = await queryClient.ensureQueryData({
+            queryKey: ["opencodeLiveProviderIds"],
+            queryFn: () => providersApi.getOpenCodeLiveProviderIds(),
+          });
+        } else if (activeApp === "openclaw") {
+          liveProviderIds = await queryClient.ensureQueryData({
+            queryKey: openclawKeys.liveProviderIds,
+            queryFn: () => providersApi.getOpenClawLiveProviderIds(),
+          });
+        } else if (activeApp === "hermes") {
+          liveProviderIds = await queryClient.ensureQueryData({
+            queryKey: hermesKeys.liveProviderIds,
+            queryFn: () => providersApi.getHermesLiveProviderIds(),
+          });
+        } else if (activeApp === "pi") {
+          liveProviderIds = (
+            await queryClient.ensureQueryData({
+              queryKey: ["pi", "currentState"],
+              queryFn: () => piApi.getCurrentState(),
+            })
+          ).enabledProviderIds;
+        } else {
+          // DSH：数据库之外还有 cordis.patch.yml 里的键（可能手改过），
+          // 一起算进去才可能撞到已有的 key。这是只读查询，读不到就只用库里的键。
+          liveProviderIds = await providersApi.getDshLiveProviderIds();
+        }
       } catch (error) {
         console.error(
           "[App] Failed to load live provider IDs for duplication",
@@ -1255,7 +1261,9 @@ function App() {
       activeApp === "openclaw" ||
       activeApp === "hermes" ||
       activeApp === "pi" ||
-      activeApp === "mcode"
+      activeApp === "mcode" ||
+      // DSH：从 patch 摘掉但保留卡片，与其它累加式应用一致
+      activeApp === "dsh"
         ? (provider: Provider) =>
             setConfirmAction({ provider, action: "remove" })
         : undefined,
@@ -1324,7 +1332,7 @@ function App() {
               activeApp === "opencode" ? handleDisableOmoSlim : undefined
             }
             onSetAsDefault={
-              activeApp === "openclaw"
+              activeApp === "openclaw" || activeApp === "dsh"
                 ? (provider, modelId) =>
                     void setAsDefaultModel(provider, modelId)
                 : activeApp === "hermes"

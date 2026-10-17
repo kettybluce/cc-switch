@@ -78,7 +78,11 @@ const SOURCE_LABEL: Record<string, string> = {
   pip: "pip",
 };
 
-type Row = { kind: "tool"; tool: ToolName } | { kind: "desktop" };
+type Row =
+  | { kind: "tool"; tool: ToolName }
+  | { kind: "desktop" }
+  /** 未接入工具生命周期的应用：只有侧栏显示开关。DSH 是第一个。 */
+  | { kind: "visibilityOnly"; app: AppId };
 
 const ROWS: Row[] = [
   { kind: "tool", tool: "claude" },
@@ -86,6 +90,10 @@ const ROWS: Row[] = [
   ...TOOL_NAMES.filter((tool) => tool !== "claude").map(
     (tool): Row => ({ kind: "tool", tool }),
   ),
+  // DSH 装在 WSL、走自己的 nightly 通道，暂不接入这一页的版本探测与安装。
+  // 但侧栏可见性开关必须在这里，否则 dsh 默认隐藏（见 DEFAULT_VISIBLE_APPS）
+  // 之后没有任何入口能把它打开。
+  { kind: "visibilityOnly", app: "dsh" },
 ];
 
 // 表头和应用行共用列宽；操作列宽取各行按钮和表头量宽按钮的最大值，最后一列是行尾的「⋯」菜单。
@@ -373,6 +381,24 @@ export function AppsPage() {
                     </span>
                   }
                   visibility={visibilitySwitch("claude-desktop")}
+                />
+              ) : row.kind === "visibilityOnly" ? (
+                <AppRow
+                  key={row.app}
+                  app={row.app}
+                  name={
+                    <span className="truncate">
+                      {APP_DISPLAY_NAME[row.app]}
+                    </span>
+                  }
+                  meta={
+                    <span className="truncate">
+                      {t("appsPage.noToolManagement", {
+                        defaultValue: "不在此页管理安装与版本",
+                      })}
+                    </span>
+                  }
+                  visibility={visibilitySwitch(row.app)}
                 />
               ) : (
                 <ToolRow

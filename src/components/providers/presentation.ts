@@ -811,6 +811,51 @@ export function buildAdditiveSections(input: AdditiveInput): ProviderSection[] {
       }
     }
 
+    // DSH：写进 patch 只代表可用，真正生效的是 agent-default-model 指向的那家，
+    // 所以「已添加」的卡片要有「设为默认」的入口。模型全部来自卡片自己的 models，
+    // 多于一个时用菜单让用户挑，而不是像 openclaw 那样默认取第一个。
+    if (app === "dsh") {
+      const models = Array.isArray(
+        (p.settingsConfig as Record<string, unknown> | undefined)?.models,
+      )
+        ? ((p.settingsConfig as Record<string, unknown>).models as unknown[])
+            .flatMap((raw) => {
+              if (!raw || typeof raw !== "object") return [];
+              const id = (raw as Record<string, unknown>).id;
+              if (typeof id !== "string" || !id.trim()) return [];
+              const name = (raw as Record<string, unknown>).name;
+              return [
+                {
+                  id,
+                  name: typeof name === "string" ? name : undefined,
+                },
+              ];
+            })
+        : [];
+      buttons.push({
+        key: "setDefault",
+        label: t("providerCard.action.setDefault"),
+        onClick: () => actions.setDefault(p, models[0]?.id),
+        menu:
+          models.length > 1
+            ? {
+                title: t("dsh.form.selectDefaultModel", {
+                  defaultValue: "设为 DSH 默认模型",
+                }),
+                options: models.map((model) => ({
+                  key: model.id,
+                  label: model.name?.trim() || model.id,
+                  detail:
+                    model.name?.trim() && model.name.trim() !== model.id
+                      ? model.id
+                      : undefined,
+                  onSelect: () => actions.setDefault(p, model.id),
+                })),
+              }
+            : undefined,
+      });
+    }
+
     buttons.push({
       key: "remove",
       label: t("providerCard.action.remove"),

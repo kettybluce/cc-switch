@@ -114,15 +114,21 @@ export function isStackAppId(appId: string): appId is StackAppId {
 
 export type AdditiveAppId = Extract<
   AppId,
-  "opencode" | "openclaw" | "hermes" | "pi" | "mcode"
+  "opencode" | "openclaw" | "hermes" | "pi" | "mcode" | "dsh"
 >;
 
+/**
+ * 与后端 `AppType::is_additive_mode()` 保持一致——后端把 Dsh 也算作累加式。
+ * 两边口径不一致时，`ProviderService::current()` 会对 additive 返回空串，于是
+ * DSH 的 `isCurrent` 恒为 false，卡片的用量自动查询与「当前」标记都会失效。
+ */
 export const ADDITIVE_APP_IDS: AdditiveAppId[] = [
   "mcode",
   "opencode",
   "openclaw",
   "hermes",
   "pi",
+  "dsh",
 ];
 
 export function isAdditiveAppId(appId: string): appId is AdditiveAppId {

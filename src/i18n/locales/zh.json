@@ -1083,7 +1083,33 @@
     "openclaw": "OpenClaw",
     "hermes": "Hermes",
     "pi": "Pi",
-    "mcode": "MiniMax Code"
+    "mcode": "MiniMax Code",
+    "dsh": "DeepSeek Harness"
+  },
+  "dsh": {
+    "form": {
+      "providerKey": "供应商标识",
+      "providerKeyPlaceholder": "例如 deepseek-official",
+      "providerKeyHint": "小写字母、数字与连字符；写入后不可改名",
+      "providerKeyLocked": "已写入 cordis.patch.yml，供应商标识不可修改",
+      "apiKeyEnv": "API Key 环境变量名",
+      "apiKeyEnvHint": "DSH 只存变量名，不存密钥。请确认该变量已在 WSL 的 shell 环境里设置。",
+      "api": "协议",
+      "apiCatalogDefault": "目录默认",
+      "models": "模型",
+      "addModel": "添加模型",
+      "modelId": "模型 ID",
+      "modelName": "显示名（可选）",
+      "removeModel": "删除模型",
+      "modelsEmptyHint": "留空则沿用 pi-ai 目录里这家 route 的模型清单；填了就会整体替换该清单。",
+      "incompleteRoute": "自定义 route 必须同时填协议、Base URL 和至少一个模型；否则 DSH 会拒绝加载这条配置。",
+      "rawConfig": "完整配置（写入 cordis.patch.yml 的内容）",
+      "rawConfigHint": "这里直接决定写进 DSH 的 provider 对象；未知字段会原样保留。",
+      "selectDefaultModel": "设为 DSH 默认模型",
+      "noModels": "该供应商没有配置模型；请先在卡片里补上 models，或在 DSH 侧选择模型",
+      "defaultModelSet": "已设为 DSH 默认模型：{{model}}",
+      "defaultModelSetFailed": "设置默认模型失败"
+    }
   },
   "mcode": {
     "empty": {
@@ -4144,6 +4170,7 @@
     "columnVisible": "显示",
     "visibleHelp": "关掉后，这个应用不再出现在侧栏、托盘菜单、MCP / Skills 的应用列，以及提示词和会话的应用下拉里。只是不显示：它的供应商、MCP 等配置都还在，它自己的配置文件也不会被改动。",
     "desktopHelp": "Claude Desktop 是桌面应用，不能在这里安装或升级；CC Switch 通过它的配置文件接入。",
+    "noToolManagement": "不在此页管理安装与版本",
     "desktopUnsupported": "当前系统不支持",
     "desktopConnected": "已接入",
     "desktopNotConnected": "未接入",

@@ -256,6 +256,33 @@ export const providersApi = {
   async importHermesFromLive(): Promise<number> {
     return await invoke("import_hermes_providers_from_live");
   },
+
+  /**
+   * 获取 DSH 的 `cordis.patch.yml` 里已存在的供应商标识。
+   *
+   * 注意：列表里每个卡片自带 `meta.liveConfigManaged`，判定「是否已在配置里」
+   * 用那个字段即可，不必再调这里。保留这条命令是给排查/诊断用的。
+   */
+  async getDshLiveProviderIds(): Promise<string[]> {
+    return await invoke("get_dsh_live_provider_ids");
+  },
+
+  /**
+   * 从 DSH 的 `cordis.patch.yml` 导入供应商到数据库。
+   *
+   * 用户在 WSL 里手工配过的 provider 可以先导进来再管理，与 OpenCode / OpenClaw
+   * 的「导入当前配置」一致。
+   */
+  async importDshFromLive(): Promise<number> {
+    return await invoke("import_dsh_providers_from_live");
+  },
+
+  /**
+   * 把 DSH 某家供应商的指定模型设为默认（写 `agent-default-model`）。
+   */
+  async setDshDefaultModel(id: string, modelId: string): Promise<void> {
+    await invoke("set_dsh_default_model", { id, modelId });
+  },
 };
 
 // ============================================================================

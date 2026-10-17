@@ -71,7 +71,10 @@ export function AddProviderDialog({
     appId !== "pi" &&
     appId !== "mcode" &&
     appId !== "grokbuild" &&
-    appId !== "claude-desktop";
+    appId !== "claude-desktop" &&
+    // DSH 的 provider 结构（apiKeyEnv / 整体替换的 models）与通用供应商的
+    // env/TOML 形态对不上，先不给它开这个入口
+    appId !== "dsh";
   // 两步：先选预设，再填写（每次打开都从第 1 步开始）
   const [step, setStep] = useState<"pick" | "form">("pick");
   const [pickerHost, setPickerHost] = useState<HTMLDivElement | null>(null);
@@ -180,12 +183,12 @@ export function AddProviderDialog({
   currentFormReadyToken.current = formReadyToken;
   const [formReadyState, setFormReadyState] = useState({
     token: formReadyToken,
-    ready: appId !== "pi",
+    ready: appId !== "pi" && appId !== "dsh",
   });
   const isFormReady =
     formReadyState.token === formReadyToken
       ? formReadyState.ready
-      : appId !== "pi";
+      : appId !== "pi" && appId !== "dsh";
   const handleSubmitReadyChange = useCallback(
     (ready: boolean) => {
       if (currentFormReadyToken.current === formReadyToken) {
@@ -289,7 +292,9 @@ export function AddProviderDialog({
           appId === "openclaw" ||
           appId === "hermes" ||
           appId === "pi" ||
-          appId === "mcode") &&
+          appId === "mcode" ||
+          // DSH 的 key 就是 cordis.patch.yml 里的映射键，丢了它就会写成 UUID
+          appId === "dsh") &&
         values.providerKey
       ) {
         providerData.providerKey = values.providerKey;
@@ -414,6 +419,11 @@ export function AddProviderDialog({
         } else if (appId === "hermes") {
           if (parsedConfig.base_url) {
             addUrl(parsedConfig.base_url as string);
+          }
+        } else if (appId === "dsh") {
+          // DSH 用小写 URL 的 baseURL（与 OpenClaw 的 baseUrl 不同）
+          if (parsedConfig.baseURL) {
+            addUrl(parsedConfig.baseURL as string);
           }
         }
 

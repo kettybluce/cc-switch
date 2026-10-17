@@ -1083,7 +1083,33 @@
     "openclaw": "OpenClaw",
     "hermes": "Hermes",
     "pi": "Pi",
-    "mcode": "MiniMax Code"
+    "mcode": "MiniMax Code",
+    "dsh": "DeepSeek Harness"
+  },
+  "dsh": {
+    "form": {
+      "providerKey": "Provider key",
+      "providerKeyPlaceholder": "e.g. deepseek-official",
+      "providerKeyHint": "Lowercase letters, digits and hyphens; cannot be renamed once written",
+      "providerKeyLocked": "Written to cordis.patch.yml — the provider key can't be changed",
+      "apiKeyEnv": "API key environment variable",
+      "apiKeyEnvHint": "DSH stores the variable name, not the key. Make sure it is exported in your WSL shell.",
+      "api": "Protocol",
+      "apiCatalogDefault": "Catalog default",
+      "models": "Models",
+      "addModel": "Add model",
+      "modelId": "Model id",
+      "modelName": "Display name (optional)",
+      "removeModel": "Remove model",
+      "modelsEmptyHint": "Leave empty to keep the model list pi-ai ships for this route; filling it replaces that list wholesale.",
+      "incompleteRoute": "A custom route needs a protocol, a base URL and at least one model — otherwise DSH refuses to load it.",
+      "rawConfig": "Full config (what gets written to cordis.patch.yml)",
+      "rawConfigHint": "This is the provider object DSH receives; unknown fields are preserved as-is.",
+      "selectDefaultModel": "Set as DSH default model",
+      "noModels": "This provider has no models yet. Add models to the card, or pick one inside DSH.",
+      "defaultModelSet": "Set as DSH default model: {{model}}",
+      "defaultModelSetFailed": "Failed to set the default model"
+    }
   },
   "mcode": {
     "empty": {
@@ -4144,6 +4170,7 @@
     "columnVisible": "Show",
     "visibleHelp": "When off, the app no longer appears in the sidebar, the tray menu, the MCP / Skills app columns, or the app pickers on Prompts and Sessions. It is only hidden: its providers, MCP servers and other settings stay, and its own config files are left untouched.",
     "desktopHelp": "Claude Desktop is a desktop app and can't be installed or upgraded here; CC Switch connects to it through its config file.",
+    "noToolManagement": "Install and version aren't managed here",
     "desktopUnsupported": "Not supported on this system",
     "desktopConnected": "Connected",
     "desktopNotConnected": "Not connected",

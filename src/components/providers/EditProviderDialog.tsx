@@ -93,12 +93,12 @@ export function EditProviderDialog({
   currentFormReadyToken.current = formReadyToken;
   const [formReadyState, setFormReadyState] = useState({
     token: formReadyToken,
-    ready: appId !== "pi",
+    ready: appId !== "pi" && appId !== "dsh",
   });
   const isFormReady =
     formReadyState.token === formReadyToken
       ? formReadyState.ready
-      : appId !== "pi";
+      : appId !== "pi" && appId !== "dsh";
   const handleSubmitReadyChange = useCallback(
     (ready: boolean) => {
       if (currentFormReadyToken.current === formReadyToken) {
@@ -192,7 +192,14 @@ export function EditProviderDialog({
       // OpenCode uses additive mode, while Pi's shared models.json is owned by
       // the catalog coordinator. Neither has a per-provider generic live
       // snapshot that may replace the DB aggregate in this form.
-      if (appId === "opencode" || appId === "pi" || appId === "mcode") {
+      // DSH 同理：它的 live 是整份 cordis.patch.yml，没有「单个 provider 的实时快照」，
+      // 而 list 已经把 patch 的内容同步进卡片，直接用数据库那份即可。
+      if (
+        appId === "opencode" ||
+        appId === "pi" ||
+        appId === "mcode" ||
+        appId === "dsh"
+      ) {
         if (!cancelled) {
           setLiveSettings(null);
           setHasLoadedLive(true);
@@ -289,6 +296,8 @@ export function EditProviderDialog({
         string,
         unknown
       >;
+      // DSH 的 provider key 不可改名（后端 dsh::update 直接拒绝），
+      // 所以不放进这个可改名单；编辑时沿用 provider.id。
       const nextProviderId =
         (appId === "opencode" || appId === "openclaw" || appId === "pi") &&
         values.providerKey?.trim()

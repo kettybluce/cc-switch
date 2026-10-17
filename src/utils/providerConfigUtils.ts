@@ -1172,6 +1172,8 @@ export const extractProviderBaseUrl = (
 
   const directBaseUrl =
     object.baseUrl ||
+    // DSH 的 provider 用小写 URL 的 `baseURL`（与 Pi 的 `baseUrl` 不同）
+    object.baseURL ||
     object.base_url ||
     object.options?.baseURL ||
     (Array.isArray(object.models)

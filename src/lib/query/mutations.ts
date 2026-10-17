@@ -69,7 +69,10 @@ export const useAddProviderMutation = (appId: AppId) => {
         appId === "openclaw" ||
         appId === "hermes" ||
         appId === "pi" ||
-        appId === "mcode"
+        appId === "mcode" ||
+        // DSH 的 provider key 就是 cordis.patch.yml 里 providers 的映射键，
+        // 写进去之后后端拒绝改名，所以必须由用户/表单给定，不能发 UUID。
+        appId === "dsh"
       ) {
         if (
           providerInput.category === "omo" ||

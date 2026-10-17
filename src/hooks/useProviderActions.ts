@@ -266,7 +266,8 @@ export function useProviderActions(
           } else if (
             activeApp === "opencode" ||
             activeApp === "openclaw" ||
-            activeApp === "mcode"
+            activeApp === "mcode" ||
+            activeApp === "dsh"
           ) {
             messageKey = "notifications.addToConfigSuccess";
             defaultMessage = "已添加到配置";
@@ -339,6 +340,57 @@ export function useProviderActions(
   // Set provider as default model (OpenClaw only)
   const setAsDefaultModel = useCallback(
     async (provider: Provider, modelId?: string) => {
+      // DSH：写进 patch 只代表可用，真正生效的是 agent-default-model。
+      // `dsh::enable` 在「默认已指向这家」时会保留用户挑过的模型；
+      // 这里再显式指定一次，让菜单里选中的模型确实生效。
+      if (activeApp === "dsh") {
+        const models = Array.isArray(
+          (provider.settingsConfig as Record<string, unknown> | undefined)
+            ?.models,
+        )
+          ? (((provider.settingsConfig as Record<string, unknown>)
+              .models as unknown[]) ?? [])
+          : [];
+        const ids = models.flatMap((raw) => {
+          if (!raw || typeof raw !== "object") return [];
+          const id = (raw as Record<string, unknown>).id;
+          return typeof id === "string" && id.trim() ? [id] : [];
+        });
+        const selected = modelId ?? ids[0];
+        if (!selected) {
+          toast.error(
+            t("dsh.form.noModels", {
+              defaultValue:
+                "该供应商没有配置模型；请先在卡片里补上 models，或在 DSH 侧选择模型",
+            }),
+          );
+          return;
+        }
+        try {
+          await providersApi.switch(provider.id, "dsh");
+          // switch 会把 default 切到这家；模型再显式写一次，菜单里选哪一个都生效
+          await providersApi.setDshDefaultModel(provider.id, selected);
+          await queryClient.invalidateQueries({
+            queryKey: ["providers", "dsh"],
+          });
+          toast.success(
+            t("dsh.form.defaultModelSet", {
+              defaultValue: "已设为 DSH 默认模型：{{model}}",
+              model: selected,
+            }),
+            { closeButton: true },
+          );
+        } catch (error) {
+          const detail =
+            extractErrorMessage(error) ||
+            t("dsh.form.defaultModelSetFailed", {
+              defaultValue: "设置默认模型失败",
+            });
+          toast.error(detail);
+        }
+        return;
+      }
+
       const config = provider.settingsConfig as OpenClawProviderConfig;
       if (!config.models || config.models.length === 0) {
         toast.error(
@@ -396,7 +448,7 @@ export function useProviderActions(
         toast.error(detail);
       }
     },
-    [queryClient, t],
+    [queryClient, t, activeApp],
   );
 
   return {
