@@ -4437,6 +4437,13 @@ fn build_wsl_env_argv(extra_env: &[(&str, String)]) -> Result<Vec<String>, Strin
 /// 于是 WSL 内所有 HTTP 请求都会撞死端口——CPA / 各家 API 全部连不上。
 /// 这里在执行 CLI 之前探测一次代理端点：不可达就清掉；可达则原样保留
 /// （用户可能正需要代理访问墙外服务）。
+///
+/// **整段必须经 base64 传输，不能直接拼进 `sh -c` 字符串**：里面全是裸
+/// `$name` 形式（`_ccs_p=`、`_ccs_hp=`、`$flag`），而 `wsl.exe` 在把命令串交给
+/// WSL 之前会按 Windows 规则把 `$name` 当变量引用展开——未定义的展开成空串。
+/// 实测带上本 guard 直接跑 `codex --version` 得 exit 127（`$flag` 被吃成空，
+/// 兜底链整个失效）；而 `${http_proxy:-}` 这类含 `:-` 的形式反而能原样透传，
+/// 所以 bug 只暴露在裸 `$name` 上、极具迷惑性。改为 base64 后与所有外壳层隔离。
 #[cfg(target_os = "windows")]
 const WSL_STALE_PROXY_GUARD: &str = concat!(
     "if [ -n \"${http_proxy:-}${https_proxy:-}${HTTP_PROXY:-}${HTTPS_PROXY:-}\" ]; then ",
@@ -4446,6 +4453,17 @@ const WSL_STALE_PROXY_GUARD: &str = concat!(
     "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; ",
     "fi; fi; ",
 );
+
+/// 把一段 sh 脚本包成「base64 传输」形式：主机侧只需保证 b64 串自身是
+/// `[A-Za-z0-9+/=]`，脚本内容（含裸 `$name`、单引号、`for` 循环）与所有外壳层
+/// 隔离——`wsl.exe` 不会再把 `$name` 当 Windows 变量展开。
+#[cfg(target_os = "windows")]
+fn base64_shell_transport(script: &str) -> String {
+    format!(
+        "printf %s {} | base64 -d | sh",
+        base64_encode(script.as_bytes())
+    )
+}
 
 #[cfg(target_os = "windows")]
 fn build_wsl_tool_command(
@@ -4463,13 +4481,13 @@ fn build_wsl_tool_command(
     );
 
     let Some(deadline) = deadline else {
-        return Ok(command);
+        return Ok(base64_shell_transport(&command));
     };
     let remaining = deadline.remaining()?;
     let timeout_arg = format!("{:.3}s", remaining.as_secs_f64());
     Ok(format!(
         "command -v timeout >/dev/null 2>&1 || {{ echo 'timeout is required for bounded CLI execution' >&2; exit 127; }}; exec timeout --signal=TERM --kill-after=1s {timeout_arg} sh -c {}",
-        shell_single_quote(&command)
+        shell_single_quote(&base64_shell_transport(&command))
     ))
 }
 
@@ -7781,22 +7799,86 @@ mod tests {
             // v2rayN 退出后变量残留，WSL 内所有 HTTP 请求都会撞死端口。
             // 构建出的命令必须先探测代理端点，不可达才清掉（可达时保留，用户可能正需要代理）。
             let cmd = build_wsl_tool_command("claude", &["--version"], None).unwrap();
+
+            // 命令是 base64 传输（裸 $name 会被 wsl.exe 当 Windows 变量展开成空，
+            // 见 WSL_STALE_PROXY_GUARD 的文档），断言要落在**解码后**的脚本上。
+            let script = decode_base64_shell_transport(&cmd)
+                .expect("命令必须是 base64 传输形式");
+
             assert!(
-                cmd.contains(
+                script.contains(
                     "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY"
                 ),
-                "WSL 命令应包含清除残留代理变量的逻辑,得到: {cmd}"
+                "WSL 命令应包含清除残留代理变量的逻辑,得到: {script}"
             );
             assert!(
-                cmd.contains("/dev/tcp/"),
-                "应先探测代理端点是否可达,得到: {cmd}"
+                script.contains("/dev/tcp/"),
+                "应先探测代理端点是否可达,得到: {script}"
             );
             assert!(
-                cmd.contains("if [ -n \"${http_proxy:-}"),
-                "清除逻辑必须包在代理存在性判断里,得到: {cmd}"
+                script.contains("if [ -n \"${http_proxy:-}"),
+                "清除逻辑必须包在代理存在性判断里,得到: {script}"
             );
-            assert!(cmd.contains("command -v claude"), "应保留 CLI 探测,得到: {cmd}");
-            assert!(cmd.contains("claude --version"), "应保留原始调用,得到: {cmd}");
+            assert!(
+                script.contains("command -v claude"),
+                "应保留 CLI 探测,得到: {script}"
+            );
+            assert!(
+                script.contains("claude --version"),
+                "应保留原始调用,得到: {script}"
+            );
+            // 兜底链必须完整：`$flag` 是裸 $name，只有 base64 才能让它活着到达 shell。
+            for flag in ["-lic", "-lc", "-c"] {
+                assert!(
+                    script.contains(&format!("for flag in {flag} ")) || script.contains(flag),
+                    "必须保留兜底链 {flag},得到: {script}"
+                );
+            }
+            assert!(
+                script.contains("\"$flag\""),
+                "兜底链必须经 $flag 变量展开,得到: {script}"
+            );
+        }
+
+        /// `build_wsl_tool_command` 产物的逆向：把 `printf %s <b64> | base64 -d | sh`
+        /// 解回原始脚本。测试专用（验证 base64 传输没有丢内容）。
+        #[cfg(any(target_os = "windows", test))]
+        fn decode_base64_shell_transport(command: &str) -> Option<String> {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            let encoded = command
+                .strip_prefix("printf %s ")?
+                .strip_suffix(" | base64 -d | sh")?;
+            let bytes = STANDARD.decode(encoded).ok()?;
+            String::from_utf8(bytes).ok()
+        }
+
+        /// **回归测试**：WSL 命令不得含裸 `$name`——`wsl.exe` 会把它当 Windows 变量
+        /// 引用展开成空串，`$flag` 一空整条 `-lic/-lc/-c` 兜底链就失效（实测
+        /// `codex --version` 得 exit 127）。base64 传输是唯一可靠隔离手段。
+        #[test]
+        fn wsl_tool_command_hides_bare_dollar_names_behind_base64() {
+            let cmd = build_wsl_tool_command("codex", &["--version"], None).unwrap();
+            assert!(
+                cmd.starts_with("printf %s ") && cmd.ends_with(" | base64 -d | sh"),
+                "WSL 命令必须是 base64 传输形式,得到: {cmd}"
+            );
+            // 外壳可见部分只允许 base64 字符集
+            let payload = cmd
+                .strip_prefix("printf %s ")
+                .and_then(|s| s.strip_suffix(" | base64 -d | sh"))
+                .expect("已断言过前后缀");
+            assert!(
+                payload
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
+                "外壳可见部分必须是纯 base64,得到: {payload}"
+            );
+            // 而解码后脚本里确实有裸 $name（证明我们真的在防它）
+            let script = decode_base64_shell_transport(&cmd).expect("base64 形式");
+            assert!(
+                script.contains("$flag"),
+                "解码后应含裸 $name（正是要被隔离的东西）,得到: {script}"
+            );
         }
 
         #[test]
