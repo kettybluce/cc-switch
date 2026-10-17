@@ -87,6 +87,8 @@ export DSH_HOME=/tmp/dsh-sandbox
 | `cd891343` | `services/provider/dsh.rs` + ProviderService 7 个路由点 |
 | `767ada67` | 前端接入：应用标识、目录设置、图标、i18n（17 文件） |
 | `9b375f7f` | 阶段一收尾：DSH 专用表单、命令层、应用页接入（24 文件） |
+| `6d67331f` | `dsh_config` 高层业务补 9 个单测，并修测试间相互干扰 |
+| `c755f242` | `DshProviderForm` 数据转换补 14 个单测 |
 | `4c7888d8` | 本文档 |
 
 ### 后端（全部完成）
@@ -115,11 +117,14 @@ export DSH_HOME=/tmp/dsh-sandbox
 - 遇到结构异常（如 `config: oops`）拒绝改写而非猜测修复；
 - 未知字段与未知条目全程保留。
 
-**单测防线**（`cargo test --lib dsh`，12 通过）
+**单测防线**（`cargo test --lib dsh`，21 通过）
 - `apply_providers_patch_never_drops_existing_providers` ← 防「整体替换」事故
+- `upsert_provider_preserves_existing_providers_on_disk` ← 同上，走真实文件
+- `full_lifecycle_matches_how_cc_switch_uses_it` ← 模拟 CC Switch 使用序列
 - `apply_providers_patch_preserves_unknown_fields`
 - `refuses_to_rewrite_non_mapping_nodes`
 - `writes_atomically_and_round_trips_on_disk`
+- 其余覆盖增删改查、幂等、重名、缺文件创建等
 
 **`services/provider/dsh.rs` 与 Pi 的差异**
 1. 无投影/还原概念（阶段一不做本地代理接管）；
@@ -153,8 +158,15 @@ export DSH_HOME=/tmp/dsh-sandbox
 
 - `cargo check --lib` 无 error
 - `pnpm typecheck` 通过（EXIT=0）
-- `pnpm test:unit` **227 文件 / 2968 用例全部通过**
-- `cargo test --lib dsh` **12 通过**
+- `pnpm test:unit` **228 文件 / 2982 用例全部通过**
+- `cargo test --lib dsh` **21 通过**
+
+**测试覆盖的两个关键面**
+
+| 层 | 测什么 | 数量 |
+|---|---|---|
+| `dsh_config` 高层业务 | 走真实文件的增删改查、原有 provider 不被覆盖、原子写、幂等 | 21 |
+| `DshProviderForm` 数据转换 | 畸形配置不崩、只写填了的字段（models 空则不写该键）、数字转换不产 NaN、round-trip 保真 | 14 |
 
 ## 五、剩余工作
 
@@ -203,6 +215,7 @@ dsh --profile headless "hello"
 | `src-tauri/src/services/provider/mod.rs` | 7 个路由点 |
 | `src-tauri/src/commands/dsh.rs` | Tauri 命令 |
 | `src/components/providers/forms/DshProviderForm.tsx` | DSH 专用表单 |
+| `tests/components/DshProviderForm.test.ts` | 表单数据转换测试（14 例） |
 | `src-tauri/src/app_config.rs` | `AppType::Dsh` |
 | `src-tauri/src/settings.rs` | `VisibleApps.dsh`、`dsh_config_dir` |
 | `docs/DSH-INTEGRATION-RESEARCH.md` | 调研结论（含实测证据） |
