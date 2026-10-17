@@ -45,14 +45,14 @@ const API_FORMATS = [
 
 type DshApi = (typeof API_FORMATS)[number];
 
-interface DshModelRow {
+export interface DshModelRow {
   id: string;
   name: string;
   contextWindow: string;
   maxTokens: string;
 }
 
-interface DshDraft {
+export interface DshDraft {
   displayName: string;
   apiKeyEnv: string;
   api: DshApi | "";
@@ -71,7 +71,9 @@ const normalizeKey = (value: string) =>
     .replace(/^-|-$/g, "");
 
 /** 从已有卡片（数据库里存的就是 DSH 的 provider 对象）还原草稿。 */
-function draftFromConfig(config: Record<string, unknown> | undefined): DshDraft {
+export function draftFromConfig(
+  config: Record<string, unknown> | undefined,
+): DshDraft {
   const models = Array.isArray(config?.models) ? config.models : [];
   return {
     displayName: String(config?.displayName ?? ""),
@@ -107,7 +109,7 @@ function draftFromConfig(config: Record<string, unknown> | undefined): DshDraft 
  * 只写用户填了的字段：DSH 侧对缺省字段有自己的默认值（`defaultContextWindow`
  * 等），凭空补一个数字反而会覆盖那些默认。
  */
-function configFromDraft(
+export function configFromDraft(
   draft: DshDraft,
   displayNameFallback: string,
 ): Record<string, unknown> {
