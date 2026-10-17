@@ -219,6 +219,10 @@ impl McpService {
             }
             AppType::Mcode => mcp::mcode::sync(&server.id, Some(&server.server))?,
             AppType::Pi => mcp::pi::sync(&server.id, Some(&server.server))?,
+            // 阶段一不接入 DSH 的 MCP 管理
+            AppType::Dsh => {
+                log::debug!("DSH MCP sync is not implemented yet, skipping");
+            }
         }
         Ok(())
     }
@@ -260,6 +264,10 @@ impl McpService {
             }
             AppType::Mcode => mcp::mcode::sync(id, None)?,
             AppType::Pi => mcp::pi::sync(id, None)?,
+            // 阶段一不接入 DSH 的 MCP 管理
+            AppType::Dsh => {
+                log::debug!("DSH MCP sync is not implemented yet, skipping remove");
+            }
         }
         Ok(())
     }

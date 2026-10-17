@@ -156,6 +156,14 @@ pub async fn get_config_status(
                 path,
             })
         }
+        AppType::Dsh => {
+            let home = crate::dsh_config::resolve_dsh_home().map_err(|e| e.to_string())?;
+            let patch = crate::dsh_config::home_patch_path(&home);
+            Ok(ConfigStatus {
+                exists: patch.exists(),
+                path: home.to_string_lossy().to_string(),
+            })
+        }
     }
 }
 
@@ -182,6 +190,7 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
             .parent()
             .unwrap()
             .to_path_buf(),
+        AppType::Dsh => crate::dsh_config::resolve_dsh_home().map_err(|e| e.to_string())?,
     };
 
     Ok(dir.to_string_lossy().to_string())
@@ -205,6 +214,7 @@ pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, 
             .parent()
             .unwrap()
             .to_path_buf(),
+        AppType::Dsh => crate::dsh_config::resolve_dsh_home().map_err(|e| e.to_string())?,
     };
 
     if !config_dir.exists() {

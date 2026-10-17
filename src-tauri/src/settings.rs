@@ -51,6 +51,10 @@ pub struct VisibleApps {
     pub pi: bool,
     #[serde(default = "default_true")]
     pub mcode: bool,
+    /// DSH（DeepSeek Harness）。默认隐藏——它是较新接入的应用，
+    /// 避免在用户没装 DSH 时占据侧栏。
+    #[serde(default)]
+    pub dsh: bool,
 }
 
 impl Default for VisibleApps {
@@ -66,6 +70,7 @@ impl Default for VisibleApps {
             hermes: false, // 默认不显示，需用户手动启用
             pi: true,
             mcode: true,
+            dsh: false, // 默认不显示，需用户手动启用
         }
     }
 }
@@ -84,6 +89,7 @@ impl VisibleApps {
             AppType::Hermes => self.hermes,
             AppType::Pi => self.pi,
             AppType::Mcode => self.mcode,
+            AppType::Dsh => self.dsh,
         }
     }
 }
@@ -1203,6 +1209,9 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
         AppType::Pi | AppType::Mcode => None,
+        // DSH 的当前选择记录在它自己的 agent-default-model 里，
+        // 这里不重复保存一份，避免两处状态不一致。
+        AppType::Dsh => None,
     }
 }
 
@@ -1222,6 +1231,9 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
         AppType::Hermes => settings.current_provider_hermes = id_owned.clone(),
         AppType::Pi | AppType::Mcode => {}
+        // 与 get_current_provider 同理：DSH 的选择记录在它自己的
+        // agent-default-model 里，不在这里重复保存。
+        AppType::Dsh => {}
     })
 }
 

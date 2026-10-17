@@ -227,6 +227,13 @@ impl Provider {
                 crate::pi_config::provider_base_url(settings).unwrap_or_default(),
                 str_at(settings.get("apiKey")),
             ),
+            // DSH providers follow DSH's own cordis.patch.yml field names
+            // (`baseURL` / `apiKeyEnv`). 阶段一只存地址与模型，密钥以环境变量名引用，
+            // 故这里没有真实的 key 可读，统一取 apiKey 字段（若用户显式填了）。
+            AppType::Dsh => (
+                crate::dsh_config::provider_base_url_json(settings).unwrap_or_default(),
+                str_at(settings.get("apiKey")),
+            ),
             // OpenCode (OMO) nests credentials under `options` (the SDK options object).
             AppType::OpenCode | AppType::Mcode => {
                 let options = settings.get("options");

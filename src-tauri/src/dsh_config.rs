@@ -52,6 +52,33 @@ pub(crate) fn home_patch_path(dsh_home: &Path) -> PathBuf {
     dsh_home.join(HOME_PATCH_FILE_NAME)
 }
 
+/// DSH home 目录的环境变量名；未设置时回落到 `~/.dsh`。
+pub(crate) const DSH_HOME_ENV: &str = "DSH_HOME";
+/// 默认 home 目录名。
+pub(crate) const DSH_HOME_DIR_NAME: &str = ".dsh";
+
+/// 解析 DSH home 目录。
+///
+/// 与 DSH 自身的 `resolveDshHome()` 保持同一语义：
+/// 优先取 `DSH_HOME`，为空或未设置时回落到 `~/.dsh`。
+///
+/// 注：CC Switch 运行在 Windows 侧，而 DSH 可能装在 WSL 里。因此这里只负责
+/// 给出「与当前进程同侧」的路径；跨 WSL 的场景由调用方按配置目录另行处理。
+pub(crate) fn resolve_dsh_home() -> Result<PathBuf, AppError> {
+    match std::env::var(DSH_HOME_ENV) {
+        Ok(value) if !value.trim().is_empty() => Ok(PathBuf::from(value.trim())),
+        _ => {
+            let home = crate::config::get_home_dir();
+            Ok(home.join(DSH_HOME_DIR_NAME))
+        }
+    }
+}
+
+/// 默认的 home 级 patch 完整路径。
+pub(crate) fn default_home_patch_path() -> Result<PathBuf, AppError> {
+    Ok(home_patch_path(&resolve_dsh_home()?))
+}
+
 // ============================================================================
 // 读取
 // ============================================================================
@@ -129,6 +156,64 @@ pub(crate) fn provider_base_url(provider: &Value) -> Option<&str> {
 /// 取单个 provider 的 api 类型。
 pub(crate) fn provider_api(provider: &Value) -> Option<&str> {
     provider.get("api").and_then(Value::as_str)
+}
+
+/// 从 JSON 形式的供应商配置里取 baseURL。
+///
+/// 数据库卡片里的 `settings_config` 是 JSON，而 DSH 配置文件里的同一份数据
+/// 是 YAML。两个 helper 做同样的事，只是接受不同的值类型。
+pub(crate) fn provider_base_url_json(config: &serde_json::Value) -> Option<String> {
+    config
+        .get("baseURL")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+/// [`validate_provider_node`] 的 JSON 版本，供供应商服务在写库前校验卡片。
+pub(crate) fn validate_provider_json(
+    provider_key: &str,
+    config: &serde_json::Value,
+) -> Result<(), AppError> {
+    if provider_key.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "DSH provider key cannot be empty".to_string(),
+        ));
+    }
+    if !config.is_object() {
+        return Err(AppError::InvalidInput(
+            "DSH provider configuration must be an object".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 校验一张 DSH 供应商卡片能否写进 patch。
+///
+/// 只做「能否安全写入」的最低要求：key 非空、配置是对象。
+/// 不做字段完整性校验——用户的 DSH 配置可能刻意省略某些字段，
+/// 由 DSH 自己决定默认值。
+pub(crate) fn validate_provider_node(provider_key: &str, config: &Value) -> Result<(), AppError> {
+    if provider_key.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "DSH provider key cannot be empty".to_string(),
+        ));
+    }
+    match &config {
+        Value::Mapping(_) => Ok(()),
+        other => Err(AppError::InvalidInput(format!(
+            "DSH provider configuration must be a mapping, got {}",
+            yaml_kind(other)
+        ))),
+    }
+}
+
+/// 把 `serde_json::Value` 转成 `serde_yaml::Value`。
+///
+/// 供应商卡片在数据库里是 JSON，而 patch 文件是 YAML；两边都只是结构化的
+/// 无类型数据，经 serde 互转即可，不需要手写映射。
+pub(crate) fn json_to_yaml(value: &serde_json::Value) -> Result<Value, AppError> {
+    serde_yaml::to_value(value)
+        .map_err(|e| AppError::Config(format!("将供应商配置转换为 YAML 失败: {e}")))
 }
 
 // ============================================================================

@@ -301,6 +301,7 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
         | AppType::Hermes
         | AppType::Pi
         | AppType::Mcode
+        | AppType::Dsh
         | AppType::ClaudeDesktop => false,
     }
 }
@@ -377,6 +378,7 @@ pub(crate) fn remove_common_config_from_settings(
         | AppType::Hermes
         | AppType::Pi
         | AppType::Mcode
+        | AppType::Dsh
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -696,6 +698,11 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 "Pi providers use the Pi provider service".to_string(),
             ));
         }
+        AppType::Dsh => {
+            return Err(AppError::InvalidInput(
+                "DSH providers use the DSH provider service".to_string(),
+            ));
+        }
     }
     Ok(())
 }
@@ -985,6 +992,9 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
         AppType::Pi => Err(AppError::InvalidInput(
             "Pi providers are read from Pi's native models file".to_string(),
         )),
+        AppType::Dsh => Err(AppError::InvalidInput(
+            "DSH providers are read from DSH's cordis.patch.yml".to_string(),
+        )),
     }
 }
 
@@ -1090,7 +1100,12 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
             })
         }
         // OpenCode, OpenClaw and Hermes use additive mode and are handled by early return above
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Mcode => {
+        AppType::OpenCode
+        | AppType::OpenClaw
+        | AppType::Hermes
+        | AppType::Pi
+        | AppType::Mcode
+        | AppType::Dsh => {
             unreachable!("additive mode apps are handled by early return")
         }
     };

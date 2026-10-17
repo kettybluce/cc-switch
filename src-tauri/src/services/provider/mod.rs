@@ -6999,6 +6999,8 @@ impl ProviderService {
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
             AppType::Pi | AppType::Mcode => Ok(String::new()),
+            // DSH 把配置整体放在 cordis.patch.yml，没有「通用配置片段」的概念
+            AppType::Dsh => Ok(String::new()),
         }
     }
 
@@ -7017,6 +7019,8 @@ impl ProviderService {
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
             AppType::Pi | AppType::Mcode => Ok(String::new()),
+            // DSH 把配置整体放在 cordis.patch.yml，没有「通用配置片段」的概念
+            AppType::Dsh => Ok(String::new()),
         }
     }
 
@@ -7784,6 +7788,12 @@ impl ProviderService {
             AppType::Pi => {
                 crate::pi_config::validate_provider_node(&provider.id, &provider.settings_config)?;
             }
+            AppType::Dsh => {
+                crate::dsh_config::validate_provider_json(
+                    &provider.id,
+                    &provider.settings_config,
+                )?;
+            }
         }
 
         // Validate and clean UsageScript configuration (common for all app types)
@@ -7982,7 +7992,7 @@ impl ProviderService {
 
                 Ok((api_key, base_url))
             }
-            AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Mcode => {
+            AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Mcode | AppType::Dsh => {
                 // These native formats use apiKey and baseUrl directly on the object.
                 let api_key = provider
                     .settings_config

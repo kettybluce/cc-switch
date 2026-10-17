@@ -96,6 +96,8 @@ impl Database {
             AppType::Mcode => Some("enabled_mcode"),
             AppType::Pi => Some("enabled_pi"),
             AppType::ClaudeDesktop | AppType::OpenClaw => None,
+            // 阶段一不接入 DSH 的 MCP 管理
+            AppType::Dsh => None,
         };
 
         if let Some(column) = column {

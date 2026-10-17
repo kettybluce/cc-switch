@@ -345,6 +345,12 @@ pub(crate) fn build_provider_from_request(
                 "Add MCode providers from the MCode page".into(),
             ))
         }
+        // 阶段一不支持通过 deeplink 导入 DSH 供应商
+        AppType::Dsh => {
+            return Err(AppError::InvalidInput(
+                "Add DSH providers from the DSH page".into(),
+            ))
+        }
     };
 
     // Build usage script configuration if provided

@@ -215,6 +215,8 @@ impl ProviderType {
             AppType::GrokBuild => ProviderType::Codex,
             AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => ProviderType::Codex,
             AppType::Pi | AppType::Mcode => return None,
+            // 阶段一不接入 DSH 的本地代理路由，只做配置同步
+            AppType::Dsh => return None,
         };
         Some(provider_type)
     }
@@ -280,6 +282,8 @@ pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
         // Pi 请求都会失败并报 "pi does not support proxy routing"。
         AppType::Pi => Box::new(CodexAdapter::new()),
         AppType::Mcode => return None,
+        // 阶段一不接入 DSH 的本地代理路由，只做配置同步
+        AppType::Dsh => return None,
     })
 }
 
